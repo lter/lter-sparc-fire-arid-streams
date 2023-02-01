@@ -6,7 +6,7 @@
 
 ## Project Summary
 
-- https://lternet.edu/working-groups/producers-consumers-and-disturbance/
+- https://lternet.edu/working-groups/fire-and-aridland-streams/
 
 ## Guidelines for sharing scripts
 
