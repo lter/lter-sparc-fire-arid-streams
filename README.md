@@ -7,6 +7,7 @@
 ## Project Summary
 
 - https://lternet.edu/working-groups/fire-and-aridland-streams/
+- Existing repository: https://github.com/hlowman/crass_bgc
 
 ## Guidelines for sharing scripts
 
