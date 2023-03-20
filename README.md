@@ -3,6 +3,7 @@
 ## PIs: 
 
 - Tamara Harms, Associate Professor, Department of Biology & Wildlife and Institute of Arctic Biology, University of Alaska Fairbanks
+- Heili Lowman, Department of Natural Resources and Environmental Science, University of Nevada, Reno
 
 ## Project Summary
 
