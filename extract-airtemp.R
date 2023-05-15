@@ -76,8 +76,8 @@ out_list <- list()
 (layer_ct <- length(names(air_rast)))
 
 # We'll need to strip each layer separately
-# for(k in 1:layer_ct){
-for(k in 1:2){
+for(k in 1:layer_ct){
+# for(k in 1:2){ # Test loop
   
   # Build name of layer
   focal_layer <- paste0("air_", k)
