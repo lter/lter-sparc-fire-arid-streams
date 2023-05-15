@@ -42,8 +42,11 @@ dplyr::glimpse(sf_file)
 # Exploratory plot
 plot(sf_file["usgs_site"], axes = T)
 
+# Identify the grouping columns
+group_cols <- c("usgs_site", "area_m2", "area_km2")
+
 # Clean up environment
-rm(list = setdiff(ls(), c('path', 'sf_file')))
+rm(list = setdiff(ls(), c('path', 'sf_file', 'group_cols')))
 
 ## ------------------------------------------------------- ##
                 # Air Temp - Extract ----
@@ -87,7 +90,7 @@ for(k in 1:2){
   
   # Strip out the relevant bit
   small_out_df <- exactextractr::exact_extract(x = rotated, y = sf_file,
-                                               include_cols = c("usgs_site", "area_km2"),
+                                               include_cols = group_cols,
                                                progress = F) %>%
     # Above returns a list so switch it to a dataframe
     purrr::list_rbind(x = .) %>%
@@ -96,7 +99,7 @@ for(k in 1:2){
     # Convert from Kelvin to Celsius
     dplyr::mutate(value_c = value - 273.15) %>%
     # Average temperature within river ID
-    dplyr::group_by(usgs_site, area_km2) %>%
+    dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
     dplyr::summarize(value_avg = mean(value_c, na.rm = T)) %>%
     dplyr::ungroup() %>%
     # Add a column for what timestamp this is
@@ -130,7 +133,7 @@ dplyr::glimpse(full_out_df)
 # Summarize within month across years
 year_df <- full_out_df %>%
   # Do summarization
-  dplyr::group_by(usgs_site, area_km2, year) %>%
+  dplyr::group_by(dplyr::across(dplyr::all_of(c(group_cols, "year")))) %>%
   dplyr::summarize(value = mean(value_avg, na.rm = T)) %>%
   dplyr::ungroup() %>%
   # Make more informative year column
@@ -147,7 +150,7 @@ dplyr::glimpse(year_df)
 # Then summarize within year across months
 month_df <- full_out_df %>%
   # Do summarization
-  dplyr::group_by(usgs_site, area_km2, month) %>%
+  dplyr::group_by(dplyr::across(dplyr::all_of(c(group_cols, "month")))) %>%
   dplyr::summarize(value = mean(value_avg, na.rm = T)) %>%
   dplyr::ungroup() %>%
   # Change month number to letters
@@ -172,7 +175,7 @@ month_df <- full_out_df %>%
   tidyr::pivot_wider(names_from = name,
                      values_from = value) %>%
   # Reorder months into chronological order
-  dplyr::select(usgs_site, area_km2, 
+  dplyr::select(dplyr::all_of(group_cols),
                 dplyr::contains("_jan_"), dplyr::contains("_feb_"),
                 dplyr::contains("_mar_"), dplyr::contains("_apr_"),
                 dplyr::contains("_may_"), dplyr::contains("_jun_"),
@@ -185,7 +188,7 @@ dplyr::glimpse(month_df)
 
 # Combine these dataframes
 air_actual <- year_df %>%
-  dplyr::left_join(y = month_df, by = c("usgs_site", "area_km2"))
+  dplyr::left_join(y = month_df, by = group_cols)
 
 # Glimpse again
 dplyr::glimpse(air_actual)
@@ -195,7 +198,7 @@ dplyr::glimpse(air_actual)
 ## ------------------------------------------------------- ##
 # Let's get ready to export
 # air_export <- sites %>%
-#   # Join the rock data
+#   # Join the extracted data
 #   dplyr::left_join(y = air_actual, by = c("river_id"))
 # 
 # # Check it out
