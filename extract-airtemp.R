@@ -32,13 +32,12 @@ rm(list = ls())
                                                       "lter-sparc-fire-arid"),
                               local_path = getwd()))
 
-# Load in GeoJSON file
-gjs_file <- geojsonio::geojson_read(x = file.path(path, "catchment-geojsons",
-                                                  "four_corners_catchments.geojson"),
-                                    what = "sp")
-
-# Convert to simple features object
-sf_file <- sf::st_as_sf(x = gjs_file)
+# Load in the catchment delineations (stored as GeoJSON)
+sf_file <- geojsonio::geojson_read(x = file.path(path, "catchment-geojsons",
+                                                 "four_corners_catchments.geojson"),
+                                   what = "sp") %>%
+  ## Convert to simple features object
+  sf::st_as_sf(x = .)
 
 # Check result
 dplyr::glimpse(sf_file)
