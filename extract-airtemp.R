@@ -193,6 +193,9 @@ air_actual <- year_df %>%
 # Glimpse again
 dplyr::glimpse(air_actual)
 
+# Clean up environment
+rm(list = setdiff(ls(), c('path', 'sf_file', 'group_cols', 'air_actual')))
+
 ## ------------------------------------------------------- ##
                   # Air Temp - Export ----
 ## ------------------------------------------------------- ##
