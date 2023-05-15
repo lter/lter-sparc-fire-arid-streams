@@ -43,7 +43,7 @@ dplyr::glimpse(sf_file)
 plot(sf_file["usgs_site"], axes = T)
 
 # Identify the grouping columns
-group_cols <- c("usgs_site", "area_m2", "area_km2")
+(group_cols <- c(setdiff(x = names(sf_file), y = c("geometry", "geom"))))
 
 # Clean up environment
 rm(list = setdiff(ls(), c('path', 'sf_file', 'group_cols')))
