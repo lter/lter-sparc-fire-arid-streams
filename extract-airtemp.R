@@ -21,24 +21,26 @@ rm(list = ls())
 
 # Identify path to location of shared data
 (path <- scicomptools::wd_loc(local = F, 
-                              remote_path = file.path('/', "home", "shares", 
+                              remote_path = file.path('/', "home", "shares",
                                                       "lter-sparc-fire-arid"),
                               local_path = getwd()))
 
-# Load in site names with lat/longs
-# sites <- read.csv(file = file.path(path, "site-coordinates", 'silica-coords_ACTUAL.csv'))
+# Load in GeoJSON file
+library(geojsonio)
+spdf <- geojsonio::geojson_read(x = file.path(path, "catchment-geojsons",
+                                              "four_corners_catchments.geojson"),  what = "sp")
 
-# Check it out
-# dplyr::glimpse(sites)
+# Convert to simple features object
+sf_file <- sf::st_as_sf(x = spdf)
 
-# Grab the shapefiles the previous script (see PURPOSE section) created
-# sheds <- sf::st_read(dsn = file.path(path, "site-coordinates", "silica-watersheds.shp"))
+# Check result
+dplyr::glimpse(sf_file)
 
-# Check that out
-# dplyr::glimpse(sheds)
+# Exploratory plot
+plot(sf_file["usgs_site"], axes = T)
 
 # Clean up environment
-rm(list = setdiff(ls(), c('path', 'sites', 'sheds')))
+rm(list = setdiff(ls(), c('path', 'sf_file')))
 
 ## ------------------------------------------------------- ##
                 # Air Temp - Extract ----
