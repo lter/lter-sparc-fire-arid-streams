@@ -7,6 +7,10 @@
 ## Using the watershed shapefile(s), extract the following data:
 ## AIR TEMPERATURE (MONTHLY)
 
+# NOTE ON TIMING
+## Takes a few minutes when run on NCEAS' Server (Aurora)
+## Will likely take longer (possibly *much* longer) on a laptop / desktop computer
+
 ## ------------------------------------------------------- ##
                     # Housekeeping ----
 ## ------------------------------------------------------- ##
@@ -199,27 +203,19 @@ rm(list = setdiff(ls(), c('path', 'sf_file', 'group_cols', 'air_actual')))
 ## ------------------------------------------------------- ##
                   # Air Temp - Export ----
 ## ------------------------------------------------------- ##
-# Let's get ready to export
-# air_export <- sites %>%
-#   # Join the extracted data
-#   dplyr::left_join(y = air_actual, by = c("river_id"))
-# 
-# # Check it out
-# dplyr::glimpse(air_export)
-# 
-# # Create folder to export to
-# dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
-# 
-# # Export the summarized lithology data
-# write.csv(x = air_export, na = '', row.names = F,
-#           file = file.path(path, "extracted-data", "si-extract_air-temp.csv"))
-# 
-# # Upload to GoogleDrive
-# googledrive::drive_upload(media = file.path(path, "extracted-data", "si-extract_air-temp.csv"),
-#                           overwrite = T,
-#                           path = googledrive::as_id("https://drive.google.com/drive/u/0/folders/1Z-qlt9okoZ4eE-VVsbHiVVSu7V5nEkqK"))
+# Create folder to export to
+dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
+
+# Export the summarized data
+write.csv(x = air_actual, na = '', row.names = F,
+          file = file.path(path, "extracted-data", "fire-arid_air-temp.csv"))
+
+# Upload to GoogleDrive
+googledrive::drive_upload(media = file.path(path, "extracted-data", "fire-arid_air-temp.csv"),
+                          overwrite = T,
+                          path = googledrive::as_id("https://drive.google.com/drive/u/0/folders/1XxvY56h1cMmaYatF7WhVrbYbaOgdRBGC"))
 
 # Clean up environment
-rm(list = setdiff(ls(), c('path', 'sites')))
+rm(list = setdiff(ls(), c('path', 'sf_file', 'group_cols', 'air_actual')))
 
 # End ----
