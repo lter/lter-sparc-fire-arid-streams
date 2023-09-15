@@ -1,0 +1,16 @@
+{
+"type": "FeatureCollection",
+"name": "new_mexico_points",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "Stream": "Redondo Creek" }, "geometry": { "type": "Point", "coordinates": [ -106.59778, 35.86583 ] } },
+{ "type": "Feature", "properties": { "Stream": "East Fork Jemez River" }, "geometry": { "type": "Point", "coordinates": [ -106.49067, 35.84845 ] } },
+{ "type": "Feature", "properties": { "Stream": "San Antonio - West" }, "geometry": { "type": "Point", "coordinates": [ -106.59687, 35.97345 ] } },
+{ "type": "Feature", "properties": { "Stream": "San Antonio Creek - Toledo" }, "geometry": { "type": "Point", "coordinates": [ -106.49064, 35.96263 ] } },
+{ "type": "Feature", "properties": { "Stream": "Indios Creek" }, "geometry": { "type": "Point", "coordinates": [ -106.48993, 35.96387 ] } },
+{ "type": "Feature", "properties": { "Stream": "Indios Creek - Post Fire (Below Burn)" }, "geometry": { "type": "Point", "coordinates": [ -106.48993, 35.96387 ] } },
+{ "type": "Feature", "properties": { "Stream": "Indios Creek - above burn" }, "geometry": { "type": "Point", "coordinates": [ -106.47403, 35.99384 ] } },
+{ "type": "Feature", "properties": { "Stream": "Sulfur Creek" }, "geometry": { "type": "Point", "coordinates": [ -106.60638, 35.91417 ] } },
+{ "type": "Feature", "properties": { "Stream": "san_antonio_custom" }, "geometry": { "type": "Point", "coordinates": [ -106.59759, 35.97269 ] } }
+]
+}
