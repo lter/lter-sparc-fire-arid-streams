@@ -31,15 +31,19 @@ sbc_sites <- readr::read_csv("data/sbc_sites_streams.csv") |>
   ) |>
   dplyr::filter(
     sitecode %in% c("AB00", "GV01", "HO00", "MC06", "RS02")
+  ) |> 
+  dplyr::mutate(
+    Site = stringr::str_extract(
+      string = Site,
+      pattern = ".+?(?=\\sCreek)"
+    )
   )
 
 sbc_fires <- sf::st_read("data/santa_barbara_fires.geojson") |>
   dplyr::filter(location_id %in% c("AB00", "GV01", "HO00", "MC06", "RS02"))
-sf::st_crs(sbc_fires)
 
 sbc_catchments <- sf::st_read("data/santa_barbara_catchments.geojson") |>
   dplyr::filter(location_id %in% c("AB00", "GV01", "HO00", "MC06", "RS02"))
-sf::st_crs(sbc_catchments)
 
 mc06_fire      <- sf::st_read("data/MC06_fires.geojson")
 mc06_catchment <- sf::st_read("data/MC06.geojson")
@@ -58,7 +62,13 @@ sbc_catchments <- dplyr::bind_rows(
 # california -------------------------------------------------------------------
 
 california <- tigris::states() |> 
-  dplyr::filter(grepl(pattern = "cali", x = NAME, ignore.case = TRUE))
+  dplyr::filter(
+    grepl(
+      pattern     = "cali",
+      x           = NAME,
+      ignore.case = TRUE
+    )
+  )
 
 
 # california bounds ------------------------------------------------------------
@@ -144,93 +154,114 @@ ca_outer <- ggplot2::ggplot() +
 # remove call to `inherit.aes = FALSE` and uncomment lines for ggplot instead
 # of ggmap
 
-## ggplot approach
+## ggplot approach would start like...
 # ca_inner <- ggplot2::ggplot() + 
 #   ggplot2::geom_sf(data = california) + ...
 
 ca_x_breaks <- seq(ca_west + 0.1,   ca_east - 0.1,   by = 0.3)
 ca_y_breaks <- seq(ca_south + 0.05, ca_north - 0.05, by = 0.1)
 
-## ggmap approach
-ca_inner <- ggmap::ggmap(ca_map) + 
-ggplot2::theme_minimal(base_family = "sans") +
-ggplot2::geom_sf(
-  mapping     = ggplot2::aes(fill = "catchment"),
-  data        = sbc_catchments,
-  inherit.aes = FALSE,
-  show.legend = "polygon",
-  color       = "black",
-  fill        = NA,
-  linewidth   = 0.6,
-) +
-ggplot2::geom_sf(
-  mapping     = ggplot2::aes(fill = "fire"),
-  data        = sbc_fires,
-  inherit.aes = FALSE,
-  show.legend = "polygon"
-) +
-ggplot2::geom_sf(
-  mapping     = ggplot2::aes(fill = "site"),
-  data        = sbc_sites,
-  inherit.aes = FALSE,
-  show.legend = "point",
-  size        = 0.5
-) +
-ggplot2::annotate(
-  geom     = "text",
-  x        = -119.9,
-  y        = +34.35,
-  label    = "Pacific Ocean",
-  fontface = "italic",
-  color    = "grey22",
-  size     = 4,
-  family   = "sans"
-) +
-ggplot2::labs(
-  x = "longitude",
-  y = "Latitude"
-) +
-ggplot2::scale_fill_manual(
-  name   = NULL,
-  values = c(
-    # "catchment" = "#B8B8B8",
-    "catchment" = NA,
-    "fire"      = "red",
-    "site"      = NA
-  ),
-  guide  = ggplot2::guide_legend(
-    override.aes = list(
-      size     = c(NA, NA, 2),
-      shape    = c(NA, NA, 16),
-      linetype = c(1, 1, 0),
-      # fill     = c("#B8B8B8", "red", NA)
-      fill     = c(NA, "red", NA)
+(
+  ca_inner <- ggmap::ggmap(ca_map) + 
+  ggplot2::theme_minimal(base_family = "sans") +
+  ggplot2::geom_sf(
+    mapping     = ggplot2::aes(fill = "catchment"),
+    data        = sbc_catchments,
+    inherit.aes = FALSE,
+    show.legend = "polygon",
+    color       = "black",
+    fill        = NA,
+    linewidth   = catchment_line_width,
+  ) +
+  ggplot2::geom_sf(
+    mapping     = ggplot2::aes(fill = "fire"),
+    data        = sbc_fires,
+    inherit.aes = FALSE,
+    show.legend = "polygon",
+    alpha       = fires_alpha
+  ) +
+  ggplot2::geom_sf(
+    mapping     = ggplot2::aes(fill = "outlet"),
+    data        = sbc_sites,
+    inherit.aes = FALSE,
+    show.legend = "point",
+    size        = outlet_size,
+    colour      = outlet_color
+  ) +
+  ggplot2::geom_sf_text(
+    mapping     = ggplot2::aes(label = Site),
+    data        = sbc_sites,
+    inherit.aes = FALSE,
+    size        = 4,
+    # each vectorized nudge must have a value
+    nudge_x = c(
+      -0.02, # arroyo burro
+      -0.03, # gaviota
+      +0.03, # arroyo hondo
+      +0.06, # rattlesnake
+      +0.11  # mission
+    ),
+    nudge_y = c(
+      -0.01, # arroyo burro
+      -0.01, # gaviota
+      -0.01, # arroyo hondo
+      -0.01, # rattlesnake
+      -0.01  # mission
     )
+  ) +
+  ggplot2::annotate(
+    geom     = "text",
+    x        = -119.9,
+    y        = +34.35,
+    label    = "Pacific Ocean",
+    fontface = "italic",
+    color    = "grey22",
+    size     = 4,
+    family   = "sans"
+  ) +
+  ggplot2::labs(
+    x = "longitude",
+    y = "Latitude"
+  ) +
+  ggplot2::scale_fill_manual(
+    name   = NULL,
+    values = c(
+      "catchment" = NA,
+      "fire"      = fires_color,
+      "outlet"    = NA
+    ),
+    guide  = ggplot2::guide_legend(
+      override.aes = list(
+        size     = c(NA, NA, NA),
+        shape    = c(NA, NA, 16),
+        linetype = c(1, 1, 0),
+        fill     = c(NA, "red", NA)
+      )
+    )
+  ) +
+  ggplot2::scale_x_continuous(breaks = ca_x_breaks, expand = c(0, 0)) +
+  ggplot2::scale_y_continuous(breaks = ca_y_breaks, expand = c(0, 0)) +
+  ggplot2::theme(
+  # setting when CA is on the left
+    axis.title.x = ggplot2::element_blank(),
+    axis.title      = ggplot2::element_text(
+      family = "sans",
+      size   = 10
+    ),
+    legend.position = "none",
+    axis.text.x     = ggplot2::element_text(size = 6),
+    axis.text.y     = ggplot2::element_text(size = 6),
+    plot.margin     = ggplot2::unit(c(0, 0, 0, 0), "cm"),
+    panel.border    = ggplot2::element_rect(colour = "grey", linewidth = 2, fill = NA)
+  # setting when CA is on the right
+    # legend.position = "none",
+    # axis.title      = ggplot2::element_blank(),
+    # # axis.title  = ggplot2::element_text(size = 8),
+    # axis.text.x     = ggplot2::element_text(size = 6),
+    # axis.text.y     = ggplot2::element_text(size = 6),
+    # plot.margin     = ggplot2::unit(c(0, 0, 0, 0), "cm")
   )
-) +
-ggplot2::scale_x_continuous(breaks = ca_x_breaks, expand = c(0, 0)) +
-ggplot2::scale_y_continuous(breaks = ca_y_breaks, expand = c(0, 0)) +
-ggplot2::theme(
-# setting when CA is on the left
-  axis.title.x = ggplot2::element_blank(),
-  axis.title      = ggplot2::element_text(
-    family = "sans",
-    size   = 10
-  ),
-  legend.position = "none",
-  axis.text.x     = ggplot2::element_text(size = 6),
-  axis.text.y     = ggplot2::element_text(size = 6),
-  plot.margin     = ggplot2::unit(c(0, 0, 0, 0), "cm"),
-  panel.border    = ggplot2::element_rect(colour = "grey", linewidth = 2, fill = NA)
-# setting when CA is on the right
-  # legend.position = "none",
-  # axis.title      = ggplot2::element_blank(),
-  # # axis.title  = ggplot2::element_text(size = 8),
-  # axis.text.x     = ggplot2::element_text(size = 6),
-  # axis.text.y     = ggplot2::element_text(size = 6),
-  # plot.margin     = ggplot2::unit(c(0, 0, 0, 0), "cm")
 )
-
 
 # california combined map ------------------------------------------------------
 
@@ -242,4 +273,6 @@ patchwork::inset_element(
   right  = +1.30,
   top    = +0.55
 ) +
-ggplot2::theme(plot.margin = ggplot2::unit(c(0, 0, 0, 0), "cm"))
+ggplot2::theme(
+  plot.margin = ggplot2::unit(c(0, 0, 0, 0), "cm")
+)

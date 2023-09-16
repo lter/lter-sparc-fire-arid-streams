@@ -6,54 +6,55 @@
 # legend for California and New Mexico map -------------------------------------
 
 for_legend <- ggmap::ggmap(nm_map) + 
-  ggplot2::theme_minimal(base_family = "sans") +
-  ggplot2::geom_sf(
-    mapping     = ggplot2::aes(fill = "catchment"),
-    data        = nm_catchments,
-    inherit.aes = FALSE
-    ) +
-  ggplot2::geom_sf(
-    mapping     = ggplot2::aes(fill = "fire"),
-    data        = nm_fires,
-    inherit.aes = FALSE,
-    show.legend = "polygon"
-    ) +
-  ggplot2::geom_sf(
-    mapping     = ggplot2::aes(fill = "site"),
-    data        = nm_points,
-    inherit.aes = FALSE,
-    show.legend = "point"
-    ) +
-  # ggplot2::guides(size = "none") +
-  ggplot2::labs(
-    x = "longitude",
-    y = "latitude"
-    ) +
-  ggplot2::scale_fill_manual(
-    name   = NULL,
-    values = c(
-      "catchment" = "#B8B8B8",
-      "fire"      = "red",
-      "site"      = NA
-      ),
-    guide  = ggplot2::guide_legend(
-      override.aes = list(
-        shape    = c(NA, NA, 16),
-        linetype = c(1, 1, 0),
-        # fill     = c("#B8B8B8", "red", NA)
-        fill     = c(NA, "red", NA)
-      )
+ggplot2::theme_minimal(base_family = "sans") +
+ggplot2::geom_sf(
+  mapping     = ggplot2::aes(fill = "catchment"),
+  data        = nm_catchments,
+  inherit.aes = FALSE
+) +
+ggplot2::geom_sf(
+  mapping     = ggplot2::aes(fill = "fire"),
+  data        = nm_fires,
+  inherit.aes = FALSE,
+  show.legend = "polygon",
+  alpha       = fires_alpha
+) +
+ggplot2::geom_sf(
+  mapping     = ggplot2::aes(fill = "outlet"),
+  data        = nm_points,
+  inherit.aes = FALSE,
+  show.legend = "point"
+) +
+ggplot2::labs(
+  x = "longitude",
+  y = "latitude"
+) +
+ggplot2::scale_fill_manual(
+  name   = NULL,
+  values = c(
+    "catchment" = "black",
+    "fire"      = fires_color,
+    "outlet"    = NA
+  ),
+  guide  = ggplot2::guide_legend(
+    override.aes = list(
+      shape    = c(NA, NA, 16),
+      linetype = c(1, 1, 0),
+      fill     = c(NA, fires_color, NA),
+      colour   = c("black", fires_color, outlet_color),
+      size     = c(NA, NA, outlet_size)
     )
-    ) +
-  ggplot2::scale_x_continuous(breaks = nm_x_breaks, expand = c(0, 0)) +
-  ggplot2::scale_y_continuous(breaks = nm_y_breaks, expand = c(0, 0)) +
-  ggplot2::theme(
-    # axis.title.x = ggplot2::element_blank(),
-    # legend.position = "none",
-    axis.title   = ggplot2::element_text(size = 8),
-    axis.text.x  = ggplot2::element_text(size = 6),
-    axis.text.y  = ggplot2::element_text(size = 6)
   )
+) +
+ggplot2::scale_x_continuous(breaks = nm_x_breaks, expand = c(0, 0)) +
+ggplot2::scale_y_continuous(breaks = nm_y_breaks, expand = c(0, 0)) +
+ggplot2::theme(
+  # axis.title.x = ggplot2::element_blank(),
+  # legend.position = "none",
+  axis.title   = ggplot2::element_text(size = 8),
+  axis.text.x  = ggplot2::element_text(size = 6),
+  axis.text.y  = ggplot2::element_text(size = 6)
+)
 
 
 nm_ca_legend <- cowplot::get_legend(
@@ -123,7 +124,8 @@ ggplot2::theme(
 ) +
 ggplot2::labs(
   x = NULL,
-  y = NULL
+  y = NULL,
+  fill = "MAP"
 )
 
 ppt_legend <- cowplot::get_legend(

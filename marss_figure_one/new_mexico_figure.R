@@ -18,9 +18,18 @@
 # NM data ----------------------------------------------------------------------
 
 nm_points <- sf::st_read("data/new_mexico_points.geojson") |>
-dplyr::filter(
-  grepl("jemez|redondo|toledo|west", Stream, ignore.case = TRUE)
-)
+  dplyr::filter(
+    grepl("jemez|redondo|toledo|west", Stream, ignore.case = TRUE)
+  ) |> 
+  dplyr::mutate(
+    Stream = dplyr::case_when(
+      grepl("redondo", Stream, ignore.case = TRUE) ~ "Redondo",
+      grepl("jemez", Stream, ignore.case = TRUE) ~ "Jemez",
+      grepl("west", Stream, ignore.case = TRUE) ~ "San Antonio (West)",
+      grepl("toledo", Stream, ignore.case = TRUE) ~ "San Antonio (Toledo)",
+      TRUE ~ Stream
+    )
+  )
 
 nm_fires <- sf::st_read("data/new_mexico_fires.geojson") |>
   sf::st_transform(crs = 4326) |>
@@ -115,76 +124,96 @@ nm_outer <- ggplot2::ggplot() +
 nm_x_breaks <- seq(nm_west + 0.1, nm_east - 0.1, by = 0.3)
 nm_y_breaks <- seq(nm_south + 0.05, nm_north - 0.05, by = 0.1)
 
-nm_inner <- ggmap::ggmap(nm_map) + 
-ggplot2::theme_minimal(base_family = "sans") +
-ggplot2::geom_sf(
-  mapping     = ggplot2::aes(fill = "catchment"),
-  data        = nm_catchments,
-  inherit.aes = FALSE,
-  show.legend = "polygon",
-  color       = "black",
-  fill        = NA,
-  linewidth   = 0.6,
-) +
-ggplot2::geom_sf(
-  mapping     = ggplot2::aes(fill = "fire"),
-  data        = nm_fires,
-  inherit.aes = FALSE,
-  show.legend = "polygon"
-) +
-ggplot2::geom_sf(
-  mapping     = ggplot2::aes(fill = "site"),
-  data        = nm_points,
-  inherit.aes = FALSE,
-  show.legend = "point"
-) +
-ggplot2::labs(
-  x = "longitude",
-  y = "Latitude"
-) +
-ggplot2::scale_fill_manual(
-  name   = NULL,
-  values = c(
-    # "catchment" = "#B8B8B8",
-    "catchment" = NA,
-    "fire"      = "red",
-    "site"      = NA
-  ),
-  guide  = ggplot2::guide_legend(
-    override.aes = list(
-      size     = c(NA, NA, 2),
-      shape    = c(NA, NA, 16),
-      linetype = c(1, 1, 0),
-      # fill     = c("#B8B8B8", "red", NA)
-      fill     = c(NA, "red", NA)
+(
+  nm_inner <- ggmap::ggmap(nm_map) + 
+  ggplot2::theme_minimal(base_family = "sans") +
+  ggplot2::geom_sf(
+    mapping     = ggplot2::aes(fill = "catchment"),
+    data        = nm_catchments,
+    inherit.aes = FALSE,
+    show.legend = "polygon",
+    color       = "black",
+    fill        = NA,
+    linewidth   = catchment_line_width,
+  ) +
+  ggplot2::geom_sf(
+    mapping     = ggplot2::aes(fill = "fire"),
+    data        = nm_fires,
+    inherit.aes = FALSE,
+    show.legend = "polygon",
+    alpha       = fires_alpha
+  ) +
+  ggplot2::geom_sf(
+    mapping     = ggplot2::aes(fill = "outlet"),
+    data        = nm_points,
+    inherit.aes = FALSE,
+    show.legend = "point",
+    size        = outlet_size,
+    colour      = outlet_color
+  ) +
+  ggplot2::geom_sf_text(
+    mapping     = ggplot2::aes(label = Stream),
+    data        = nm_points,
+    inherit.aes = FALSE,
+    size        = 4,
+    # each vectorized nudge must have a value
+    nudge_x = c(
+      -0.04, # redondo
+      -0.01, # jemez
+      -0.07, # san antonio west
+      -0.01  # san antonio toledo
+    ),
+    nudge_y = c(
+      +0.01, # redondo
+      -0.01, # jemez
+      +0.01, # san antonio west
+      +0.01  # san antonio toledo
     )
+  ) +
+  ggplot2::labs(
+    x = "longitude",
+    y = "Latitude"
+  ) +
+  ggplot2::scale_fill_manual(
+    name   = NULL,
+    values = c(
+      "catchment" = NA,
+      "fire"      = fires_color,
+      "outlet"    = NA
+    ),
+    guide  = ggplot2::guide_legend(
+      override.aes = list(
+        size     = c(NA, NA, 2),
+        shape    = c(NA, NA, 16),
+        linetype = c(1, 1, 0),
+        fill     = c(NA, fires_color, NA)
+      )
+    )
+  ) +
+  ggplot2::scale_x_continuous(breaks = nm_x_breaks, expand = c(0, 0)) +
+  ggplot2::scale_y_continuous(breaks = nm_y_breaks, expand = c(0, 0)) +
+  ggplot2::theme(
+  # setting when NM is on the left
+    # axis.title.x = ggplot2::element_blank(),
+    # # axis.title.x = ggplot2::element_blank(),
+    # # axis.title      = ggplot2::element_blank(),
+    # axis.title      = ggplot2::element_text(
+    #   family = "sans",
+    #   size   = 10
+    #   ),
+    # legend.position = "none",
+    # axis.text.x     = ggplot2::element_text(size = 6),
+    # axis.text.y     = ggplot2::element_text(size = 6),
+    # plot.margin     = ggplot2::unit(c(0, 0, 0, 0), "cm")
+  # setting when NM is on the right
+    legend.position = "none",
+    axis.title      = ggplot2::element_blank(),
+    axis.text.x     = ggplot2::element_text(size = 6),
+    axis.text.y     = ggplot2::element_text(size = 6),
+    plot.margin     = ggplot2::unit(c(0, 0, 0, 0), "cm"),
+    panel.border    = ggplot2::element_rect(colour = "grey", linewidth = 2, fill = NA)
   )
-) +
-ggplot2::scale_x_continuous(breaks = nm_x_breaks, expand = c(0, 0)) +
-ggplot2::scale_y_continuous(breaks = nm_y_breaks, expand = c(0, 0)) +
-ggplot2::theme(
-# setting when NM is on the left
-  # axis.title.x = ggplot2::element_blank(),
-  # # axis.title.x = ggplot2::element_blank(),
-  # # axis.title      = ggplot2::element_blank(),
-  # axis.title      = ggplot2::element_text(
-  #   family = "sans",
-  #   size   = 10
-  #   ),
-  # legend.position = "none",
-  # axis.text.x     = ggplot2::element_text(size = 6),
-  # axis.text.y     = ggplot2::element_text(size = 6),
-  # plot.margin     = ggplot2::unit(c(0, 0, 0, 0), "cm")
-# setting when NM is on the right
-  legend.position = "none",
-  axis.title      = ggplot2::element_blank(),
-  # axis.title  = ggplot2::element_text(size = 8),
-  axis.text.x     = ggplot2::element_text(size = 6),
-  axis.text.y     = ggplot2::element_text(size = 6),
-  plot.margin     = ggplot2::unit(c(0, 0, 0, 0), "cm"),
-  panel.border    = ggplot2::element_rect(colour = "grey", linewidth = 2, fill = NA)
 )
-
 
 # new mexico combined map ------------------------------------------------------
 
@@ -196,4 +225,6 @@ patchwork::inset_element(
   right  = +1.255,
   top    = +1
 ) +
-ggplot2::theme(plot.margin = ggplot2::unit(c(0, 0, 0, 0), "cm"))
+ggplot2::theme(
+  plot.margin = ggplot2::unit(c(0, 0, 0, 0), "cm")
+)
