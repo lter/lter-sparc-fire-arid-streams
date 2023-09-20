@@ -28,7 +28,7 @@ source("plot_legends.R")
     ncol        = 1,
     rel_heights = c(
       +1.00,
-      -0.63,
+      -0.50,
       +1.00
     )
   )
@@ -89,7 +89,7 @@ plot_with_y_axis +
 # line: CA
 cowplot::draw_line(
   x     = c(0.50, 0.545),
-  y     = c(0.60, 0.51),
+  y     = c(0.60, 0.525),
   color = inset_line_color,
   size  = 1
 ) +

@@ -19,7 +19,7 @@
 
 nm_points <- sf::st_read("data/new_mexico_points.geojson") |>
   dplyr::filter(
-    grepl("jemez|redondo|toledo|west", Stream, ignore.case = TRUE)
+    grepl("jemez|redondo|west", Stream, ignore.case = TRUE)
   ) |> 
   dplyr::mutate(
     Stream = dplyr::case_when(
@@ -41,13 +41,13 @@ nm_points <- sf::st_read("data/new_mexico_points.geojson") |>
 nm_fires <- sf::st_read("data/new_mexico_fires.geojson") |>
   sf::st_transform(crs = 4326) |>
   dplyr::filter(
-    grepl("jemez|redondo|toledo|west", location_id, ignore.case = TRUE)
+    grepl("jemez|redondo|west", location_id, ignore.case = TRUE)
   )
 
 nm_catchments <- sf::st_read("data/new_mexico_catchments.geojson") |>
   sf::st_transform(crs = 4326) |>
   dplyr::filter(
-    grepl("jemez|redondo|toledo|west", location_id, ignore.case = TRUE)
+    grepl("jemez|redondo|west", location_id, ignore.case = TRUE)
   )
 
 
@@ -140,7 +140,6 @@ nm_y_breaks <- seq(nm_south + 0.05, nm_north - 0.05, by = 0.1)
     inherit.aes = FALSE,
     show.legend = "polygon",
     color       = "black",
-    # fill        = NA,
     linewidth   = catchment_line_width,
     alpha = 0.1
   ) +
@@ -169,14 +168,12 @@ nm_y_breaks <- seq(nm_south + 0.05, nm_north - 0.05, by = 0.1)
     nudge_x = c(
       -0.05, # RED  redondo
       -0.02, # EFJ  jemez
-      -0.06, # RSAW san antonio west
-      -0.02  # RSA  san antonio toledo
+      -0.06  # RSAW san antonio west
     ),
     nudge_y = c(
       +0.01, # RED  redondo
       -0.02, # EFJ  jemez
-      +0.01, # RSAW san antonio west
-      +0.02  # RSA  san antonio toledo
+      +0.01  # RSAW san antonio west
     )
   ) +
   ggplot2::labs(
@@ -203,27 +200,12 @@ nm_y_breaks <- seq(nm_south + 0.05, nm_north - 0.05, by = 0.1)
   ggplot2::scale_x_continuous(breaks = nm_x_breaks, expand = c(0, 0)) +
   ggplot2::scale_y_continuous(breaks = nm_y_breaks, expand = c(0, 0)) +
   ggplot2::theme(
-    # setting when NM is on the left
-    # axis.title.x = ggplot2::element_blank(),
-    # # axis.title.x = ggplot2::element_blank(),
-    # # axis.title      = ggplot2::element_blank(),
-    # axis.title      = ggplot2::element_text(
-    #   family = "sans",
-    #   size   = 10
-    #   ),
-    # legend.position = "none",
-    # axis.text.x     = ggplot2::element_text(size = 6),
-    # axis.text.y     = ggplot2::element_text(size = 6),
-    # plot.margin     = ggplot2::unit(c(0, 0, 0, 0), "cm")
-    # setting when NM is on the right
     axis.title.x      = ggplot2::element_text(
       family = "sans",
       size   = 10
     ),
     legend.position = c(0.82, 0.20),
     legend.key.size = grid::unit(0.5, "cm"),
-    # legend.background = ggplot2::element_rect(fill = NA, color = "black"),
-    # axis.title.x      = ggplot2::element_blank(),
     axis.text.x     = ggplot2::element_text(size = 8),
     axis.text.y     = ggplot2::element_text(size = 8),
     plot.margin     = ggplot2::unit(c(0, 0, 0, 0), "cm"),

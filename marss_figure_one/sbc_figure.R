@@ -30,7 +30,7 @@ sbc_sites <- readr::read_csv("data/sbc_sites_streams.csv") |>
     crs    = 4326
   ) |>
   dplyr::filter(
-    sitecode %in% c("AB00", "GV01", "HO00", "MC06", "RS02")
+    sitecode %in% c("AB00", "GV01", "HO00", "RS02")
   ) |> 
   dplyr::mutate(
     Site = stringr::str_extract(
@@ -40,23 +40,23 @@ sbc_sites <- readr::read_csv("data/sbc_sites_streams.csv") |>
   )
 
 sbc_fires <- sf::st_read("data/santa_barbara_fires.geojson") |>
-  dplyr::filter(location_id %in% c("AB00", "GV01", "HO00", "MC06", "RS02"))
+  dplyr::filter(location_id %in% c("AB00", "GV01", "HO00", "RS02"))
 
 sbc_catchments <- sf::st_read("data/santa_barbara_catchments.geojson") |>
-  dplyr::filter(location_id %in% c("AB00", "GV01", "HO00", "MC06", "RS02"))
+  dplyr::filter(location_id %in% c("AB00", "GV01", "HO00", "RS02"))
 
-mc06_fire      <- sf::st_read("data/MC06_fires.geojson")
-mc06_catchment <- sf::st_read("data/MC06.geojson")
+# mc06_fire      <- sf::st_read("data/MC06_fires.geojson")
+# mc06_catchment <- sf::st_read("data/MC06.geojson")
 
-sbc_fires <- dplyr::bind_rows(
-  sbc_fires,
-  mc06_fire
-)
+# sbc_fires <- dplyr::bind_rows(
+#   sbc_fires,
+#   mc06_fire
+# )
 
-sbc_catchments <- dplyr::bind_rows(
-  sbc_catchments,
-  mc06_catchment
-)
+# sbc_catchments <- dplyr::bind_rows(
+#   sbc_catchments,
+#   mc06_catchment
+# )
 
 
 # california -------------------------------------------------------------------
@@ -199,15 +199,13 @@ ca_y_breaks <- seq(ca_south + 0.05, ca_north - 0.05, by = 0.1)
       -0.02, # AB00 arroyo burro
       -0.03, # GV01 gaviota
       +0.03, # HO00 arroyo hondo
-      +0.05, # RS02 rattlesnake
-      +0.05  # MC06 mission
+      +0.03  # RS02 rattlesnake
     ),
     nudge_y = c(
       -0.02, # AB00 arroyo burro
       -0.02, # GV01 gaviota
       -0.02, # HO00 arroyo hondo
-      -0.01, # RS02 rattlesnake
-      -0.02  # MC06 mission
+      -0.02  # RS02 rattlesnake
     )
   ) +
   ggplot2::annotate(
@@ -243,13 +241,7 @@ ca_y_breaks <- seq(ca_south + 0.05, ca_north - 0.05, by = 0.1)
   ggplot2::scale_x_continuous(breaks = ca_x_breaks, expand = c(0, 0)) +
   ggplot2::scale_y_continuous(breaks = ca_y_breaks, expand = c(0, 0)) +
   ggplot2::theme(
-    # setting when CA is on the left
     axis.title = ggplot2::element_blank(),
-    # axis.title.x = ggplot2::element_blank(),
-    # axis.title      = ggplot2::element_text(
-    #   family = "sans",
-    #   size   = 10
-    # ),
     legend.position = "none",
     axis.text.x     = ggplot2::element_text(size = 8),
     axis.text.y     = ggplot2::element_text(size = 8),
@@ -259,13 +251,6 @@ ca_y_breaks <- seq(ca_south + 0.05, ca_north - 0.05, by = 0.1)
       linewidth = 2,
       fill      = NA
     )
-    # setting when CA is on the right
-    # legend.position = "none",
-    # axis.title      = ggplot2::element_blank(),
-    # # axis.title  = ggplot2::element_text(size = 8),
-    # axis.text.x     = ggplot2::element_text(size = 6),
-    # axis.text.y     = ggplot2::element_text(size = 6),
-    # plot.margin     = ggplot2::unit(c(0, 0, 0, 0), "cm")
   )
 )
 

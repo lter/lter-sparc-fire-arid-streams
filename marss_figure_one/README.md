@@ -11,3 +11,4 @@ The work of delineating catchments and extracting fire data was addressed in oth
 - [ ]   I wonder if it would be possible to add the fire year as well without cluttering things if the site maps were larger
 - [x]   Should add MAP to the legend title for the US map
 - [x]   Should "site" be something like "outlet" or "observatory"?
+- [x]   remove MC06 and RSA

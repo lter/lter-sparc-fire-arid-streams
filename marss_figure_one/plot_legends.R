@@ -49,8 +49,6 @@ ggplot2::scale_fill_manual(
 ggplot2::scale_x_continuous(breaks = nm_x_breaks, expand = c(0, 0)) +
 ggplot2::scale_y_continuous(breaks = nm_y_breaks, expand = c(0, 0)) +
 ggplot2::theme(
-  # axis.title.x = ggplot2::element_blank(),
-  # legend.position = "none",
   axis.title   = ggplot2::element_text(size = 8),
   axis.text.x  = ggplot2::element_text(size = 6),
   axis.text.y  = ggplot2::element_text(size = 6)
