@@ -189,38 +189,39 @@ ca_y_breaks <- seq(ca_south + 0.05, ca_north - 0.05, by = 0.1)
     colour      = outlet_color
   ) +
   ggplot2::geom_sf_text(
-    mapping     = ggplot2::aes(label = Site),
+    mapping     = ggplot2::aes(label = sitecode),
     data        = sbc_sites,
     inherit.aes = FALSE,
-    size        = 4,
+    size        = 3,
+    fontface    = "bold",
     # each vectorized nudge must have a value
     nudge_x = c(
-      -0.02, # arroyo burro
-      -0.03, # gaviota
-      +0.03, # arroyo hondo
-      +0.06, # rattlesnake
-      +0.11  # mission
+      -0.02, # AB00 arroyo burro
+      -0.03, # GV01 gaviota
+      +0.03, # HO00 arroyo hondo
+      +0.05, # RS02 rattlesnake
+      +0.05  # MC06 mission
     ),
     nudge_y = c(
-      -0.01, # arroyo burro
-      -0.01, # gaviota
-      -0.01, # arroyo hondo
-      -0.01, # rattlesnake
-      -0.01  # mission
+      -0.02, # AB00 arroyo burro
+      -0.02, # GV01 gaviota
+      -0.02, # HO00 arroyo hondo
+      -0.01, # RS02 rattlesnake
+      -0.02  # MC06 mission
     )
   ) +
   ggplot2::annotate(
     geom     = "text",
-    x        = -119.9,
+    x        = -120.00,
     y        = +34.35,
     label    = "Pacific Ocean",
     fontface = "italic",
     color    = "grey22",
     size     = 4,
-    family   = "sans"
+    family   = "serif"
   ) +
   ggplot2::labs(
-    x = "longitude",
+    x = "Longitude",
     y = "Latitude"
   ) +
   ggplot2::scale_fill_manual(
@@ -242,18 +243,23 @@ ca_y_breaks <- seq(ca_south + 0.05, ca_north - 0.05, by = 0.1)
   ggplot2::scale_x_continuous(breaks = ca_x_breaks, expand = c(0, 0)) +
   ggplot2::scale_y_continuous(breaks = ca_y_breaks, expand = c(0, 0)) +
   ggplot2::theme(
-  # setting when CA is on the left
-    axis.title.x = ggplot2::element_blank(),
-    axis.title      = ggplot2::element_text(
-      family = "sans",
-      size   = 10
-    ),
+    # setting when CA is on the left
+    axis.title = ggplot2::element_blank(),
+    # axis.title.x = ggplot2::element_blank(),
+    # axis.title      = ggplot2::element_text(
+    #   family = "sans",
+    #   size   = 10
+    # ),
     legend.position = "none",
-    axis.text.x     = ggplot2::element_text(size = 6),
-    axis.text.y     = ggplot2::element_text(size = 6),
+    axis.text.x     = ggplot2::element_text(size = 8),
+    axis.text.y     = ggplot2::element_text(size = 8),
     plot.margin     = ggplot2::unit(c(0, 0, 0, 0), "cm"),
-    panel.border    = ggplot2::element_rect(colour = "grey", linewidth = 2, fill = NA)
-  # setting when CA is on the right
+    panel.border    = ggplot2::element_rect(
+      colour    = "grey",
+      linewidth = 2,
+      fill      = NA
+    )
+    # setting when CA is on the right
     # legend.position = "none",
     # axis.title      = ggplot2::element_blank(),
     # # axis.title  = ggplot2::element_text(size = 8),

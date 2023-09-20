@@ -28,6 +28,13 @@ nm_points <- sf::st_read("data/new_mexico_points.geojson") |>
       grepl("west", Stream, ignore.case = TRUE) ~ "San Antonio (West)",
       grepl("toledo", Stream, ignore.case = TRUE) ~ "San Antonio (Toledo)",
       TRUE ~ Stream
+    ),
+    sitecode = dplyr::case_when(
+      grepl("redondo", Stream, ignore.case = TRUE) ~ "RED",
+      grepl("jemez", Stream, ignore.case = TRUE) ~ "EFJ",
+      grepl("west", Stream, ignore.case = TRUE) ~ "RSAW",
+      grepl("toledo", Stream, ignore.case = TRUE) ~ "RSA",
+      TRUE ~ Stream
     )
   )
 
@@ -133,8 +140,9 @@ nm_y_breaks <- seq(nm_south + 0.05, nm_north - 0.05, by = 0.1)
     inherit.aes = FALSE,
     show.legend = "polygon",
     color       = "black",
-    fill        = NA,
+    # fill        = NA,
     linewidth   = catchment_line_width,
+    alpha = 0.1
   ) +
   ggplot2::geom_sf(
     mapping     = ggplot2::aes(fill = "fire"),
@@ -152,27 +160,28 @@ nm_y_breaks <- seq(nm_south + 0.05, nm_north - 0.05, by = 0.1)
     colour      = outlet_color
   ) +
   ggplot2::geom_sf_text(
-    mapping     = ggplot2::aes(label = Stream),
+    mapping     = ggplot2::aes(label = sitecode),
     data        = nm_points,
     inherit.aes = FALSE,
-    size        = 4,
+    size        = 3,
+    fontface = "bold",
     # each vectorized nudge must have a value
     nudge_x = c(
-      -0.04, # redondo
-      -0.01, # jemez
-      -0.07, # san antonio west
-      -0.01  # san antonio toledo
+      -0.05, # RED  redondo
+      -0.02, # EFJ  jemez
+      -0.06, # RSAW san antonio west
+      -0.02  # RSA  san antonio toledo
     ),
     nudge_y = c(
-      +0.01, # redondo
-      -0.01, # jemez
-      +0.01, # san antonio west
-      +0.01  # san antonio toledo
+      +0.01, # RED  redondo
+      -0.02, # EFJ  jemez
+      +0.01, # RSAW san antonio west
+      +0.02  # RSA  san antonio toledo
     )
   ) +
   ggplot2::labs(
-    x = "longitude",
-    y = "Latitude"
+    x = "Longitude",
+    y = ""
   ) +
   ggplot2::scale_fill_manual(
     name   = NULL,
@@ -183,17 +192,18 @@ nm_y_breaks <- seq(nm_south + 0.05, nm_north - 0.05, by = 0.1)
     ),
     guide  = ggplot2::guide_legend(
       override.aes = list(
-        size     = c(NA, NA, 2),
         shape    = c(NA, NA, 16),
         linetype = c(1, 1, 0),
-        fill     = c(NA, fires_color, NA)
+        fill     = c(NA, fires_color, NA),
+        colour   = c("black", fires_color, outlet_color),
+        size     = c(NA, NA, 2)
       )
     )
   ) +
   ggplot2::scale_x_continuous(breaks = nm_x_breaks, expand = c(0, 0)) +
   ggplot2::scale_y_continuous(breaks = nm_y_breaks, expand = c(0, 0)) +
   ggplot2::theme(
-  # setting when NM is on the left
+    # setting when NM is on the left
     # axis.title.x = ggplot2::element_blank(),
     # # axis.title.x = ggplot2::element_blank(),
     # # axis.title      = ggplot2::element_blank(),
@@ -205,13 +215,23 @@ nm_y_breaks <- seq(nm_south + 0.05, nm_north - 0.05, by = 0.1)
     # axis.text.x     = ggplot2::element_text(size = 6),
     # axis.text.y     = ggplot2::element_text(size = 6),
     # plot.margin     = ggplot2::unit(c(0, 0, 0, 0), "cm")
-  # setting when NM is on the right
-    legend.position = "none",
-    axis.title      = ggplot2::element_blank(),
-    axis.text.x     = ggplot2::element_text(size = 6),
-    axis.text.y     = ggplot2::element_text(size = 6),
+    # setting when NM is on the right
+    axis.title.x      = ggplot2::element_text(
+      family = "sans",
+      size   = 10
+    ),
+    legend.position = c(0.82, 0.20),
+    legend.key.size = grid::unit(0.5, "cm"),
+    # legend.background = ggplot2::element_rect(fill = NA, color = "black"),
+    # axis.title.x      = ggplot2::element_blank(),
+    axis.text.x     = ggplot2::element_text(size = 8),
+    axis.text.y     = ggplot2::element_text(size = 8),
     plot.margin     = ggplot2::unit(c(0, 0, 0, 0), "cm"),
-    panel.border    = ggplot2::element_rect(colour = "grey", linewidth = 2, fill = NA)
+    panel.border    = ggplot2::element_rect(
+      colour    = "grey",
+      linewidth = 2,
+      fill      = NA
+    )
   )
 )
 

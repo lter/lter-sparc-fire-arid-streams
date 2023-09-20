@@ -61,13 +61,13 @@ nm_ca_legend <- cowplot::get_legend(
   for_legend + ggplot2::theme(legend.box.margin = ggplot2::margin(0, 0, 0, 6)) # space to left of legend
 )
 
-
 # Add the legend. Give it one-third of the width of one plot (via rel_widths).
-plot_with_legend <- cowplot::plot_grid(
-  nm_ca,
-  nm_ca_legend,
-  rel_widths = c(3, 0.6)
-)
+# NOT NEEDED AFTER SWITCHING TO STACKED PLOTS.
+# plot_with_legend <- cowplot::plot_grid(
+#   nm_ca,
+#   nm_ca_legend,
+#   rel_widths = c(3, 0.6)
+# )
 
 
 # legend for national precipitation map ----------------------------------------
@@ -125,7 +125,7 @@ ggplot2::theme(
 ggplot2::labs(
   x = NULL,
   y = NULL,
-  fill = "MAP"
+  fill = "MAP (mm)"
 )
 
 ppt_legend <- cowplot::get_legend(
