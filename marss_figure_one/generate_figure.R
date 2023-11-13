@@ -3,6 +3,40 @@
 #' biogeochemistry due to intermittent precipitation in arid lands manuscript
 #'
 #' @description Resources to generate figure 1 for the MARSS manuscript
+#'
+#' @note In the time since what was expected to be the final figure was
+#' developed and submitting the paper, stamenmaps, which provide the background
+#' layer for this figure, are now served by Stadia Maps. At the time of this
+#' writing, `ggmap` included functionality to pull similar layers from Stadia
+#' Maps but that functionality had not yet been exported in either the CRAN or
+#' developement (i.e., GitHub) versions of `ggmap`. As such when attempting to
+#' explore potential modifications to the map, the unusual steps of having to
+#' clone the `ggmap` repository and load the relevant functions was required.
+#' Note also that unlike stamenmaps, Stadia Maps requires an API key.
+
+# load tools to acquire background map layers from Stadia Maps  
+
+## Stadia Maps does require an API key
+## register_stadiamaps("mykey", write = TRUE) 
+
+## load libraries used by the `ggmap` package
+library(stringr)
+library(glue)
+library(tibble)
+library(plyr)
+
+## source required functions from a clone of `ggmap`
+source("path-to-clone/ggmap/R/LonLat2XY.R")
+source("path-to-clone/ggmap/R/XY2LonLat.R")
+source("path-to-clone/ggmap/R/helpers.R")
+source("path-to-clone/ggmap/R/register_stadiamaps.R")
+source("path-to-clone/ggmap/R/ggmap_options.R")
+source("path-to-clone/ggmap/R/attach.R")
+source("path-to-clone/ggmap/R/file_drawer.R")
+source("path-to-clone/ggmap/R/get_stadiamap.R")
+
+
+# settings
 
 catchment_line_width <- 0.3
 outlet_size          <- 1.8

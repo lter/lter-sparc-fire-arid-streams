@@ -67,7 +67,10 @@ nm_east  <- -106.1
 
 # bkgd for inner ---------------------------------------------------------------
 
-nm_map <- ggmap::get_stamenmap(
+## change call from `ggmap::get_stamenmap` to `get_stadiamap` and note that
+## this is a locally sourced function
+
+nm_map <- get_stadiamap(
   bbox = c(
     left   = nm_west,
     bottom = nm_south,
@@ -75,8 +78,19 @@ nm_map <- ggmap::get_stamenmap(
     top    = nm_north
     ),
   zoom = 10,
-  maptype = "terrain-background"
+  maptype = "stamen_terrain_background"
 )
+
+# nm_map <- ggmap::get_stamenmap(
+#   bbox = c(
+#     left   = nm_west,
+#     bottom = nm_south,
+#     right  = nm_east,
+#     top    = nm_north
+#     ),
+#   zoom = 10,
+#   maptype = "terrain-background"
+# )
 
 
 # cities for outer -------------------------------------------------------------
