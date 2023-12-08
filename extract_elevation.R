@@ -51,12 +51,50 @@ plot(sf_file["usgs_site"], axes = T)
 # Identify the grouping columns
 (group_cols <- c(setdiff(x = names(sf_file), y = c("geometry", "geom"))))
 
-# Clean up environment
-rm(list = setdiff(ls(), c('path', 'sf_file', 'group_cols')))
+# Load elevation data
+elev_raw <- terra::rast(x = file.path(path, "raw-spatial-data", "nasa_elevation", 
+                                      "SRTMGL1_NC.003_SRTMGL1_DEM_doy2000042_aid0001.tif"))
+
+# Visual check for overlap
+plot(elev_raw, axes = T, reset = F)
+plot(sf_file["usgs_site"], axes = T, add = T)
 
 ## -------------------------------- ##
 # Extract ----
 ## -------------------------------- ##
+
+
+
+# BASEMENT----
+
+
+# Strip out land cover for our polygons
+elev_out <- exactextractr::exact_extract(x = elev_raw, y = sheds,
+                                         include_cols = c("LTER", "Shapefile_Name")) %>%
+  # Above returns a list so switch it to a dataframe
+  purrr::map_dfr(dplyr::select, dplyr::everything()) %>%
+  # Filter out NAs
+  dplyr::filter(!is.na(value))
+
+# Check that dataframe
+dplyr::glimpse(elev_out)
+
+## ------------------------------------------------------- ##
+# Elevation - Summarize ----
+## ------------------------------------------------------- ##
+
+# Wrangle extracted data
+elev_actual <- elev_out %>%
+  # Summarize elevation within river ID
+  dplyr::group_by(LTER, Shapefile_Name) %>%
+  dplyr::summarize(elevation_median_m = stats::median(value, na.rm = T),
+                   elevation_mean_m = mean(value, na.rm = T),
+                   elevation_min_m = min(value, na.rm = T),
+                   elevation_max_m = max(value, na.rm = T)) %>%
+  dplyr::ungroup()
+
+# Glimpse this
+dplyr::glimpse(elev_actual)
 
 
 ## -------------------------------- ##
