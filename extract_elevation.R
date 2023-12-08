@@ -8,8 +8,8 @@
 ## ELEVATION
 
 # Data Source
-## NASADEM Merged DEM Global 1 arc second
-## https://lpdaac.usgs.gov/products/nasadem_hgtv001/
+## NASA Shuttle Radar Topography Mission Global 1 arc second
+## https://lpdaac.usgs.gov/products/srtmgl1v003/
 
 ## -------------------------------- ##
           # Housekeeping ----
