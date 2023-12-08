@@ -8,7 +8,7 @@
 ## LAND COVER
 
 # Data Source
-## MODIS Land Cover Type (MCD12Q1) Version 6.1
+## MODIS/Terra+Aqua Land Cover Type Yearly L3 Global 500 m SIN Grid
 ## https://lpdaac.usgs.gov/products/mcd12q1v061/
 
 ## -------------------------------- ##
