@@ -51,15 +51,80 @@ plot(sf_file["usgs_site"], axes = T)
 # Identify the grouping columns
 (group_cols <- c(setdiff(x = names(sf_file), y = c("geometry", "geom"))))
 
-# Clean up environment
-rm(list = setdiff(ls(), c('path', 'sf_file', 'group_cols')))
+# Read in the netCDF file and examine for context on units / etc.
+land_nc <- ncdf4::nc_open(filename = file.path(path, "raw-spatial-data", "modis_land-cover",
+                                               "MCD12Q1.061_500m_aid0001.nc"))
+
+# Look at this
+print(land_nc)
+
+# Read it as a raster too
+## This format is more easily manipulable for our purposes
+land_rast <- terra::rast(x = file.path(path, "raw-spatial-data", "modis_land-cover",
+                                       "MCD12Q1.061_500m_aid0001.nc"))
+
+# Check names
+names(land_rast)
+
+# Check out just one of those
+print(land_rast$LC_Type1_1)
+
 
 ## -------------------------------- ##
 # Extract ----
 ## -------------------------------- ##
 
 
-file.path(path, "raw-spatial-data", "modis_land-cover", "MCD12Q1.061_500m_aid0001.nc")
+
+
+# Create an empty list to store this information in
+out_list <- list()
+
+# Identify how many layers are in this
+(layer_ct <- length(names(air_rast)))
+
+# We'll need to strip each layer separately
+for(k in 1:layer_ct){
+  # for(k in 1:2){ # Test loop
+  
+  # Build name of layer
+  focal_layer <- paste0("air_", k)
+  
+  # Rotate so longitude is from -180 to 180 (rather than 0 to 360)
+  rotated <- terra::rotate(x = air_rast[[focal_layer]])
+  
+  # Identify time of this layer
+  layer_time <- terra::time(x = rotated)
+  
+  # Strip out the relevant bit
+  small_out_df <- exactextractr::exact_extract(x = rotated, y = sf_file,
+                                               include_cols = group_cols,
+                                               progress = F) %>%
+    # Above returns a list so switch it to a dataframe
+    purrr::list_rbind(x = .) %>%
+    # Filter out NAs
+    dplyr::filter(!is.na(value)) %>%
+    # Convert from Kelvin to Celsius
+    dplyr::mutate(value_c = value - 273.15) %>%
+    # Average temperature within river ID
+    dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
+    dplyr::summarize(value_avg = mean(value_c, na.rm = T)) %>%
+    dplyr::ungroup() %>%
+    # Add a column for what timestamp this is
+    dplyr::mutate(time = layer_time, 
+                  .before = dplyr::everything())
+  
+  # Add it to the list
+  out_list[[focal_layer]] <- small_out_df
+  
+  # Success message
+  message("Processing complete for ", layer_time, " (number ", k, " of ", layer_ct, ")") }
+
+# Exploratory plot one of what we just extracted
+plot(rotated, axes = T, reset = F)
+plot(sf_file["usgs_site"], axes = T, add = T)
+
+
 
 ## -------------------------------- ##
 # Wrangle ----
