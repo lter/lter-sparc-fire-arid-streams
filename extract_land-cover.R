@@ -59,6 +59,8 @@ rm(list = setdiff(ls(), c('path', 'sf_file', 'group_cols')))
 ## -------------------------------- ##
 
 
+file.path(path, "raw-spatial-data", "modis_land-cover", "MCD12Q1.061_500m_aid0001.nc")
+
 ## -------------------------------- ##
 # Wrangle ----
 ## -------------------------------- ##

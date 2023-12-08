@@ -58,6 +58,8 @@ rm(list = setdiff(ls(), c('path', 'sf_file', 'group_cols')))
 # Extract ----
 ## -------------------------------- ##
 
+file.path(path, "raw-spatial-data", "noaa_pdsi", "noaa_pdsi-monthly.nc")
+
 
 ## -------------------------------- ##
 # Wrangle ----

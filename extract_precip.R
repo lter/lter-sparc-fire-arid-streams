@@ -58,6 +58,9 @@ rm(list = setdiff(ls(), c('path', 'sf_file', 'group_cols')))
 # Extract ----
 ## -------------------------------- ##
 
+# Annual precip data (one netCDF / year) in this folder
+file.path(path, "raw-spatial-data", "gridmet_precip")
+
 
 ## -------------------------------- ##
 # Wrangle ----

@@ -58,6 +58,8 @@ rm(list = setdiff(ls(), c('path', 'sf_file', 'group_cols')))
 # Extract ----
 ## -------------------------------- ##
 
+file.path(path, "raw-spatial-data", "modis_temperature", "MOD11A1.061_1979-2000_1km.nc")
+
 
 ## -------------------------------- ##
 # Wrangle ----
