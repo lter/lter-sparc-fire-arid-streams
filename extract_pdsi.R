@@ -51,14 +51,33 @@ plot(sf_file["usgs_site"], axes = T)
 # Identify the grouping columns
 (group_cols <- c(setdiff(x = names(sf_file), y = c("geometry", "geom"))))
 
-# Clean up environment
-rm(list = setdiff(ls(), c('path', 'sf_file', 'group_cols')))
+# Read in the netCDF file and examine for context on units / etc.
+pdsi_nc <- ncdf4::nc_open(filename = file.path(path, "raw-spatial-data", "noaa_pdsi", 
+                                               "noaa_pdsi-monthly.nc"))
+
+# Look at this
+print(pdsi_nc)
+
+# Read it as a raster too
+## This format is more easily manipulable for our purposes
+pdsi_rast <- terra::rast(x = file.path(path, "raw-spatial-data", "noaa_pdsi", 
+                                       "noaa_pdsi-monthly.nc"))
+
+# Check names
+names(pdsi_rast)
+
+# Check out just one of those
+print(pdsi_rast$pdsi_1)
+
+# Visual check for overlap
+plot(pdsi_rast$pdsi_1, axes = T, reset = F)
+plot(sf_file["usgs_site"], axes = T, add = T)
 
 ## -------------------------------- ##
 # Extract ----
 ## -------------------------------- ##
 
-file.path(path, "raw-spatial-data", "noaa_pdsi", "noaa_pdsi-monthly.nc")
+
 
 
 ## -------------------------------- ##
