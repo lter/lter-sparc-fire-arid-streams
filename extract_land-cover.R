@@ -11,6 +11,10 @@
 ## MODIS/Terra+Aqua Land Cover Type Yearly L3 Global 500 m SIN Grid
 ## https://lpdaac.usgs.gov/products/mcd12q1v061/
 
+## Land Cover Categories Legend in Data Product User Guide
+## Link to PDF:
+## https://lpdaac.usgs.gov/documents/101/MCD12_User_Guide_V6.pdf
+
 ## -------------------------------- ##
           # Housekeeping ----
 ## -------------------------------- ##
@@ -212,14 +216,21 @@ lc_v2 <- lc_v1 %>%
     lc_system == "PFT" & value == "9" ~ "urban",
     lc_system == "PFT" & value == "10" ~ "permanent_snow_and_ice",
     lc_system == "PFT" & value == "11" ~ "barren",
-    T ~ 'x'), .before = value)
+    T ~ 'x'), .before = value) %>% 
+  # Calculate total pixels per LC system
+  dplyr::group_by(usgs_site, area_m2, area_km2, time, lc_system) %>% 
+  dplyr::mutate(total_pixels = sum(pixel_ct, na.rm = T)) %>% 
+  dplyr::ungroup() %>% 
+  # Express 'pixel count' as a percent
+  dplyr::mutate(perc_cover = (pixel_ct / total_pixels) * 100) %>% 
+  # Drop now-superseded columns
+  dplyr::select(-type, -value, -pixel_ct, -total_pixels)
 
 # Re-check structure
 dplyr::glimpse(lc_v2)
 
-
 ## -------------------------------- ##
-# Export ----
+            # Export ----
 ## -------------------------------- ##
 
 
