@@ -74,22 +74,78 @@ plot(pdsi_rast$pdsi_1, axes = T, reset = F)
 plot(sf_file["usgs_site"], axes = T, add = T)
 
 ## -------------------------------- ##
-# Extract ----
+            # Extract ----
 ## -------------------------------- ##
 
+# Create an empty list for storing extracted information
+out_list <- list()
 
+# Identify how many layers are in this
+(layer_ct <- length(names(pdsi_rast)))
 
+# We'll need to strip each layer separately
+for(k in 1:layer_ct){
+
+  # Build name of layer
+  focal_layer <- paste0("pdsi_", k)
+  
+  # Starting message
+  message("Extraction begun for '", focal_layer, "'")
+  
+  # Identify time of this layer
+  layer_time <- terra::time(x = pdsi_rast[[focal_layer]])
+  
+  # Strip out the relevant bit
+  small_out_df <- exactextractr::exact_extract(x = pdsi_rast[[focal_layer]], 
+                                               y = sf_file,
+                                               include_cols = group_cols,
+                                               progress = T) %>%
+    # Above returns a list so switch it to a dataframe
+    purrr::list_rbind(x = .) %>%
+    # Filter out NAs
+    dplyr::filter(!is.na(value)) %>%
+    # Average within existing groups
+    dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
+    dplyr::summarize(value_avg = mean(value, na.rm = T)) %>%
+    dplyr::ungroup() %>%
+    # Add a column for what timestamp this is
+    dplyr::mutate(time = layer_time, 
+                  .before = value_avg)
+  
+  # Add it to the list
+  out_list[[focal_layer]] <- small_out_df
+  
+  # Success message
+  message("Processing complete for ", layer_time, " (number ", k, " of ", layer_ct, ")") }
 
 ## -------------------------------- ##
-# Wrangle ----
+            # Wrangle ----
 ## -------------------------------- ##
 
+# Unlist the output of that loop for easier wrangling
+pdsi_v1 <- purrr::list_rbind(x = out_list) %>% 
+  # Rename extracted column more intuitively
+  dplyr::rename(mean_pdsi = value_avg)
 
+# Check structure
+dplyr::glimpse(pdsi_v1)
 
 ## -------------------------------- ##
-# Export ----
+              # Export ----
 ## -------------------------------- ##
 
+# Create folder to export to
+dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
+
+# Define file path for CSV
+pdsi_path <- file.path(path, "extracted-data", "fire-arid_land-cover.csv")
+
+# Export the summarized data
+write.csv(x = lc_v2, na = '', row.names = F, file = pdsi_path)
+
+# Upload to GoogleDrive
+googledrive::drive_upload(media = pdsi_path, overwrite = T,
+                          path = googledrive::as_id("https://drive.google.com/drive/u/0/folders/1XxvY56h1cMmaYatF7WhVrbYbaOgdRBGC"))
 
 # End ----
 
