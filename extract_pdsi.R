@@ -125,7 +125,7 @@ for(k in 1:layer_ct){
 # Unlist the output of that loop for easier wrangling
 pdsi_v1 <- purrr::list_rbind(x = out_list) %>% 
   # Rename extracted column more intuitively
-  dplyr::rename(mean_pdsi = value_avg)
+  dplyr::rename(noaa_pdsi = value_avg)
 
 # Check structure
 dplyr::glimpse(pdsi_v1)
@@ -134,6 +134,9 @@ dplyr::glimpse(pdsi_v1)
               # Export ----
 ## -------------------------------- ##
 
+# Pick final object name
+final_pdsi <- pdsi_v1
+
 # Create folder to export to
 dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
 
@@ -141,7 +144,7 @@ dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
 pdsi_path <- file.path(path, "extracted-data", "fire-arid_land-cover.csv")
 
 # Export the summarized data
-write.csv(x = lc_v2, na = '', row.names = F, file = pdsi_path)
+write.csv(x = final_pdsi, na = '', row.names = F, file = pdsi_path)
 
 # Upload to GoogleDrive
 googledrive::drive_upload(media = pdsi_path, overwrite = T,
