@@ -69,62 +69,52 @@ names(land_rast)
 # Check out just one of those
 print(land_rast$LC_Type1_1)
 
+# Visual check for overlap
+plot(land_rast$LC_Type1_1, axes = T, reset = F)
+plot(sf_file["usgs_site"], axes = T, add = T)
 
 ## -------------------------------- ##
-# Extract ----
+          # Extract ----
 ## -------------------------------- ##
 
-
-
-
-# Create an empty list to store this information in
+# Create an empty list for storing extracted data
 out_list <- list()
 
-# Identify how many layers are in this
-(layer_ct <- length(names(air_rast)))
+# Identify the names of the layers we want to extract
+(wanted_layers <- setdiff(x = names(land_rast), y = paste0("QC_", 1:22)))
 
-# We'll need to strip each layer separately
-for(k in 1:layer_ct){
-  # for(k in 1:2){ # Test loop
+# Loop across layers extracting each as we go
+for(focal_layer in wanted_layers){
   
-  # Build name of layer
-  focal_layer <- paste0("air_", k)
-  
-  # Rotate so longitude is from -180 to 180 (rather than 0 to 360)
-  rotated <- terra::rotate(x = air_rast[[focal_layer]])
+  # Print start message
+  message("Extraction begun for '", focal_layer, "'")
   
   # Identify time of this layer
-  layer_time <- terra::time(x = rotated)
+  layer_time <- terra::time(x = land_rast[[focal_layer]])
   
-  # Strip out the relevant bit
-  small_out_df <- exactextractr::exact_extract(x = rotated, y = sf_file,
+  # Extract information
+  small_out_df <- exactextractr::exact_extract(x = land_rast[[focal_layer]],
+                                               y = sf_file,
                                                include_cols = group_cols,
-                                               progress = F) %>%
+                                               progress = T) %>%
     # Above returns a list so switch it to a dataframe
     purrr::list_rbind(x = .) %>%
     # Filter out NAs
     dplyr::filter(!is.na(value)) %>%
-    # Convert from Kelvin to Celsius
-    dplyr::mutate(value_c = value - 273.15) %>%
-    # Average temperature within river ID
-    dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
-    dplyr::summarize(value_avg = mean(value_c, na.rm = T)) %>%
+    # Count number of pixels per land cover type
+    dplyr::group_by(dplyr::across(dplyr::all_of(c(group_cols, "value")))) %>% 
+    dplyr::summarize(pixel_ct = dplyr::n()) %>% 
     dplyr::ungroup() %>%
-    # Add a column for what timestamp this is
-    dplyr::mutate(time = layer_time, 
+    # Add a column for the layer name and layer time
+    dplyr::mutate(type = focal_layer,
+                  time = layer_time, 
                   .before = dplyr::everything())
   
-  # Add it to the list
+  # Add this to the list
   out_list[[focal_layer]] <- small_out_df
   
   # Success message
-  message("Processing complete for ", layer_time, " (number ", k, " of ", layer_ct, ")") }
-
-# Exploratory plot one of what we just extracted
-plot(rotated, axes = T, reset = F)
-plot(sf_file["usgs_site"], axes = T, add = T)
-
-
+  message("Processing complete for ", focal_layer, " at ", layer_time) }
 
 ## -------------------------------- ##
 # Wrangle ----
