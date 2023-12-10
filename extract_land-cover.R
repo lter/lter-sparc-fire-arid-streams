@@ -117,9 +117,105 @@ for(focal_layer in wanted_layers){
   message("Processing complete for ", focal_layer, " at ", layer_time) }
 
 ## -------------------------------- ##
-# Wrangle ----
+            # Wrangle ----
 ## -------------------------------- ##
 
+# Unlist the output of that loop for easier wrangling
+lc_v1 <- purrr::list_rbind(x = out_list)
+
+# Check structure
+dplyr::glimpse(lc_v1)
+
+# Perform needed wrangling
+lc_v2 <- lc_v1 %>% 
+  # Move the site info columns to the left
+  dplyr::relocate(usgs_site:area_km2, .before = type) %>% 
+  # Clean up layer type column
+  dplyr::mutate(type = gsub(pattern = "_[[:digit:]]{1,2}", replacement = "", x = type)) %>% 
+  # Get a better variant of the "type" column that is less ambiguous
+  dplyr::mutate(lc_system = dplyr::case_when(
+    type == "LC_Type1" ~ "IGBP",
+    type == "LC_Type2" ~ "UMD",
+    type == "LC_Type3" ~ "LAI",
+    type == "LC_Type4" ~ "BGC",
+    type == "LC_Type5" ~ "PFT",
+    T ~ 'x'), .before = type) %>% 
+  # Use those to get the actual land cover categories
+  dplyr::mutate(land_cover = dplyr::case_when(
+    ## International Geosphere-Biosphere Programme (IGBP)
+    lc_system == "IGBP" & value == "1" ~ "evergreen_needleleaf_forest",
+    lc_system == "IGBP" & value == "2" ~ "evergreen_broadleaf_forest",
+    lc_system == "IGBP" & value == "3" ~ "deciduous_needleleaf_forest",
+    lc_system == "IGBP" & value == "4" ~ "deciduous_broadleaf_forest",
+    lc_system == "IGBP" & value == "5" ~ "mixed_forest",
+    lc_system == "IGBP" & value == "6" ~ "closed_shrubland",
+    lc_system == "IGBP" & value == "7" ~ "open_shrubland",
+    lc_system == "IGBP" & value == "8" ~ "woody_savanna",
+    lc_system == "IGBP" & value == "9" ~ "savanna",
+    lc_system == "IGBP" & value == "10" ~ "grassland",
+    lc_system == "IGBP" & value == "11" ~ "permanent_wetland",
+    lc_system == "IGBP" & value == "12" ~ "cropland",
+    lc_system == "IGBP" & value == "13" ~ "urban",
+    lc_system == "IGBP" & value == "14" ~ "cropland_natural_mosaic",
+    lc_system == "IGBP" & value == "15" ~ "snow_and_ice",
+    lc_system == "IGBP" & value == "16" ~ "barren",
+    lc_system == "IGBP" & value == "17" ~ "water_body",
+    ## Annual University of Maryland (UMD)
+    lc_system == "UMD" & value == "0" ~ "water_body",
+    lc_system == "UMD" & value == "1" ~ "evergreen_needleleaf_forest",
+    lc_system == "UMD" & value == "2" ~ "evergreen_broadleaf_forest",
+    lc_system == "UMD" & value == "3" ~ "deciduous_needleleaf_forest",
+    lc_system == "UMD" & value == "4" ~ "deciduous_broadleaf_forest",
+    lc_system == "UMD" & value == "5" ~ "mixed_forest",
+    lc_system == "UMD" & value == "6" ~ "closed_shrubland",
+    lc_system == "UMD" & value == "7" ~ "open_shrubland",
+    lc_system == "UMD" & value == "8" ~ "woody_savanna",
+    lc_system == "UMD" & value == "9" ~ "savanna",
+    lc_system == "UMD" & value == "10" ~ "grassland",
+    lc_system == "UMD" & value == "11" ~ "permanent_wetland",
+    lc_system == "UMD" & value == "12" ~ "cropland",
+    lc_system == "UMD" & value == "13" ~ "urban",
+    lc_system == "UMD" & value == "14" ~ "cropland_natural_mosaic",
+    lc_system == "UMD" & value == "15" ~ "non_vegetated",
+    ## Leaf Area Index (LAI)
+    lc_system == "LAI" & value == "0" ~ "water_body",
+    lc_system == "LAI" & value == "1" ~ "grassland",
+    lc_system == "LAI" & value == "2" ~ "shrubland",
+    lc_system == "LAI" & value == "3" ~ "broadleaf_cropland",
+    lc_system == "LAI" & value == "4" ~ "savanna",
+    lc_system == "LAI" & value == "5" ~ "evergreen_broadleaf_forest",
+    lc_system == "LAI" & value == "6" ~ "deciduous_broadleaf_forest",
+    lc_system == "LAI" & value == "7" ~ "evergreen_needleleaf_forest",
+    lc_system == "LAI" & value == "8" ~ "deciduous_needleleaf_forest",
+    lc_system == "LAI" & value == "9" ~ "non_vegetated",
+    lc_system == "LAI" & value == "10" ~ "urban",
+    ## BIOME - Biogeochemical Cycles (BGC)
+    lc_system == "BGC" & value == "0" ~ "water_body",
+    lc_system == "BGC" & value == "1" ~ "evergreen_needleleaf_vegetation",
+    lc_system == "BGC" & value == "2" ~ "evergreen_broadleaf_vegetation",
+    lc_system == "BGC" & value == "3" ~ "deciduous_needleleaf_vegetation",
+    lc_system == "BGC" & value == "4" ~ "deciduous_broadleaf_vegetation",
+    lc_system == "BGC" & value == "5" ~ "annual_broadleaf_vegetation",
+    lc_system == "BGC" & value == "6" ~ "annual_grass_vegetation",
+    lc_system == "BGC" & value == "7" ~ "non_vegetated",
+    lc_system == "BGC" & value == "8" ~ "urban",
+    ## Plant Functional Types (PFT)
+    lc_system == "PFT" & value == "0" ~ "water_body",
+    lc_system == "PFT" & value == "1" ~ "evergreen_needleleaf_trees",
+    lc_system == "PFT" & value == "2" ~ "evergreen_broadleaf_trees",
+    lc_system == "PFT" & value == "3" ~ "deciduous_needleleaf_trees",
+    lc_system == "PFT" & value == "4" ~ "deciduous_broadleaf_trees",
+    lc_system == "PFT" & value == "5" ~ "shrub",
+    lc_system == "PFT" & value == "6" ~ "grass",
+    lc_system == "PFT" & value == "7" ~ "cereal_cropland",
+    lc_system == "PFT" & value == "8" ~ "broadleaf_cropland",
+    lc_system == "PFT" & value == "9" ~ "urban",
+    lc_system == "PFT" & value == "10" ~ "permanent_snow_and_ice",
+    lc_system == "PFT" & value == "11" ~ "barren",
+    T ~ 'x'), .before = value)
+
+# Re-check structure
+dplyr::glimpse(lc_v2)
 
 
 ## -------------------------------- ##
