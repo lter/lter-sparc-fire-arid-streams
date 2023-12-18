@@ -233,16 +233,20 @@ dplyr::glimpse(lc_v2)
             # Export ----
 ## -------------------------------- ##
 
+# Pick final object name
+final_lc <- lc_v2
+
 # Create folder to export to
 dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
 
+# Define file path for CSV
+lc_path <- file.path(path, "extracted-data", "fire-arid_land-cover.csv")
+
 # Export the summarized data
-write.csv(x = lc_v2, na = '', row.names = F,
-          file = file.path(path, "extracted-data", "fire-arid_land-cover.csv"))
+write.csv(x = final_lc, na = '', row.names = F, file = lc_path)
 
 # Upload to GoogleDrive
-googledrive::drive_upload(media = file.path(path, "extracted-data", "fire-arid_land-cover.csv"),
-                          overwrite = T,
+googledrive::drive_upload(media = lc_path, overwrite = T,
                           path = googledrive::as_id("https://drive.google.com/drive/u/0/folders/1XxvY56h1cMmaYatF7WhVrbYbaOgdRBGC"))
 
 # End ----
