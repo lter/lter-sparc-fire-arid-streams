@@ -141,7 +141,7 @@ final_pdsi <- pdsi_v1
 dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
 
 # Define file path for CSV
-pdsi_path <- file.path(path, "extracted-data", "fire-arid_land-cover.csv")
+pdsi_path <- file.path(path, "extracted-data", "fire-arid_pdsi.csv")
 
 # Export the summarized data
 write.csv(x = final_pdsi, na = '', row.names = F, file = pdsi_path)
