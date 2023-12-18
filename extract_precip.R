@@ -144,10 +144,30 @@ precip_v1 <- purrr::list_rbind(x = out_list)
 # Check structure
 dplyr::glimpse(precip_v1)
 
+# Do needed wrangling
+precip_v2 <- precip_v1 %>% 
+  # Rename the value column more intuitively
+  dplyr::rename(precip_mm = value_avg)
+
 ## -------------------------------- ##
-# Export ----
+             # Export ----
 ## -------------------------------- ##
 
+# Pick final object name
+final_precip <- precip_v2
+
+# Create folder to export to
+dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
+
+# Define file path for CSV
+precip_path <- file.path(path, "extracted-data", "fire-arid_precipitation.csv")
+
+# Export the summarized data
+write.csv(x = final_precip, na = '', row.names = F, file = precip_path)
+
+# Upload to GoogleDrive
+googledrive::drive_upload(media = precip_path, overwrite = T,
+                          path = googledrive::as_id("https://drive.google.com/drive/u/0/folders/1XxvY56h1cMmaYatF7WhVrbYbaOgdRBGC"))
 
 # End ----
 
