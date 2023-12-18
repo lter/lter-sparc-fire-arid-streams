@@ -112,8 +112,7 @@ for(focal_layer in wanted_layers){
     dplyr::summarize(value_avg = mean(value_fix, na.rm = T)) %>% 
     dplyr::ungroup() %>%
     # Add a column for the layer name and layer time
-    dplyr::mutate(type = focal_layer,
-                  time = layer_time, 
+    dplyr::mutate(time = layer_time, 
                   .before = dplyr::everything())
   
   # Add this to the list
@@ -133,13 +132,29 @@ gpp_v1 <- purrr::list_rbind(x = out_list)
 dplyr::glimpse(gpp_v1)
 
 # Do needed wrangling
-gpp_v2 <- gpp_v1
+gpp_v2 <- gpp_v1 %>% 
+  # Move the site info columns to the left
+  dplyr::relocate(usgs_site:area_km2, .before = time) %>% 
+  # Rename extracted information
+  dplyr::rename(gpp_kg_C_m2 = value_avg) %>% 
+  # Separate time into useful subcomponents
+  dplyr::mutate(year = as.numeric(stringr::str_sub(string = time, start = 1, end = 4)),
+                month = as.numeric(stringr::str_sub(string = time, start = 6, end = 7)),
+                day = as.numeric(stringr::str_sub(string = time, start = 9, end = 10)),
+                .after = time) %>% 
+  # Make month column more legible
+  dplyr::mutate(month_name = dplyr::case_when(
+    month == 1 ~ "jan", month == 2 ~ "feb", month == 3 ~ "mar",
+    month == 4 ~ "apr", month == 5 ~ "may", month == 6 ~ "jun",
+    month == 7 ~ "jul", month == 8 ~ "aug", month == 9 ~ "sep",
+    month == 10 ~ "oct", month == 11 ~ "nov", month == 12 ~ "dec",
+    T ~ 'x'), .after = month)
 
 # Re-check structure
 dplyr::glimpse(gpp_v2)
 
 ## -------------------------------- ##
-          # Export ----
+             # Export ----
 ## -------------------------------- ##
 
 # Pick final object name
