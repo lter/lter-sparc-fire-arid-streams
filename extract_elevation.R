@@ -82,7 +82,31 @@ plot(sf_file["usgs_site"], axes = T, add = T)
             # Extract ----
 ## -------------------------------- ##
 
+# Actually extract elevation data
+elev_v1 <- exactextractr::exact_extract(x = elev_rast, y = sf_file,
+                                        include_cols = group_cols,
+                                        progress = T) %>%
+  # Above returns a list so switch it to a dataframe
+  purrr::list_rbind(x = .)
 
+## -------------------------------- ##
+            # Wrangle ----
+## -------------------------------- ##
+
+# Do needed post-processing
+elev_v2 <- elev_v1 %>% 
+  # Filter out NAs
+  dplyr::filter(!is.na(value)) %>%
+  # Summarize within existing groups
+  dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
+  dplyr::summarize(elev_avg = mean(value, na.rm = T),
+                   elev_median = median(value, na.rm = T),
+                   elev_min = min(value, na.rm = T),
+                   elev_max = max(value, na.rm = T)) %>%
+  dplyr::ungroup()
+
+# Re-check structure
+dplyr::glimpse(elev_v2)
 
 
 # BASEMENT----
