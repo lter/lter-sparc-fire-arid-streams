@@ -73,26 +73,76 @@ plot(precip_rast$"precipitation_amount_day=29219", axes = T, reset = F)
 plot(sf_file["usgs_site"], axes = T, add = T)
 
 ## -------------------------------- ##
-# Extract ----
+          # Extract ----
 ## -------------------------------- ##
+
+# Create an empty list for storing extracted data
+out_list <- list()
 
 # Annual precip data (one netCDF / year) in this folder
 (annual_ncdfs <- dir(file.path(path, "raw-spatial-data", "gridmet_precip")))
 
-
-
-
-
-
-
-# Fill value: 32767
-
+# Loop across those
+for(year_nc in annual_ncdfs){
+  
+  # Load in that file
+  year_rast <- terra::rast(x = file.path(path, "raw-spatial-data", "gridmet_precip", year_nc))
+  
+  # Identify year
+  year_num <- stringr::str_extract(string = year_nc, pattern = "[[:digit:]]{4}")
+  
+  # Starting message
+  message("Beginning extraction for daily precipitation in ", year_num)
+  
+  # Loop across days
+  for(k in 1:length(names(year_rast))){
+    
+    # Identify focal layer name
+    focal_layer <- sort(names(year_rast))[k]
+    
+    # Strip out the precipitation of that day
+    small_out_df <- exactextractr::exact_extract(x = year_rast[[focal_layer]],
+                                                 y = sf_file,
+                                                 include_cols = group_cols,
+                                                 progress = F) %>%
+      # Above returns a list so switch it to a dataframe
+      purrr::list_rbind(x = .) %>%
+      # Filter out NAs
+      dplyr::filter(!is.na(value)) %>%
+      # Drop fill value
+      dplyr::filter(value != 32767) %>% 
+      # Apply scaling factor
+      dplyr::mutate(value_fix = value * 0.1) %>% 
+      # Drop unwanted columns
+      dplyr::select(-value, -coverage_fraction) %>% 
+      # Summarize across pixels within time
+      dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>% 
+      dplyr::summarize(value_avg = mean(value_fix, na.rm = T)) %>% 
+      dplyr::ungroup() %>%
+      # Add a column timing
+      dplyr::mutate(year = year_num,
+                    day = k,
+                    gregorian_day = stringr::str_extract(string = focal_layer, 
+                                                         pattern = "[[:digit:]]{5,7}"),
+                    .before = dplyr::everything())
+    
+    # Add to list
+    out_list[[paste0(year_num, "_", k)]] <- small_out_df
+    
+    # Success message
+    message("Processing complete for day ", k, " in ", year_num) 
+  } # Close day loop
+} # Close year loop
 
 ## -------------------------------- ##
-# Wrangle ----
+            # Wrangle ----
 ## -------------------------------- ##
 
+# Unlist the output
+precip_v1 <- purrr::list_rbind(x = out_list)
 
+# Check structure
+dplyr::glimpse(precip_v1)
 
 ## -------------------------------- ##
 # Export ----
