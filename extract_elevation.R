@@ -105,8 +105,35 @@ elev_v2 <- elev_v1 %>%
                    elev_max = max(value, na.rm = T)) %>%
   dplyr::ungroup()
 
-# Re-check structure
+# Check structure
 dplyr::glimpse(elev_v2)
+
+## -------------------------------- ##
+             # Export ----
+## -------------------------------- ##
+
+# Pick final object name
+final_elev <- elev_v2
+
+# Create folder to export to
+dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
+
+# Define file path for CSV
+elev_path <- file.path(path, "extracted-data", "fire-arid_elevation.csv")
+
+# Export the summarized data
+write.csv(x = final_pdsi, na = '', row.names = F, file = elev_path)
+
+# Upload to GoogleDrive
+googledrive::drive_upload(media = elev_path, overwrite = T,
+                          path = googledrive::as_id("https://drive.google.com/drive/u/0/folders/1XxvY56h1cMmaYatF7WhVrbYbaOgdRBGC"))
+
+# End ----
+
+
+
+
+
 
 
 # BASEMENT----
