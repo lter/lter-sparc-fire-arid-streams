@@ -132,12 +132,30 @@ gpp_v1 <- purrr::list_rbind(x = out_list)
 # Check structure
 dplyr::glimpse(gpp_v1)
 
+# Do needed wrangling
+gpp_v2 <- gpp_v1
 
+# Re-check structure
+dplyr::glimpse(gpp_v2)
 
 ## -------------------------------- ##
-# Export ----
+          # Export ----
 ## -------------------------------- ##
 
+# Pick final object name
+final_gpp <- gpp_v2
+
+# Create folder to export to
+dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
+
+# Define file path for CSV
+gpp_path <- file.path(path, "extracted-data", "fire-arid_gpp.csv")
+
+# Export the summarized data
+write.csv(x = final_gpp, na = '', row.names = F, file = gpp_path)
+
+# Upload to GoogleDrive
+googledrive::drive_upload(media = gpp_path, overwrite = T,
+                          path = googledrive::as_id("https://drive.google.com/drive/u/0/folders/1XxvY56h1cMmaYatF7WhVrbYbaOgdRBGC"))
 
 # End ----
-
