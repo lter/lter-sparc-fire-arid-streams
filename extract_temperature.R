@@ -51,14 +51,15 @@ plot(sf_file["usgs_site"], axes = T)
 # Identify the grouping columns
 (group_cols <- c(setdiff(x = names(sf_file), y = c("geometry", "geom"))))
 
-# Clean up environment
-rm(list = setdiff(ls(), c('path', 'sf_file', 'group_cols')))
-
 ## -------------------------------- ##
 # Extract ----
 ## -------------------------------- ##
 
 file.path(path, "raw-spatial-data", "modis_temperature", "MOD11A1.061_1979-2000_1km.nc")
+
+
+# Valid range: 7500 to 65535
+# Scaling factor: 0.02
 
 
 ## -------------------------------- ##
