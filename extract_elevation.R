@@ -1,5 +1,5 @@
 ## ------------------------------------------------------- ##
-# SPARC Fire & Aridlands - Extract Climate Covariate
+    # SPARC Fire & Aridlands - Extract Climate Covariate
 ## ------------------------------------------------------- ##
 # Written by: Nick J Lyon
 
@@ -51,17 +51,37 @@ plot(sf_file["usgs_site"], axes = T)
 # Identify the grouping columns
 (group_cols <- c(setdiff(x = names(sf_file), y = c("geometry", "geom"))))
 
-# Load elevation data
-elev_raw <- terra::rast(x = file.path(path, "raw-spatial-data", "nasa_elevation", 
-                                      "SRTMGL1_NC.003_SRTMGL1_DEM_doy2000042_aid0001.tif"))
+# Needed to download elevation raster in "chunks" due to download size limitations
+## If the merged combination raster exists...
+if("full_elevation.tif" %in% dir(path = file.path(path, "raw-spatial-data", "nasa_elevation"))){
+  # Read it in
+  elev_rast <- terra::rast(x = file.path(path, "raw-spatial-data", "nasa_elevation", 
+                                         "full_elevation.tif"))
+} else { # If it does not exist..
+  # Read in all chunks of elevation rasters
+  elev_e <- terra::rast(x = file.path(path, "raw-spatial-data", "nasa_elevation", 
+                                      "SRTMGL1_NC.003_SRTMGL1_DEM_doy2000042_east.tif"))
+  elev_w <- terra::rast(x = file.path(path, "raw-spatial-data", "nasa_elevation", 
+                                      "SRTMGL1_NC.003_SRTMGL1_DEM_doy2000042_west.tif"))
+  
+  # Combine them
+  ## Note this takes several minutes
+  elev_rast <- terra::merge(x = elev_e, y = elev_w)
+  
+  # Export that combined raster to avoid redoing this next time
+  ## Note this step _also_ takes several minutes
+  terra::writeRaster(x = elev_rast, overwrite = T,
+                     filename = file.path(path, "raw-spatial-data", "nasa_elevation", 
+                                          "full_elevation.tif")) }
 
 # Visual check for overlap
-plot(elev_raw, axes = T, reset = F)
+plot(elev_rast, axes = T, reset = F)
 plot(sf_file["usgs_site"], axes = T, add = T)
 
 ## -------------------------------- ##
-# Extract ----
+            # Extract ----
 ## -------------------------------- ##
+
 
 
 
