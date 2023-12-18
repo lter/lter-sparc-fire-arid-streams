@@ -122,7 +122,7 @@ dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
 elev_path <- file.path(path, "extracted-data", "fire-arid_elevation.csv")
 
 # Export the summarized data
-write.csv(x = final_pdsi, na = '', row.names = F, file = elev_path)
+write.csv(x = final_elev, na = '', row.names = F, file = elev_path)
 
 # Upload to GoogleDrive
 googledrive::drive_upload(media = elev_path, overwrite = T,
