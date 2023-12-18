@@ -74,14 +74,63 @@ plot(gpp_rast$Gpp_500m_1, axes = T, reset = F)
 plot(sf_file["usgs_site"], axes = T, add = T)
 
 ## -------------------------------- ##
-# Extract ----
+            # Extract ----
 ## -------------------------------- ##
 
-file.path(path, "raw-spatial-data", "modis_gpp", "MOD17A2H.061_500m_aid0001.nc")
+# Create an empty list for storing extracted data
+out_list <- list()
+
+# Identify the names of the layers we want to extract
+(wanted_layers <- setdiff(x = names(gpp_rast), y = paste0("Psn_QC_500m_", 1:133)))
+
+# Loop across layers extracting each as we go
+for(focal_layer in wanted_layers){
+  
+  # Print start message
+  message("Extraction begun for '", focal_layer, "'")
+  
+  # Identify time of this layer
+  layer_time <- terra::time(x = gpp_rast[[focal_layer]])
+  
+  # Extract information
+  small_out_df <- exactextractr::exact_extract(x = gpp_rast[[focal_layer]],
+                                               y = sf_file,
+                                               include_cols = group_cols,
+                                               progress = T) %>%
+    # Above returns a list so switch it to a dataframe
+    purrr::list_rbind(x = .) %>%
+    # Filter out NAs
+    dplyr::filter(!is.na(value)) %>%
+    # Filter to only values within allowed range
+    dplyr::filter(value >= 0 & value <= 30000) %>% 
+    # Apply scaling factor
+    dplyr::mutate(value_fix = value * 0.0001) %>% 
+    # Drop unwanted columns
+    dplyr::select(-value, -coverage_fraction) %>% 
+    # Summarize across pixels within time
+    dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>% 
+    dplyr::summarize(value_avg = mean(value_fix, na.rm = T)) %>% 
+    dplyr::ungroup() %>%
+    # Add a column for the layer name and layer time
+    dplyr::mutate(type = focal_layer,
+                  time = layer_time, 
+                  .before = dplyr::everything())
+  
+  # Add this to the list
+  out_list[[focal_layer]] <- small_out_df
+  
+  # Success message
+  message("Processing complete for ", focal_layer, " at ", layer_time) }
 
 ## -------------------------------- ##
-# Wrangle ----
+            # Wrangle ----
 ## -------------------------------- ##
+
+# Unlist the output of that loop for easier wrangling
+gpp_v1 <- purrr::list_rbind(x = out_list)
+
+# Check structure
+dplyr::glimpse(gpp_v1)
 
 
 
