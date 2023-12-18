@@ -51,15 +51,41 @@ plot(sf_file["usgs_site"], axes = T)
 # Identify the grouping columns
 (group_cols <- c(setdiff(x = names(sf_file), y = c("geometry", "geom"))))
 
-# Clean up environment
-rm(list = setdiff(ls(), c('path', 'sf_file', 'group_cols')))
+# Read in one netCDF file and examine for context
+precip_nc <- ncdf4::nc_open(filename = file.path(path, "raw-spatial-data", "gridmet_precip", 
+                                                 "gridmet_pr_1980.nc"))
+
+# Examine the netCDF example further
+print(precip_nc)
+
+# Read it as a raster too (more easily manipulable format)
+precip_rast <- terra::rast(x = file.path(path, "raw-spatial-data", "gridmet_precip", 
+                                         "gridmet_pr_1980.nc"))
+
+# Check names
+names(precip_rast)
+
+# Check out just one of those
+print(precip_rast$"precipitation_amount_day=29219")
+
+# Visual check for overlap
+plot(precip_rast$"precipitation_amount_day=29219", axes = T, reset = F)
+plot(sf_file["usgs_site"], axes = T, add = T)
 
 ## -------------------------------- ##
 # Extract ----
 ## -------------------------------- ##
 
 # Annual precip data (one netCDF / year) in this folder
-file.path(path, "raw-spatial-data", "gridmet_precip")
+(annual_ncdfs <- dir(file.path(path, "raw-spatial-data", "gridmet_precip")))
+
+
+
+
+
+
+
+# Fill value: 32767
 
 
 ## -------------------------------- ##
