@@ -104,7 +104,7 @@ for(span_nc in temp_spans){
     small_out_df <- exactextractr::exact_extract(x = span_rast[[focal_layer]],
                                                  y = sf_file,
                                                  include_cols = group_cols,
-                                                 progress = T) %>%
+                                                 progress = F) %>%
       # Above returns a list so switch it to a dataframe
       purrr::list_rbind(x = .) %>%
       # Filter out NAs
