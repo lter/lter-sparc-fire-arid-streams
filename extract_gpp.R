@@ -126,17 +126,17 @@ for(focal_layer in wanted_layers){
 ## -------------------------------- ##
 
 # Unlist the output of that loop for easier wrangling
-temp_v1 <- purrr::list_rbind(x = out_list)
+gpp_v1 <- purrr::list_rbind(x = out_list)
 
 # Check structure
-dplyr::glimpse(temp_v1)
+dplyr::glimpse(gpp_v1)
 
 # Do needed wrangling
-temp_v2 <- temp_v1 %>% 
+gpp_v2 <- gpp_v1 %>% 
   # Move the site info columns to the left
   dplyr::relocate(usgs_site:area_km2, .before = time) %>% 
   # Rename extracted information
-  dplyr::rename(temp_K = value_avg) %>% 
+  dplyr::rename(gpp_kg_C_m2 = value_avg) %>% 
   # Separate time into useful subcomponents
   dplyr::mutate(year = as.numeric(stringr::str_sub(string = time, start = 1, end = 4)),
                 month = as.numeric(stringr::str_sub(string = time, start = 6, end = 7)),
@@ -151,23 +151,23 @@ temp_v2 <- temp_v1 %>%
     T ~ 'x'), .after = month)
 
 # Re-check structure
-dplyr::glimpse(temp_v2)
+dplyr::glimpse(gpp_v2)
 
 ## -------------------------------- ##
              # Export ----
 ## -------------------------------- ##
 
 # Pick final object name
-final_temp <- temp_v2
+final_gpp <- gpp_v2
 
 # Create folder to export to
 dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
 
 # Define file path for CSV
-temp_path <- file.path(path, "extracted-data", "fire-arid_temperature.csv")
+gpp_path <- file.path(path, "extracted-data", "fire-arid_gpp.csv")
 
 # Export the summarized data
-write.csv(x = final_temp, na = '', row.names = F, file = temp_path)
+write.csv(x = final_gpp, na = '', row.names = F, file = gpp_path)
 
 # Upload to GoogleDrive
 googledrive::drive_upload(media = gpp_path, overwrite = T,
