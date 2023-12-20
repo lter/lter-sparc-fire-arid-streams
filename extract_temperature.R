@@ -126,15 +126,56 @@ for(span_nc in temp_spans){
 } # Close year loop
 
 ## -------------------------------- ##
-# Wrangle ----
+            # Wrangle ----
 ## -------------------------------- ##
 
+# Unlist the output of that loop for easier wrangling
+temp_v1 <- purrr::list_rbind(x = out_list)
 
+# Check structure
+dplyr::glimpse(temp_v1)
+
+# Do needed wrangling
+temp_v2 <- temp_v1 %>% 
+  # Move the site info columns to the left
+  dplyr::relocate(usgs_site:area_km2, .before = time) %>% 
+  # Rename extracted information
+  dplyr::rename(temp_K = value_avg) %>% 
+  # Separate time into useful subcomponents
+  dplyr::mutate(year = as.numeric(stringr::str_sub(string = time, start = 1, end = 4)),
+                month = as.numeric(stringr::str_sub(string = time, start = 6, end = 7)),
+                day = as.numeric(stringr::str_sub(string = time, start = 9, end = 10)),
+                .after = time) %>% 
+  # Make month column more legible
+  dplyr::mutate(month_name = dplyr::case_when(
+    month == 1 ~ "jan", month == 2 ~ "feb", month == 3 ~ "mar",
+    month == 4 ~ "apr", month == 5 ~ "may", month == 6 ~ "jun",
+    month == 7 ~ "jul", month == 8 ~ "aug", month == 9 ~ "sep",
+    month == 10 ~ "oct", month == 11 ~ "nov", month == 12 ~ "dec",
+    T ~ 'x'), .after = month)
+
+# Re-check structure
+dplyr::glimpse(temp_v2)
 
 ## -------------------------------- ##
-# Export ----
+            # Export ----
 ## -------------------------------- ##
 
+# Pick final object name
+final_temp <- temp_v2
+
+# Create folder to export to
+dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
+
+# Define file path for CSV
+temp_path <- file.path(path, "extracted-data", "fire-arid_temperature.csv")
+
+# Export the summarized data
+write.csv(x = final_temp, na = '', row.names = F, file = temp_path)
+
+# Upload to GoogleDrive
+googledrive::drive_upload(media = gpp_path, overwrite = T,
+                          path = googledrive::as_id("https://drive.google.com/drive/u/0/folders/1XxvY56h1cMmaYatF7WhVrbYbaOgdRBGC"))
 
 # End ----
 
