@@ -174,7 +174,7 @@ temp_path <- file.path(path, "extracted-data", "fire-arid_temperature.csv")
 write.csv(x = final_temp, na = '', row.names = F, file = temp_path)
 
 # Upload to GoogleDrive
-googledrive::drive_upload(media = gpp_path, overwrite = T,
+googledrive::drive_upload(media = temp_path, overwrite = T,
                           path = googledrive::as_id("https://drive.google.com/drive/u/0/folders/1XxvY56h1cMmaYatF7WhVrbYbaOgdRBGC"))
 
 # End ----
