@@ -9,7 +9,7 @@
 font_size <- 12
 
 
-# DATA: level 2 ecoregions
+# DATA: ecoregions (here using north America level II)
 
 # data in drive: https://drive.google.com/file/d/1mL0mwaCPSLnn1zQ286ZcGCn4kdEXQJZd/view?usp=drive_link
 # data source: https://www.epa.gov/eco-research/ecoregions-north-america
@@ -20,10 +20,8 @@ ecoregions <- sf::st_read(
 )
 
 ecoregions <- ecoregions |> 
-  sf::st_make_valid(ecoregions)
-
-ecoregions <- ecoregions |> 
-  sf::st_transform(crs = 4269)
+  sf::st_make_valid(ecoregions) |> 
+  sf::st_transform(crs = 4326)
 
 
 # DATA: global MAP
