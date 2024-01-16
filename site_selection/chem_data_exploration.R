@@ -261,5 +261,53 @@ chem_list <- c("Ammonia and ammonium", "Nitrate", "Oxygen",
 #        height = 25,
 #        units = "cm",
 #        dpi = 300)
+
+#### Additional Pcode Investigation ####
+
+# Do organic C sites correspond with sites that have UV 254 data?
+chem_ocuv <- chem_dat %>%
+  filter(CharacteristicName %in% c("Organic carbon", "UV 254")) %>%
+  group_by(usgs_site, CharacteristicName) %>%
+  summarize(count = n()) %>%
+  ungroup()
+# So, only 15 of a total of 181 sites have BOTH OC and UV measurements.
+
+# Which sites have Nitrate, Nitrite, and Inorganic Nitrogen?
+chem_nox_3 <- chem_dat %>%
+  filter(CharacteristicName %in% c("Nitrate", "Nitrite", "Inorganic nitrogen (nitrate and nitrite)")) %>%
+  group_by(usgs_site, CharacteristicName) %>%
+  summarize(count = n()) %>%
+  ungroup() %>%
+  pivot_wider(names_from = CharacteristicName, values_from = count) %>%
+  drop_na()
+# So, 234 of a total of 308 sites have all three - NO3, NO2, and IN
+
+#### High Frequency Datasets ####
+
+# I will first start by trimming the dataset down to analytes that might likely be high
+# frequency data collected by in situ instruments rather than grab samples.
+chem_hf <- chem_dat %>%
+  filter(CharacteristicName %in% c("Specific conductance", "Oxygen", "Nitrate", "Turbidity")) %>%
+  # And I will count the number of observations by day (first pass at a h.f. measurement) 
+  group_by(usgs_site, CharacteristicName, ActivityStartDate) %>%
+  summarize(count = n()) %>%
+  ungroup()
+
+# Roughly hourly measurements are likely needed for high-frequency analyses
+sites_hf <- chem_hf %>%
+  filter(count > 20) # in case a few hours' observation is missing
+
+length(unique(sites_hf$usgs_site)) # 30 sites with potentially high-frequency data
+# but none are super long - usually only a few days here and there
+
+# Only exception seems to be Rio Grande
+
+# Trying this another way.
+chem_hf_sc <- chem_hf %>%
+  filter(CharacteristicName == "Specific conductance")
+
+ggplot(chem_hf_sc, aes(x = ActivityStartDate, y = usgs_site)) + 
+  geom_point() + 
+  theme_bw()
   
 # End of script.
