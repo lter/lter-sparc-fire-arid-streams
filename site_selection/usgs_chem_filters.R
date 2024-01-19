@@ -186,7 +186,7 @@ chem_trim_codes_trim_quants <- chem_trim_codes_quants %>%
   filter(Pass_Hydro == "YES")
   # removes 72,624 records and 186 sites (n = 291 remaining)
 
-# Export for use in models.
+# Export.
 # saveRDS(chem_trim_codes_trim_quants, "data_working/usgs_chem_filtered_011924.rds")
 
 # End of script.
