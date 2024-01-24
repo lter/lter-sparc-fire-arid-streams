@@ -194,7 +194,7 @@ mcmc_intervals(stan_lm_run2,
 # Next, I'm going to estimate the change in slopes between
 # pre- and post-fire periods.
 
-##### Data Prep #####
+##### Data Prep OC #####
 
 # Create dataset for modeling (similar to above).
 oc_dat3 <- data %>%
@@ -226,21 +226,30 @@ sum(is.nan(oc_dat3$scaleOC)) # 0
 sum(is.nan(oc_dat3$scaleQ)) # 0
 sum(is.nan(oc_dat3$fire)) # 0
 
-##### Model Fit #####
+##### Model Fit OC #####
 
 # Prep data for STAN as a list
 data_stan3 <- list(
-  N = nrow(oc_dat2), # number of observations
-  C = oc_dat2$scaleOC[1:402], # concentration
-  Q = oc_dat2$scaleQ[1:402], # discharge
-  f = oc_dat2$fire[1:402] # fire delineation
+  N = nrow(oc_dat3), # number of observations
+  C = oc_dat3$scaleOC[1:402], # concentration
+  Q = oc_dat3$scaleQ[1:402], # discharge
+  f = oc_dat3$fire[1:402] # fire delineation
 )
 
 # Added in the indexing because otherwise the dimensions 
 # appeared as [402,1] for some reason, and it was throwing
 # off STAN.
 
-# Fit model - should run in ~2 minutes
+# sets initial values to help chains converge
+# init_stan3 <- function(...) {
+#   list(A_post = 0, 
+#        A_pre = 0, 
+#        b_post = 0, 
+#        b_pre = 0,
+#        delta = 0) # values to match priors
+# }
+
+# Fit model - should run in 1-3 minutes
 stan_lm_run3 <- stan(file = "models/STAN_lm_delta_template.stan",
                      data = data_stan3,
                      chains = 3,
@@ -249,20 +258,113 @@ stan_lm_run3 <- stan(file = "models/STAN_lm_delta_template.stan",
 
 # Examine model convergence
 shinystan::launch_shinystan(stan_lm_run3)
-# eek ok so this is crashing a bit, 4000+ divergent transitions
+# eek ok so this is crashing a bit; notes on iterative troubleshooting below:
+# 4600 divergent transitions at first
+# 4900 divergent transitions with init values added (eek!)
+# 4039 divergent transitions with b priors changed to (0, 1) (still blegh)
+# Would not run when moved ifelse statement to transformed param block
+# 1929 divergent transitions with delta priors removed (better...)
+# 5098 divergent transitions with delta priors changed to (0,1) (yuck)
+# 3068 divergent transitions with sigma_delta prior added (0,1) (ran more quickly but hmmm)
+# 2218 divergent transitions with sigma_post/pre priors added (0,1)
+# 2!!! divergent transitions with delta and sigma_delta priors removed
+# 2507 divergent transitions with delta/sigma_delta priors set to (0,1E-1)
 
 # Examine summaries of the estimates.
 stan_lm_data3 <- summary(stan_lm_run3,
                          pars = c("A_pre", "A_post",
                                   "b_pre", "b_post",
-                                  "delta"),
+                                  "sigma_post", "sigma_pre",
+                                  "delta", "sigma_delta"),
                          probs = c(0.025, 0.5, 0.975))$summary
-# Rhat values all > 1.05
+# Rhat values all < 1.05 EXCEPT delta and sigma_delta
 
 # Plot parameter estimates
 color_scheme_set("orange")
 mcmc_intervals(stan_lm_run3,
-               pars = c("A_pre", "A_post", "b_pre", "b_post", "delta"),
+               pars = c("A_pre", "A_post", "b_pre", "b_post", "delta",
+                        "sigma_pre", "sigma_post", "sigma_delta"),
+               point_est = "median",
+               prob = 0.95) +
+  labs(
+    title = "Posterior distributions",
+    subtitle = "with medians and 95% intervals"
+  )
+
+##### Data Prep SC #####
+
+# Ok, so part of the issue here may be that there is too little "delta"
+# for the model to glom onto here, so let's look for another site at which
+# there *is* a demonstrated change.
+
+# Create dataset for modeling (similar to above).
+sc_dat3 <- data %>%
+  # filter only for specific conductance
+  filter(USGSPCode %in% c("00095", "90095", "00094")) %>%
+  # filter for specific site
+  filter(usgs_site == "USGS-07227100") %>%
+  # remove days on which flow = 0 %>%
+  filter(Flow > 0) %>%
+  # need to log transform (and scale) concentrations
+  mutate(scaleSC = scale(log(ResultMeasureValue))) %>%
+  # and to log transform (and scale) remaining discharge
+  mutate(scaleQ = scale(log(Flow))) %>%
+  # add pre-/post-fire variable to develop model with
+  mutate(fire = as.integer(case_when(ActivityStartDate < "1998-07-14" ~ 0,
+                                     TRUE ~ 1)))
+
+# Quick plot of the data with rough lm()s added.
+ggplot(sc_dat3, aes(x = scaleQ, y = scaleSC, color = factor(fire))) +
+  geom_point(alpha = 0.8) +
+  geom_smooth(method = "lm", fill = NA) +
+  theme_bw()
+# At first glance, both negative, but slope definitely changes post-fire
+
+# Ensure no NAs or NaNs are present in the data,
+# because STAN does not allow this.
+sum(is.na(sc_dat3$scaleSC)) # 0
+sum(is.na(sc_dat3$scaleQ)) # 0
+sum(is.na(sc_dat3$fire)) # 0
+sum(is.nan(sc_dat3$scaleSC)) # 0
+sum(is.nan(sc_dat3$scaleQ)) # 0
+sum(is.nan(sc_dat3$fire)) # 0
+
+##### Model Fit SC #####
+
+# Prep data for STAN as a list
+data_stan3.1 <- list(
+  N = nrow(sc_dat3), # number of observations
+  C = sc_dat3$scaleSC[1:419], # concentration
+  Q = sc_dat3$scaleQ[1:419], # discharge
+  f = sc_dat3$fire[1:419] # fire delineation
+)
+
+# Fit model - should run in 1-3 minutes
+stan_lm_run3.1 <- stan(file = "models/STAN_lm_delta_template.stan",
+                     data = data_stan3.1,
+                     chains = 3,
+                     iter = 5000,
+                     control = list(max_treedepth = 12))
+
+# Again, putting iterative troublshooting notes here:
+# Only 15 divergent transitions with delta/sigma_delta priors removed (YAY!!!)
+# 2705 divergent transitions with delta (0,1) and sigma_delta (0,1E-1) priors
+# 2713 divergent transitions with delta (0,1) and sigma_delta (0,1) priors
+
+# Examine summaries of the estimates.
+stan_lm_data3.1 <- summary(stan_lm_run3.1,
+                         pars = c("A_pre", "A_post",
+                                  "b_pre", "b_post",
+                                  "sigma_post", "sigma_pre",
+                                  "delta", "sigma_delta"),
+                         probs = c(0.025, 0.5, 0.975))$summary
+# Rhat values all < 1.05 EXCEPT delta and sigma_delta
+
+# Plot parameter estimates
+color_scheme_set("pink")
+mcmc_intervals(stan_lm_run3.1,
+               pars = c("A_pre", "A_post", "b_pre", "b_post", "delta",
+                        "sigma_pre", "sigma_post", "sigma_delta"),
                point_est = "median",
                prob = 0.95) +
   labs(
