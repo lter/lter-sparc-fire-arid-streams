@@ -22,7 +22,10 @@ data {
 // Roman letters, numerical digits, and the underscore.
 
 // The parameters accepted by the model. Our model
-// accepts three parameters 'a', 'b', and 'sigma'.
+// estimates the intercepts 'A_post' and 'A_pre',
+// the slopes 'b_post' and 'b_pre', the observation
+// errors 'sigma_post' and 'sigma_pre', and finally 
+// the change parameters 'delta' and error 'sigma_delta'.
 parameters {
   
   real A_post; // post-fire log-scaled intercept
@@ -36,15 +39,17 @@ parameters {
   
 }
 
-// Nothing in the transformed parameters block for now.
+// Nothing in here for now.
 
 transformed parameters{
   
 }
 
-// The model to be estimated. We model the output
+// The models to be estimated. We model the output
 // 'C' to be normally distributed with the mean value
 // using the linear formula and standard deviation 'sigma'.
+// We also model 'delta' to be normally distributed with the mean value
+// using the linear formula and standard deviation 'sigma_delta'.
 model {
   
   // For every available observation, i, run through the
@@ -75,11 +80,12 @@ model {
   // Parameter priors - keeping fairly uninformative for now
   A_post ~ normal(0, 1E-2); // post-fire intercept parameter prior
   A_pre ~ normal(0, 1E-2); // pre-fire intercept parameter prior
-  b_post ~ normal(0, 1E-1); // post-fire slope parameter prior
-  b_pre ~ normal(0, 1E-1); // pre-fire slope parameter prior
-  delta ~ normal(0, 1E-1); // change in slope parameter prior
-  
-  // no obs. or delta error priors for now
+  b_post ~ normal(0, 1); // post-fire slope parameter prior
+  b_pre ~ normal(0, 1); // pre-fire slope parameter prior
+  sigma_post ~ normal(0,1)T[0,]; // obs. error must be positive
+  sigma_pre ~ normal(0,1)T[0,]; // same
+  delta ~ normal(0, 1); // change in slope parameter prior
+  sigma_delta ~ normal(0, 1); // error of change in slope parameter
   
   // remember, script MUST end in a blank line
   
