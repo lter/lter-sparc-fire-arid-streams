@@ -102,4 +102,21 @@ fire_occ <- fire_trim %>%
 #        units = "cm",
 #        dpi = 200)
 
+#### Examine Data ####
+
+# How many instances are there of multiple fires happening in the same
+# watershed on the same date (but different fires)?
+
+fire_multiples <- fire_trim %>%
+  group_by(usgs_site, ignition_date) %>%
+  summarize(fires = n()) %>%
+  ungroup()
+
+ggplot(fire_multiples, aes(x = fires)) +
+  geom_bar(stat = "count") +
+  labs(x = "Unique Fires",
+       title = "# of fires in a watershed beginning with same ignition date") +
+  scale_y_log10() +
+  theme_bw()
+
 # End of script.
