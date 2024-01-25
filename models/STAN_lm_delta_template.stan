@@ -2,11 +2,6 @@
 // This Stan program defines a linear model of the .
 // log concentration (C) - log discharge (Q) relationship.
 //
-// Learn more about model development with Stan at:
-//
-//    http://mc-stan.org/users/interfaces/rstan.html
-//    https://github.com/stan-dev/rstan/wiki/RStan-Getting-Started
-//
 
 // The input data is a vectors 'C' and 'Q' of length 'N'.
 data {
@@ -34,14 +29,6 @@ parameters {
   real b_pre; // pre-fire slope
   real<lower=0> sigma_post; // observation error - must be positive
   real<lower=0> sigma_pre; // observation error - must be positive
-  real delta; // change in slope
-  real sigma_delta; // error of change in slope
-  
-}
-
-// Nothing in here for now.
-
-transformed parameters{
   
 }
 
@@ -74,9 +61,6 @@ model {
   
   }
   
-  // Estimated change in CQ slope between pre- and post-fire periods
-  delta ~ normal(b_post - b_pre, sigma_delta);
-  
   // Parameter priors - keeping fairly uninformative for now
   A_post ~ normal(0, 1E-2); // post-fire intercept parameter prior
   A_pre ~ normal(0, 1E-2); // pre-fire intercept parameter prior
@@ -84,8 +68,21 @@ model {
   b_pre ~ normal(0, 1); // pre-fire slope parameter prior
   sigma_post ~ normal(0,1)T[0,]; // obs. error must be positive
   sigma_pre ~ normal(0,1)T[0,]; // same
-  delta ~ normal(0, 1); // change in slope parameter prior
-  sigma_delta ~ normal(0, 1); // error of change in slope parameter
+  
+}
+
+// This is where any derived values should be placed, i.e.,
+// parameters transformed for reporting purposes. If they 
+// are not called by the model, it's more efficient for them
+// to be placed here than in a 'transformed parameters' block.
+
+generated quantities{
+  
+  real delta; // change in slope
+  
+  // Use estimated pre- and post-fire CQ slopes
+  // to calculate the change in slopes
+  delta = b_post - b_pre;
   
   // remember, script MUST end in a blank line
   
