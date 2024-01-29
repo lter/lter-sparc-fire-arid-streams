@@ -89,6 +89,19 @@ chem_trim_codes <- chem_trim %>%
   filter(USGSPCode %in% chem_desired)
   # removes 21,042 observations, no sites (n = 477)
 
+# Export only analytes, codes, and definitions for Google drive.
+chem_unique <- chem_trim_codes %>%
+  group_by(CharacteristicName, ResultSampleFractionText,
+           ResultMeasure.MeasureUnitCode, USGSPCode) %>%
+  summarize(n = n()) %>%
+  ungroup() %>%
+  select(USGSPCode, CharacteristicName,
+         ResultSampleFractionText, ResultMeasure.MeasureUnitCode) %>%
+  mutate(USGSPCode = as.character(USGSPCode))
+
+# Export.
+write_csv(chem_unique, "data_working/usgs_pcodes_select_012924.csv")
+
 #### Filter by Q ####
 
 # List of sites to use to trim the discharge data down.
