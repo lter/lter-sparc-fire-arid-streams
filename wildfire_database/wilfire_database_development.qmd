@@ -244,6 +244,33 @@ wucd_possibly <- purrr::possibly(
 purrr::walk(stream_sites_candidates$usgs_site, ~ wucd_possibly(usgs_site = .x))
 ```
 
+```{r}
+#| eval: FALSE
+
+# run once
+
+DBI::dbExecute(
+  conn      = pg,
+  statement = "ALTER TABLE firearea.catchments ADD PRIMARY KEY (usgs_site) ;"
+)
+
+DBI::dbExecute(
+  conn      = pg,
+  statement = "CREATE INDEX catchments_geometry_idx ON firearea.catchments USING GIST (geometry) ;"
+)
+
+DBI::dbExecute(
+  conn      = pg,
+  statement = "
+  ALTER TABLE firearea.catchments
+    ALTER COLUMN geometry
+    TYPE geometry(geometry, 4326)
+    USING ST_SetSRID(geometry, 4326)
+  ;
+  "
+)
+```
+
 
 # MTBS -------------------------------------------------------------------------
 
