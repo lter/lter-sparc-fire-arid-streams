@@ -22,7 +22,14 @@ library(calecopal)
 chem_dat <- readRDS("data/usgs_chemistry.rds")
 q_dat <- readxl::read_excel("data/discharge_daily_statistics.xlsx")
 
-#### Examine Chemistry Data ####
+# Also load Erin's data available on the Google drive here:
+# https://drive.google.com/drive/folders/1uVfjWees-RrFPP8rK5aeY2mTOoMdAZmB
+bell3_dat <- read_csv("data/bell3_streamflow_nitrate_obs_20220127.csv")
+bell3_flow <- read_csv("data/bell3_streamflow_obs.csv")
+bell4_dat <- read_csv("data/bell4_streamflow_nitrate_obs_20220127.csv")
+bell4_flow <- read_csv("data/bell4_streamflow_obs.csv")
+
+#### Examine USGS Chemistry Data ####
 
 names(chem_dat) # Prints column names.
 length(unique(chem_dat$usgs_site)) # 477 sites identified
@@ -309,5 +316,37 @@ chem_hf_sc <- chem_hf %>%
 ggplot(chem_hf_sc, aes(x = ActivityStartDate, y = usgs_site)) + 
   geom_point() + 
   theme_bw()
+
+#### Examine Erin's Data ####
+
+# This includes only NO3 data so far from the San Dimas watersheds.
+
+bell3_dat <- bell3_dat %>%
+  mutate(date = mdy(date))
+
+(fig_b3 <- ggplot(bell3_dat, aes(x = date, y = nitrate)) +
+    geom_point(alpha = 0.8) +
+    labs(x = "Date", y = "Nitrate", title = "Bell 3") +
+    theme_bw())
+
+(fig_b3_flow <- ggplot(bell3_dat, aes(x = date, y = streamflow_mm)) +
+    geom_point(color = "cornflowerblue") +
+    labs(x = "Date", y = "Flow") +
+    theme_bw())
+
+bell4_dat <- bell4_dat %>%
+  mutate(date = mdy(date))
+
+(fig_b4 <- ggplot(bell4_dat, aes(x = date, y = nitrate)) +
+    geom_point(alpha = 0.8) +
+    labs(x = "Date", y = "Nitrate", title = "Bell 4") +
+    theme_bw())
+
+(fig_b4_flow <- ggplot(bell4_dat, aes(x = date, y = streamflow_mm)) +
+    geom_point(color = "cornflowerblue") +
+    labs(x = "Date", y = "Flow") +
+    theme_bw())
+
+(fig_bell_all <- (fig_b3 + fig_b4) / (fig_b3_flow + fig_b4_flow))
   
 # End of script.
