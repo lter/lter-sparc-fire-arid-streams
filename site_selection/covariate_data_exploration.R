@@ -152,15 +152,21 @@ gpp_trim <- gpp_dat %>%
   filter(usgs_site %in% usgs_sites) %>%
   mutate(date = ymd(time))
 
+# Note, these are approximately weekly.
+
 # What is the range in values through time?
+# Data Source: MODIS/Terra Gross Primary Productivity 8-Day 
+# L4 Global 500 m SIN Grid
+# For more info see:
+# https://lpdaac.usgs.gov/products/mod17a2hv061/
 (fig7 <- ggplot(gpp_trim, aes(x = date, y = gpp_kg_C_m2,
                               group = date)) +
     geom_boxplot(color = "#607345",
                  fill = "#607345",
                  alpha = 0.8) +
     labs(x = "Date",
-         y = "GPP (kg C/m^2)",
-         title = "What is the variation in GPP through time?") +
+         y = "Weekly GPP (kg C/m^2)",
+         title = "What is the variation in weekly GPP through time?") +
     theme_bw())
 
 # What is the range in values across sites?
@@ -179,21 +185,153 @@ gpp_trim <- left_join(gpp_trim, gpp_med)
                  fill = "#7F8C72",
                  alpha = 0.8) +
     labs(x = "Site",
-         y = "GPP (kg C/m^2)",
-         title = "What is the variation in GPP across sites?") +
+         y = "Weekly GPP (kg C/m^2)",
+         title = "What is the variation in weekly GPP across sites?") +
+    theme_bw() +
+    theme(axis.text.x = element_blank(),
+          axis.ticks.x = element_blank()))
+
+# What is the range in values by watershed size?
+(fig8.2 <- ggplot(gpp_trim, aes(x = area_km2, y = gpp_median)) +
+    geom_point(color = "#7F8C72",
+               alpha = 0.7) +
+    scale_x_log10() +
+    labs(x = "Watershed Size (km^2)",
+         y = "Median Weekly GPP (kg C/m^2)",
+         title = "What is the variation in weekly GPP by watershed size?") +
+    theme_bw())
+
+# Combine plots.
+(fig_gpp <- fig7 / fig8 / fig8.2)
+
+# Export figure.
+# ggsave(plot = fig_gpp,
+#        filename = "figures/gpp_013124.jpg",
+#        width = 20,
+#        height = 30,
+#        units = "cm",
+#        dpi = 200)
+
+#### PDSI ####
+
+pdsi_trim <- pdsi_dat %>%
+  filter(usgs_site %in% usgs_sites) %>%
+  mutate(date = ymd(time))
+
+# What is the range in values through time?
+# More positive values are wetter, more negative values are dried
+# For more info see:
+# https://climatedataguide.ucar.edu/climate-data/palmer-drought-severity-index-pdsi
+(fig9 <- ggplot(pdsi_trim, aes(x = date, y = noaa_pdsi)) +
+    geom_point(color = "#ECBD95") +
+    labs(x = "Date",
+         y = "PDSI (NOAA)",
+         title = "What is the variation in PDSI through time?") +
+    theme_bw())
+
+# Export figure.
+# ggsave(plot = fig9,
+#        filename = "figures/pdsi_013124.jpg",
+#        width = 20,
+#        height = 10,
+#        units = "cm",
+#        dpi = 200)
+
+#### Precip ####
+
+precip_trim <- precip_dat %>%
+  filter(usgs_site %in% usgs_sites) %>%
+  # make date column based on data available
+  mutate(date = parse_date_time(x = paste(year, day), 
+                                orders = "yj"))
+
+# Daily precipitation proved too challenging to meaningfully plot,
+# so choosing to aggregate by year instead.
+
+precip_trim_ann <- precip_trim %>%
+  group_by(usgs_site, area_km2, year) %>%
+  summarize(sum_ann_ppt = sum(precip_mm)) %>%
+  ungroup()
+
+# What is the range in values through time?
+# Data Source: GridMET using watershed shapefiles
+# For more info see: https://www.climatologylab.org/gridmet.html
+(fig10 <- ggplot(precip_trim_ann, aes(x = year, 
+                                      y = sum_ann_ppt,
+                                      group = year)) +
+    geom_boxplot(color = "#69B9FA",
+                 fill = "#69B9FA",
+                 alpha = 0.8) +
+    labs(x = "Year",
+         y = "Cumulative Annual Precipitation (mm)",
+         title = "What is the variation in annual Ppt through time?") +
+    theme_bw())
+
+# What is the range in values across sites?
+ppt_med <- precip_trim_ann %>%
+  group_by(usgs_site) %>%
+  summarize(ann_ppt_median = median(sum_ann_ppt)) %>%
+  ungroup()
+
+precip_trim_ann <- left_join(precip_trim_ann, ppt_med)
+
+(fig11 <- ggplot(precip_trim_ann %>%
+                   mutate(usgs_site = fct_reorder(usgs_site, 
+                                                  ann_ppt_median)), 
+                 aes(x = usgs_site, y = sum_ann_ppt)) +
+    geom_boxplot(color = "#59A3F8",
+                 fill = "#59A3F8",
+                 alpha = 0.8) +
+    labs(x = "Site",
+         y = "Cumulative Annual Precipitation (mm)",
+         title = "What is the variation in annual Ppt across sites?") +
+    theme_bw() +
+    theme(axis.text.x = element_blank(),
+          axis.ticks.x = element_blank()))
+
+# What is the range in values by watershed size?
+(fig12 <- ggplot(precip_trim_ann, aes(x = area_km2, 
+                                      y = ann_ppt_median)) +
+    geom_point(color = "#4B8FF7",
+                 alpha = 0.8) +
+    scale_x_log10() +
+    labs(x = "Watershed Size (km^2)",
+         y = "Median Cumulative Annual Precipitation (mm)",
+         title = "What is the variation in annual Ppt by watershed size?") +
     theme_bw() +
     theme(axis.text.x = element_blank(),
           axis.ticks.x = element_blank()))
 
 # Combine plots.
-(fig_gpp <- fig7 / fig8)
+(fig_ppt <- fig10 / fig11 / fig12)
 
 # Export figure.
-# ggsave(plot = fig_gpp,
-#        filename = "figures/gpp_012924.jpg",
+# ggsave(plot = fig_ppt,
+#        filename = "figures/ppt_013124.jpg",
 #        width = 20,
-#        height = 20,
+#        height = 30,
 #        units = "cm",
 #        dpi = 200)
-  
+
+#### Temperature ####
+
+temp_trim <- temp_dat %>%
+  filter(usgs_site %in% usgs_sites) %>%
+  mutate(date = ymd(time)) %>%
+  mutate(temp_C = temp_K - 273.15)
+
+# Daily temperature proved too challenging to meaningfully plot,
+# so choosing to again aggregate by year instead.
+
+temp_trim_ann <- temp_trim %>%
+  group_by(usgs_site, area_km2, year) %>%
+  summarize(ann_mean_temp = mean(temp_C)) %>%
+  ungroup()
+
+# Hmmmm...something weird is happening here, it looks like some
+# data was pulled in in Kelvin, and the rest in Celsius, so need
+# to check with Nick.
+
+"#E7A655", "#E59D7F", "#E38377", "#6D4847"
+
 # End of script.
