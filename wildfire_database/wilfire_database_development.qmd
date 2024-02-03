@@ -8,6 +8,10 @@ format: gfm
 
 Documentation and general workflow overview for developing the wildfire database to support the CRASS 2.0 study that will investigate relationships between wildfire and aquatic biogeochemistry in the arid western United States. The focus here is strictly on development of the wildfire database that stores information such as the geometry of study catchments, discharge, and water chemistry data. Other workflows for harvesting, for example covariates, are detailed in other files within this repository. The workflow draws heavily on the [firearea](https://srearl.gitlab.io/firearea/index.html) package that also support this effort. Important is that this is not a reproducible workflow: there is a time-sensitive component to some of the `firearea` queries, especially those related to discharge, such that there could be different returns based on the date of query, and this workflow features iterative steps, such as querying data for USGS sites in individual sites but for multiple states that is not shown, and some, particularly, database actions are run once after initial table construction but not when data are added subsequently.
 
+This workflow documents initial database implementation that featured data from the four-corner states, California, and Nevada. For each of these six states, the water chemistry was addressed (i.e., pulled from the web and added to the database) state-by-state but data in subsequent steps (e.g., discharge, catchments) were addressed by pulling seed data from all six states that had been added to the database initially.
+
+The number of sites pares quickly based on data availability. Using data from the six states listed above, there were 4941 unique USGS sites in the water_chem table, with the number of unique sites falling to 1508 in the discharge_daily table, and to 1423 in the catchments table. The large paring from the water_chem to discharge_daily tables appears due to availability of discharge data. While having discharge data was part of the conditions established in firearea::identify_sites_to_delineate, having but just a few or even one discharge data point would satisfy that condition.
+
 
 # database and schema ----------------------------------------------------------
 
@@ -223,13 +227,10 @@ stream_sites_candidates <- DBI::dbGetQuery(
   ;
   '
 )
-```
-
-```{r}
-#| eval: FALSE
 
 stream_sites_candidates$usgs_site <- gsub("USGS-", "", stream_sites_candidates$usgs_site)
 ```
+
 
 Whereas the firearea vignettes focus on a workflow of delineating catchments generally, the workflow here is tailored specifically to developing the wilfire database and, as such, draws on firearea::write_usgs_catchment_delineation to delineate the catchment for a/each USGS site and load it in to the wildfire.firearea.catchments table.
 
@@ -328,4 +329,66 @@ ALTER TABLE firearea.fires_catchments
   TYPE geometry(geometry, 4326)
   USING ST_SetSRID(geometry, 4326)
 ;
+```
+
+# pour points ------------------------------------------------------------------
+
+As with catchment delineations, the workflow here is tailored specifically to developing the wilfire database and, as such, draws on firearea::write_usgs_pour_point to identify the catchment for a/each USGS site and load it in to the wildfire.firearea.pour_points table.
+
+This workflow is specific to the four-corner states, Nevada, and California that were part of the initial database development. For additional sites, the workflow was modified such that pour points are written in the same step with catchments.
+
+
+```{r}
+#| eval: FALSE
+
+stream_sites_candidates <- DBI::dbGetQuery(
+  conn      = pg,
+  statement = "
+  SELECT
+    DISTINCT(usgs_site)
+  FROM
+    firearea.catchments
+  ;
+  "
+)
+
+stream_sites_candidates$usgs_site <- gsub("USGS-", "", stream_sites_candidates$usgs_site)
+```
+
+```{r}
+#| eval: FALSE
+
+wupp_possibly <- purrr::possibly(
+  .f        = firearea::write_usgs_pour_point,
+  otherwise = NULL
+)
+
+purrr::walk(subset, ~ wupp_possibly(usgs_site = .x))
+```
+
+Upon initial creation, modify fields and generate an index.
+
+```{r}
+#| eval: FALSE
+
+DBI::dbExecute(
+  conn      = pg,
+  statement = "ALTER TABLE firearea.pour_points ADD PRIMARY KEY (usgs_site) ;"
+)
+
+DBI::dbExecute(
+  conn      = pg,
+  statement = "CREATE INDEX pour_points_geometry_idx ON firearea.pour_points USING GIST (geometry) ;"
+)
+
+DBI::dbExecute(
+  conn      = pg,
+  statement = "
+  ALTER TABLE firearea.pour_points
+  ALTER COLUMN geometry
+  TYPE geometry(geometry, 4326)
+  USING ST_SetSRID(geometry, 4326)
+  ;
+  "
+)
 ```
