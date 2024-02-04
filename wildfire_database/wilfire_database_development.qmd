@@ -363,7 +363,7 @@ wupp_possibly <- purrr::possibly(
   otherwise = NULL
 )
 
-purrr::walk(subset, ~ wupp_possibly(usgs_site = .x))
+purrr::walk(stream_sites_candidates[["usgs_site"]], ~ wupp_possibly(usgs_site = .x))
 ```
 
 Upon initial creation, modify fields and generate an index.
