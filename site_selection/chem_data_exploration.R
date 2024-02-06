@@ -16,6 +16,7 @@ library(tidyverse)
 library(lubridate)
 library(patchwork)
 library(calecopal)
+library(readxl)
 
 # Load datasets provided by Stevan and available on the Google drive here:
 # https://drive.google.com/drive/folders/1waznrSWuL1DiZOvRgbFoDnGNNoqB9Ahv
@@ -28,6 +29,10 @@ bell3_dat <- read_csv("data/bell3_streamflow_nitrate_obs_20220127.csv")
 bell3_flow <- read_csv("data/bell3_streamflow_obs.csv")
 bell4_dat <- read_csv("data/bell4_streamflow_nitrate_obs_20220127.csv")
 bell4_flow <- read_csv("data/bell4_streamflow_obs.csv")
+bell4_dat_raw <- read_excel("data/Bell4NitrateConcentrations.xlsx", sheet = 1,
+                            skip = 3, col_names = c("Watershed", "Year", "Date", "Time", "HydrologicDay", "NO3_mgL"))
+bell4_flow_raw <- read_excel("data/SDEFStreamflowDataBell4Estimated.xlsx", sheet = 1,
+                            skip = 2, col_names = c("Watershed", "Year", "Date", "Time", "HydrologicDay", "StageHeight_cm", "Discharge_Ls", "Note"))
 
 #### Examine USGS Chemistry Data ####
 
@@ -348,5 +353,37 @@ bell4_dat <- bell4_dat %>%
     theme_bw())
 
 (fig_bell_all <- (fig_b3 + fig_b4) / (fig_b3_flow + fig_b4_flow))
+
+# Examine the raw data for Bell 4 NO3 as well.
+
+bell4_dat_raw_trim <- bell4_dat_raw %>%
+  # Format date properly.
+  mutate(month = month(Date),
+         day = day(Date)) %>%
+  mutate(date = make_date(year = Year, month = month, day = day)) %>%
+  # and remove N/As (argh!)
+  filter(NO3_mgL != "N/A") %>%
+  mutate(NO3_mgl = as.numeric(NO3_mgL))
+
+(fig_b4_raw <- ggplot(bell4_dat_raw_trim, 
+                      aes(x = date, y = NO3_mgl)) +
+    geom_point(alpha = 0.8) +
+    labs(x = "Date", y = "Nitrate (mg/L)", title = "Bell 4") +
+    theme_bw())
+
+bell4_flow_raw_trim <- bell4_flow_raw %>%
+  # Format date properly.
+  mutate(month = month(Date),
+         day = day(Date)) %>%
+  mutate(date = make_date(year = Year, 
+                          month = month, 
+                          day = day))
+
+(fig_b4_flow_raw <- ggplot(bell4_flow_raw_trim, aes(x = date, y = Discharge_Ls)) +
+    geom_point(color = "cornflowerblue") +
+    labs(x = "Date", y = "Q (L/sec)") +
+    theme_bw())
+
+# ohhhhh wait, there's 30 different sheets in this file :(
   
 # End of script.
