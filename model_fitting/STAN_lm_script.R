@@ -789,7 +789,8 @@ stan_lm_run5 <- lapply(data_stan5.2,
 # Examine summaries of the estimates.
 stan_lm_data5 <- map(stan_lm_run5,
                      function(x) summary(x,
-                                         pars = c("A", "b", "sigma", "delta"),
+                                         pars = c("A", "b", "sigma", 
+                                                  "delta_b", "delta_sigma"),
                                          probs = c(0.025, 0.5, 0.975))$summary )
 
 # Turn back into a dataframe for easier summary viewing.
@@ -798,5 +799,14 @@ stan_lm_data5_df <- plyr::ldply(stan_lm_data5,
   rename("parameter" = "names",
          usgs_site = `.id`)
 # Rhat values all < 1.05 YESSS!!!
+
+ggplot(stan_lm_data5_df, aes(x = `X50.`, y = parameter, color = usgs_site)) +
+  geom_point(size = 3) +
+  geom_linerange(aes(xmin = `X2.5.`, xmax = `X97.5.`)) +
+  labs(x = "Median Value & 95% C.I.s",
+       y = "Parameter") +
+  theme_bw()
+
+# Well, this is looking pretty neat - lots of changes.
 
 # End of script.

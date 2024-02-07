@@ -31,7 +31,7 @@ data {
 parameters {
   
   //real mu[D]; // mean
-  real<lower=0> sigma; // observation error - must be positive
+  vector[F] sigma; // observation error - must be positive
   vector[F] b; // CQ slope
   vector[F] A; // log-scaled intercept
   
@@ -44,20 +44,18 @@ parameters {
 
 model {
   
-  // Each category's slope estimate is normally distributed 
-  // for (i in 1:F) {
-  //   
-  //   b[i] ~ normal(mu, sigma);
-  //   
-  // }
-  
   // The concentration-discharge relationship is modeled as
   // log(c) = log(a) + b * log(q)
   // or
   // C = A + bQ
   for (j in 1:N)
     
-    C[j] ~ normal(A[f[j]] + b[f[j]]*Q[j], sigma);
+    C[j] ~ normal(A[f[j]] + b[f[j]]*Q[j], sigma[f[j]]);
+    
+    // So, for each indexed parameter, it will find the observation in question,
+    // and for that number observation, find the value of the f vector (which
+    // denotes a 1 for pre-fire or a 2 for post-fire), and assign that observation
+    // to inform that category's parameter estimate, e.g. either b[1] or b[2].
   
   // Parameter priors - keeping fairly uninformative for now
   sigma ~ exponential(0.1); // obs. error must be positive, equivalent to half-normal(0,10)
@@ -73,11 +71,13 @@ model {
 
 generated quantities{
   
-  real delta; // change in slope
+  real delta_b; // change in CQ slope
+  real delta_sigma; // change in variation
   
-  // Use estimated pre- and post-fire CQ slopes
-  // to calculate the change in slope
-  delta = b[1] - b[2];
+  // Use estimated pre- and post-fire values
+  // to calculate the change
+  delta_b = b[1] - b[2];
+  delta_sigma = sigma[1] - sigma[2];
   
   // remember, script MUST end in a blank line
   
