@@ -679,4 +679,124 @@ mcmc_intervals(stan_lm_run4$`USGS-09367580`,
     subtitle = "with medians and 95% intervals"
   ) # +0.3
 
+#### Formula 5 - Pre/Post as One Model ####
+
+##### Data Prep #####
+
+# I will prepare a list of 10 sites with pre-
+# and post-fire specific conductivity data to
+# use in a new model structure where pre- and
+# post-fire CQ slopes are estimated together,
+# sharing data.
+
+agg_data2 <- data %>%
+  # filter only for specific conductance
+  filter(USGSPCode %in% c("00095", "90095", "00094")) %>%
+  # group by site
+  group_by(usgs_site) %>%
+  summarize(count = n()) %>%
+  ungroup() %>%
+  filter(count > 1000)
+
+my17sites <- agg_data2$usgs_site
+
+dat5 <- data %>%
+  # filter only for specific conductance
+  filter(USGSPCode %in% c("00095", "90095", "00094")) %>%
+  # filter for sites of interest
+  filter(usgs_site %in% my17sites) %>%
+  # remove days on which flow = 0 or SC = 0 %>%
+  filter(Flow > 0) %>%
+  filter(ResultMeasureValue > 0) %>%
+  # need to log transform (and scale) concentrations
+  mutate(scaleSC = scale(log(ResultMeasureValue))) %>%
+  # and to log transform (and scale) remaining discharge
+  mutate(scaleQ = scale(log(Flow))) %>%
+  # add pre-/post-fire variable to develop model with
+  # NOTE THESE CANNOT BE ZERO WHEN INDEXING
+  mutate(fire = as.integer(case_when(
+    usgs_site == "USGS-07103700" & ActivityStartDate < "2012-06-23" ~ 1,
+    usgs_site == "USGS-07105500" & ActivityStartDate < "2012-06-23" ~ 1,
+    usgs_site == "USGS-07105800" & ActivityStartDate < "2012-06-23" ~ 1,
+    usgs_site == "USGS-07106300" & ActivityStartDate < "2012-06-23" ~ 1,
+    usgs_site == "USGS-07106500" & ActivityStartDate < "2012-06-23" ~ 1,
+    usgs_site == "USGS-07109500" & ActivityStartDate < "2012-06-23" ~ 1,
+    usgs_site == "USGS-08313000" & ActivityStartDate < "2013-06-05" ~ 1,
+    usgs_site == "USGS-08330000" & ActivityStartDate < "2011-06-26" ~ 1,
+    usgs_site == "USGS-08354900" & ActivityStartDate < "2011-06-26" ~ 1,
+    usgs_site == "USGS-08355490" & ActivityStartDate < "2011-06-26" ~ 1,
+    usgs_site == "USGS-08358400" & ActivityStartDate < "2011-06-26" ~ 1,
+    usgs_site == "USGS-09095500" & ActivityStartDate < "2020-07-31" ~ 1,
+    usgs_site == "USGS-09152500" & ActivityStartDate < "1994-07-04" ~ 1,
+    usgs_site == "USGS-09163500" & ActivityStartDate < "2020-07-31" ~ 1,
+    usgs_site == "USGS-09261000" & ActivityStartDate < "2012-06-24" ~ 1,
+    usgs_site == "USGS-09367540" & ActivityStartDate < "2018-06-01" ~ 1,
+    usgs_site == "USGS-09367580" & ActivityStartDate < "2018-06-01" ~ 1,
+    TRUE ~ 2)))
+
+# Quick plot of the data with rough lm()s added.
+ggplot(dat5, aes(x = scaleQ, y = scaleSC, color = factor(fire))) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", fill = NA) +
+  theme_bw() +
+  facet_wrap(vars(usgs_site), nrow = 4, scales = "free")
+# At first glance, most are negative but some noticeably change post-fire
+
+# Ensure no NAs or NaNs are present in the data,
+# because STAN does not allow this.
+sum(is.na(dat5$scaleSC)) # 0
+sum(is.na(dat5$scaleQ)) # 0
+sum(is.na(dat5$fire)) # 0
+sum(is.nan(dat5$scaleSC)) # 0
+sum(is.nan(dat5$scaleQ)) # 0
+sum(is.nan(dat5$fire)) # 0
+
+##### Model Fit #####
+
+# Split list by site
+dat5_l <- split(dat5, dat5$usgs_site)
+
+# Function to compile necessary data
+stan_data_compile <- function(x){
+  
+  data <- list(
+    #D = as.integer(1), # number of predictors
+    N = nrow(x), # number of observations
+    C = x$scaleSC[1:nrow(x)], # concentration
+    Q = x$scaleQ[1:nrow(x)], # discharge
+    F = max(x$fire), # number of fire categories
+    f = x$fire[1:nrow(x)] # fire delineation
+  )
+  
+  return(data)
+  
+}
+
+# Apply function to dataset
+data_stan5 <- lapply(dat5_l, function(x) stan_data_compile(x))
+
+# Making smaller dataset for faster run time.
+data_stan5.2 <- data_stan5[1:2]
+
+# Fit model - should run in 5 minutes
+stan_lm_run5 <- lapply(data_stan5.2,
+                       function(x) stan(file = "models/STAN_lm_delta_unified_template.stan",
+                                        data = x,
+                                        chains = 3,
+                                        iter = 5000,
+                                        control = list(max_treedepth = 12)))
+
+# Examine summaries of the estimates.
+stan_lm_data5 <- map(stan_lm_run5,
+                     function(x) summary(x,
+                                         pars = c("A", "b", "sigma", "delta"),
+                                         probs = c(0.025, 0.5, 0.975))$summary )
+
+# Turn back into a dataframe for easier summary viewing.
+stan_lm_data5_df <- plyr::ldply(stan_lm_data5, 
+                                function(x) data.frame(names = row.names(x), x)) %>%
+  rename("parameter" = "names",
+         usgs_site = `.id`)
+# Rhat values all < 1.05 YESSS!!!
+
 # End of script.
