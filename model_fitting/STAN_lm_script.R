@@ -2,8 +2,8 @@
 # Heili Lowman
 # January 19, 2024
 
-# README: The following script will fit an initial, linear
-# STAN model to the concentration and discharge data.
+# README: The following script will fit iteratively improved
+# STAN models to the concentration and discharge data.
 # WARNING -- DO NOT PUSH ANY '.rds' FILES THAT ARE
 # CREATED BY STAN TO GITHUB. They are not necessary to store
 # as part of this repository.
@@ -808,5 +808,243 @@ ggplot(stan_lm_data5_df, aes(x = `X50.`, y = parameter, color = usgs_site)) +
   theme_bw()
 
 # Well, this is looking pretty neat - lots of changes.
+
+#### Formula 6 - Multi-level Model ####
+
+##### Data Prep #####
+
+# I will prepare a df of 10 sites with pre-
+# and post-fire specific conductivity data to
+# use in a new model structure where all sites
+# are estimated together hierarchically.
+
+agg_data2 <- data %>%
+  # filter only for specific conductance
+  filter(USGSPCode %in% c("00095", "90095", "00094")) %>%
+  # group by site
+  group_by(usgs_site) %>%
+  summarize(count = n()) %>%
+  ungroup() %>%
+  filter(count > 1000)
+
+my17sites <- agg_data2$usgs_site
+
+# I'll be adding additional columns to create
+# a hierarchy - site (a.k.a. watershed) index
+# and region index based on HUC IDs.
+
+dat6 <- data %>%
+  # filter only for specific conductance
+  filter(USGSPCode %in% c("00095", "90095", "00094")) %>%
+  # filter for sites of interest
+  filter(usgs_site %in% my17sites) %>%
+  # remove days on which flow = 0 or SC = 0 %>%
+  filter(Flow > 0) %>%
+  filter(ResultMeasureValue > 0) %>%
+  # need to log transform (and scale) concentrations
+  mutate(scaleSC = scale(log(ResultMeasureValue))) %>%
+  # and to log transform (and scale) remaining discharge
+  mutate(scaleQ = scale(log(Flow))) %>%
+  # add pre-/post-fire variable to develop model with
+  # NOTE THESE CANNOT BE ZERO WHEN INDEXING
+  mutate(fire = as.integer(case_when(
+    usgs_site == "USGS-07103700" & ActivityStartDate < "2012-06-23" ~ 1,
+    usgs_site == "USGS-07105500" & ActivityStartDate < "2012-06-23" ~ 1,
+    usgs_site == "USGS-07105800" & ActivityStartDate < "2012-06-23" ~ 1,
+    usgs_site == "USGS-07106300" & ActivityStartDate < "2012-06-23" ~ 1,
+    usgs_site == "USGS-07106500" & ActivityStartDate < "2012-06-23" ~ 1,
+    usgs_site == "USGS-07109500" & ActivityStartDate < "2012-06-23" ~ 1,
+    usgs_site == "USGS-08313000" & ActivityStartDate < "2013-06-05" ~ 1,
+    usgs_site == "USGS-08330000" & ActivityStartDate < "2011-06-26" ~ 1,
+    usgs_site == "USGS-08354900" & ActivityStartDate < "2011-06-26" ~ 1,
+    usgs_site == "USGS-08355490" & ActivityStartDate < "2011-06-26" ~ 1,
+    usgs_site == "USGS-08358400" & ActivityStartDate < "2011-06-26" ~ 1,
+    usgs_site == "USGS-09095500" & ActivityStartDate < "2020-07-31" ~ 1,
+    usgs_site == "USGS-09152500" & ActivityStartDate < "1994-07-04" ~ 1,
+    usgs_site == "USGS-09163500" & ActivityStartDate < "2020-07-31" ~ 1,
+    usgs_site == "USGS-09261000" & ActivityStartDate < "2012-06-24" ~ 1,
+    usgs_site == "USGS-09367540" & ActivityStartDate < "2018-06-01" ~ 1,
+    usgs_site == "USGS-09367580" & ActivityStartDate < "2018-06-01" ~ 1,
+    TRUE ~ 2))) %>%
+  # First, create ecoregion index, starting with 1
+  mutate(region = as.integer(case_when(usgs_site %in% c("USGS-07103700",
+                                                "USGS-07105500",
+                                                "USGS-07105800",
+                                                "USGS-07106300",
+                                                "USGS-07106500", 
+                                                "USGS-07109500") ~ 1,
+                               usgs_site %in% c("USGS-08313000",
+                                                "USGS-08330000",
+                                                "USGS-08354900",
+                                                "USGS-08355490",
+                                                "USGS-08358400") ~ 2,
+                               usgs_site %in% c("USGS-09095500",
+                                                "USGS-09152500", 
+                                                "USGS-09163500",
+                                                "USGS-09261000",
+                                                "USGS-09367540",
+                                                "USGS-09367580") ~ 3))) %>%
+  # Second, create watershed index , starting with 1
+  mutate(watershed = as.integer(case_when(usgs_site == "USGS-07103700" ~ 1,
+                                          usgs_site == "USGS-07105500" ~ 2,
+                                          usgs_site == "USGS-07105800" ~ 3,
+                                          usgs_site == "USGS-07106300" ~ 4,
+                                          usgs_site == "USGS-07106500" ~ 5,
+                                          usgs_site == "USGS-07109500" ~ 6,
+                                          usgs_site == "USGS-08313000" ~ 7,
+                                          usgs_site == "USGS-08330000" ~ 8,
+                                          usgs_site == "USGS-08354900" ~ 9,
+                                          usgs_site == "USGS-08355490" ~ 10,
+                                          usgs_site == "USGS-08358400" ~ 11,
+                                          usgs_site == "USGS-09095500" ~ 12,
+                                          usgs_site == "USGS-09152500" ~ 13,
+                                          usgs_site == "USGS-09163500" ~ 14,
+                                          usgs_site == "USGS-09261000" ~ 15,
+                                          usgs_site == "USGS-09367540" ~ 16,
+                                          usgs_site == "USGS-09367580" ~ 17)))
+
+# Quick plot of the data with rough lm()s added.
+ggplot(dat6, aes(x = scaleQ, y = scaleSC, color = factor(watershed))) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", fill = NA) +
+  theme_bw() +
+  facet_grid(fire ~ region, scales = "free")
+
+# Ensure no NAs or NaNs are present in the data,
+# because STAN does not allow this.
+sum(is.na(dat6$scaleSC)) # 0
+sum(is.na(dat6$scaleQ)) # 0
+sum(is.na(dat6$fire)) # 0
+sum(is.nan(dat6$scaleSC)) # 0
+sum(is.nan(dat6$scaleQ)) # 0
+sum(is.nan(dat6$fire)) # 0
+
+# Split list by site
+dat6_l <- split(dat6, dat6$usgs_site)
+
+# Convert all to matrices for proper indexing.
+
+# -- Discharge --
+name1 <- "scaleQ"
+subset_Q <- lapply(dat6_l, "[", name1)
+
+# Count the length of each line
+length_df1 <- function(x){
+  data <- length(x$scaleQ) # need to go two layers in to calculate length
+  return(data)
+}
+
+# apply function to full list
+line_lengths1 <- lapply(subset_Q, length_df1)
+
+# and transpose into a dataframe
+line_lengths1 <- t(as.data.frame(line_lengths1))
+
+# Pad shorter lines with 0 below
+subset_Q[which(line_lengths1 != max(line_lengths1))] <- 
+  lapply(subset_Q[which(line_lengths1 != max(line_lengths1))], function(x){
+    
+    # create list of existing Q values
+    list1 <- x$scaleQ
+    list1 <- as.data.frame(list1) %>%
+      rename("list1" = "V1")
+    
+    # create list of NAs to be added
+    list2 <- rep(0, times = max(line_lengths1)-
+                   length(x$scaleQ))
+    list2 <- as.data.frame(list2) %>%
+      rename("list1" = "list2")
+    
+    # join the two together
+    rbind(list1, list2)
+    }
+    )
+
+# Use the list created above to create a matrix of Q values
+Q_mx <- matrix(NA, 5229, 17)
+Q_mx <- matrix(unlist(subset_Q), nrow = 5229, ncol = 17)
+
+# -- Chemistry --
+name2 <- "scaleSC"
+subset_SC <- lapply(dat6_l, "[", name2)
+
+# Count the length of each line (same as above but
+# re-doing here just for consistency)
+length_df2 <- function(x){
+  data <- length(x$scaleSC) 
+  return(data)
+}
+
+# apply function to full list
+line_lengths2 <- lapply(subset_SC, length_df2)
+
+# and transpose into a dataframe
+line_lengths2 <- t(as.data.frame(line_lengths2))
+
+# Pad shorter lines with 0 below
+subset_SC[which(line_lengths2 != max(line_lengths2))] <- 
+  lapply(subset_SC[which(line_lengths2 != max(line_lengths2))], function(x){
+    
+    # create list of existing chem values
+    list1 <- x$scaleSC
+    list1 <- as.data.frame(list1) %>%
+      rename("list1" = "V1")
+    
+    # create list of NAs to be added
+    list2 <- rep(0, times = max(line_lengths2)-
+                   length(x$scaleSC))
+    list2 <- as.data.frame(list2) %>%
+      rename("list1" = "list2")
+    
+    # join the two together
+    rbind(list1, list2)
+  }
+  )
+
+# Use the list created above to create a matrix of Q values
+SC_mx <- matrix(NA, 5229, 17)
+SC_mx <- matrix(unlist(subset_SC), nrow = 5229, ncol = 17)
+
+# -- Fire --
+name3 <- "fire"
+subset_F <- lapply(dat6_l, "[", name3)
+
+# Count the length of each line (same as above but
+# re-doing here just for consistency)
+length_df3 <- function(x){
+  data <- length(x$fire) 
+  return(data)
+}
+
+# apply function to full list
+line_lengths3 <- lapply(subset_F, length_df3)
+
+# and transpose into a dataframe
+line_lengths3 <- t(as.data.frame(line_lengths3))
+
+# Pad shorter lines with 0 below
+subset_F[which(line_lengths3 != max(line_lengths3))] <- 
+  lapply(subset_F[which(line_lengths3 != max(line_lengths3))], function(x){
+    
+    # create list of existing chem values
+    list1 <- x$fire
+    list1 <- as.data.frame(list1)
+    # didn't need to rename here for some reason
+    
+    # create list of NAs to be added
+    list2 <- rep(0, times = max(line_lengths3)-
+                   length(x$fire))
+    list2 <- as.data.frame(list2) %>%
+      rename("list1" = "list2")
+    
+    # join the two together
+    rbind(list1, list2)
+  }
+  )
+
+# Use the list created above to create a matrix of Q values
+F_mx <- matrix(NA, 5229, 17)
+F_mx <- matrix(unlist(subset_F), nrow = 5229, ncol = 17)
+
 
 # End of script.
