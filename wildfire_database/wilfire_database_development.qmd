@@ -208,7 +208,7 @@ Whereas the firearea vignette outlined an iterative state-by-state approach to i
 ```{r}
 #| eval: FALSE
 
-stream_sites_candidates <- tibble::tibble(site_no = unique(discharge_daily$site_no))
+stream_sites_candidates <- tibble::tibble(usgs_site = unique(discharge_daily$site_no))
 ```
 
 ...or pulled from the database...
