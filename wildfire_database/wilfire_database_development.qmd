@@ -329,6 +329,8 @@ ALTER TABLE firearea.fires_catchments
   TYPE geometry(geometry, 4326)
   USING ST_SetSRID(geometry, 4326)
 ;
+
+CREATE UNIQUE INDEX idx_fires_catchments_usgs_site_event_id ON firearea.fires_catchments (usgs_site, event_id) ;
 ```
 
 # pour points ------------------------------------------------------------------
