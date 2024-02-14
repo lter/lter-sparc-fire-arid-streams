@@ -813,7 +813,7 @@ ggplot(stan_lm_data5_df, aes(x = `X50.`, y = parameter, color = usgs_site)) +
 
 ##### Data Prep #####
 
-# I will prepare a df of 10 sites with pre-
+# I will prepare a df of sites with pre-
 # and post-fire specific conductivity data to
 # use in a new model structure where all sites
 # are estimated together hierarchically.
@@ -1046,5 +1046,77 @@ subset_F[which(line_lengths3 != max(line_lengths3))] <-
 F_mx <- matrix(NA, 5229, 17)
 F_mx <- matrix(unlist(subset_F), nrow = 5229, ncol = 17)
 
+# Coercing the matrix to be integers rather than real
+mode(F_mx) <- "integer"
+
+##### Model Fit #####
+
+# Compile data for hierarchical run build #1
+data_stan6 <- list(sites = ncol(SC_mx), # number of sites
+                   N = nrow(SC_mx), # max. number of obs.
+                   Ndays = line_lengths1[1:17], # actual number of obs. per site
+                   C = SC_mx, # Sp. Cond. data
+                   Q = Q_mx, # Discharge data
+                   f = F_mx, # Fire data
+                   F = as.integer(max(F_mx[,1]))) # max. number of fire indices (a.k.a. 2)
+
+# Fit model - began at 2:44pm, ended at 3:06pm
+stan_lm_run6 <- stan(file = "models/STAN_lm_hierarchical_template.stan",
+                     data = data_stan6,
+                     chains = 3,
+                     iter = 5000,
+                     control = list(max_treedepth = 12))
+
+# Export for safekeeping.
+saveRDS(stan_lm_run6, "data_stanfits/hier_fit_021424.rds")
+
+# Examine summaries of the estimates.
+stan_lm_data6 <- summary(stan_lm_run6,
+                         pars = c("A", "b", "sigma", "Asite", "bsite"),
+                                probs = c(0.025, 0.5, 0.975))$summary
+
+# Well, shoot, it converged!! And all the Rhats look great!!
+
+# Turn back into a dataframe for easier summary viewing.
+stan_lm_data6_df <- data.frame(stan_lm_data6) %>%
+  rownames_to_column(var = "parameter") %>%
+  # adding columns for easier plotting
+  mutate(fire = factor(c("before", "after", 
+                  "before", "after",
+                  "before", "after",
+                  rep("before", 17),
+                  rep("after", 17),
+                  rep("before", 17),
+                  rep("after", 17)), levels = c("before", "after"))) %>%
+  mutate(parameter_cd = c("A", "A",
+                       "b", "b",
+                       "sigma", "sigma",
+                       rep("A", 34),
+                       rep("b", 34)))
+
+ggplot(stan_lm_data6_df %>%
+         filter(parameter_cd == "b"), 
+       aes(x = `X50.`, y = parameter, color = parameter)) +
+  geom_point(size = 3) +
+  geom_linerange(aes(xmin = `X2.5.`, xmax = `X97.5.`)) +
+  labs(x = "Median estimate & 95% C.I.s",
+       y = "logC-logQ slope",
+       title = "Specific Conductance\n n = 17 sites") +
+  facet_grid(fire~., scales = "free", drop = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none")
+
+ggplot(stan_lm_data6_df %>%
+         filter(parameter_cd == "A"), 
+       aes(x = `X50.`, y = parameter, color = parameter)) +
+  geom_point(size = 3) +
+  geom_linerange(aes(xmin = `X2.5.`, xmax = `X97.5.`)) +
+  labs(x = "Median Value & 95% C.I.s",
+       y = "Parameter") +
+  facet_grid(fire~., scales = "free", drop = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none")
+
+# Ahhhhh yayyyy!!! So glad this worked!!!
 
 # End of script.
