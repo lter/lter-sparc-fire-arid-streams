@@ -77,12 +77,26 @@ ggplot2::ggplot() +
 # WRITE
 
 ## raster
+
 terra::writeRaster(global_ai_crop, "~/Desktop/ai_crop.tif")
 
 ## json
+
+#' @note The study will focus on ecoregions with a median aridity index of 2000
+#' (#L50). However, this cutoff excluded the Arizona/New Mexico Mountains
+#' (NA_L3NAME). Because of particular relevance of that ecoregion to this
+#' study, it was also included in the list of ecoregions that define the area
+#' of study (#L91-95).
+
+aridland_ecoregions <- dplyr::bind_rows(
+  arid_ecos,
+  ecoregions |> 
+    dplyr::filter(NA_L3CODE == "13.1.1")
+)
+
 sf::st_write(
-  obj        = arid_ecos,
-  dsn        = "~/Desktop/arid_ecos.geojson",
+  obj        = aridland_ecoregions,
+  dsn        = "~/Desktop/aridland_ecoregions.geojson",
   driver     = "geojson",
   delete_dsn = TRUE
 )
