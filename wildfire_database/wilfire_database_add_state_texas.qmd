@@ -1,0 +1,200 @@
+---
+title: "wildfire database development"
+author: "S. Earl"
+format: gfm
+---
+
+# overview ---------------------------------------------------------------------
+
+Documentation and general workflow overview for developing the wildfire database to support the CRASS 2.0 study that will investigate relationships between wildfire and aquatic biogeochemistry in the arid western United States. The focus here is strictly on development of the wildfire database that stores information such as the geometry of study catchments, discharge, and water chemistry data. Other workflows for harvesting, for example covariates, are detailed in other files within this repository. The workflow draws heavily on the [firearea](https://srearl.gitlab.io/firearea/index.html) package that also support this effort. Important is that this is not a reproducible workflow: there is a time-sensitive component to some of the `firearea` queries, especially those related to discharge, such that there could be different returns based on the date of query, and this workflow features iterative steps, such as querying data for USGS sites in individual sites but for multiple states that is not shown, and some, particularly, database actions are run once after initial table construction but not when data are added subsequently.
+
+Initial development of the wildfire database is documented in the [database development workflow](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wilfire_database_development.qmd). The workflow here focuses on adding data from states other than the six (four corner, Nevada, and California) that went into constructing the database intitially. Specifically, this workflow focuses on adding USGS data from the state of Texas. Texas is treated differently as there is a relatively small portion of the state that falls in the study of interest defined by the target ecoregions. Ideal would not be to store all of the chemistry and discharge data for many Texas sites when, ultimately, only a few are relevant. The approach taken here is to identify_sites_to_delineate then, instead of harvesting chemistry and discharge data, delineate those catchments and pare them only to those in the boundaries of the ecoregions. A throwaway database is used to house the interim catchment data. Once we have the sites associated with catchments in the area of interest, we can pare our stream_sites_candidates to include only those locations and run through the workflow. In hindsight, this approach would have worked well also for Oregon where relatively few sites are in the ecoregion relevant to that state and should be considered if these data are reconstructed.
+
+# site selection pared to ecoregion --------------------------------------------
+
+Critical is that this step is done with the write going to a throwaway database.
+
+```{r}
+#| eval: FALSE
+
+stream_sites_candidates <- firearea::identify_sites_to_delineate(state_code = "TX")
+
+wucd_possibly <- purrr::possibly(
+  .f        = firearea::write_usgs_catchment_delineation,
+  otherwise = NULL
+)
+
+purrr::walk(stream_sites_candidates$usgs_site, ~ wucd_possibly(usgs_site = .x))
+
+catchments <- sf::st_read(pg, query = "select * from firearea.catchments ;")
+ecoregions <- sf::st_read("aridland_ecoregions.geojson")
+
+texas_eco <- sf::st_join(catchments, ecoregions, join = sf::st_within)
+texas_eco <- texas_eco |> dplyr::filter(!is.na(NA_L3CODE))
+
+stream_sites_candidates <- stream_sites_candidates |> # from initial
+  dplyr::mutate(usgs_site = paste0("USGS-", site_no)) |>
+  dplyr::filter(usgs_site %in% texas_eco$usgs_site)
+
+```
+
+
+# water chemistry --------------------------------------------------------------
+
+This is a good example of where this workflow is not reproducible (in the sense of sourcing this document) as this procedure is addressed state-by-state; we perform these steps iteratively for each state of interest.
+
+```{r}
+#| eval: FALSE
+
+usgs_water_chem <- split(
+  x = stream_sites_candidates,
+  f = stream_sites_candidates$usgs_site
+) |>
+  {\(site) purrr::map_dfr(.x = site, ~ firearea::retrieve_usgs_chem(station_id = .x$usgs_site))}()
+```
+
+Because of the large number of columns in the water chemistry output and because we want to preserve all of these data, easiest is to use the `DBI::dbWriteTable` function to create the table; we use the append parameter to add additional data to the table once it is created.
+
+```{r}
+#| eval: FALSE
+
+DBI::dbWriteTable(
+  conn      = pg,
+  name      = c("firearea", "water_chem"),
+  value     = usgs_water_chem,
+  overwrite = FALSE,
+  append    = TRUE,
+  row.names = FALSE
+)
+```
+
+A note about timestamps:
+- `ActivityStartTime.Time` and `ActivityEndTime.Time` are local time where local is the time zone of the USGS site
+- `ActivityStartDateTime` and `ActivityEndDateTime` are UTC
+- Postgres assumes UTC for TYPE TIME WITHOUT TIME ZONE so date and time operations should not be performed on the fields where the time zone is local (because Postgres is assuming UTC).
+
+
+# daily discharge --------------------------------------------------------------
+
+We use the available water chemistry data to inform harvesting daily discharge data for a given site where, for each site, we pull discharge data one month prior to the earliest record for any of our analytes of interest. 
+
+There are a couple of approaches to identifying the locations and temporal extents for which to harvest discharge data. We can address this iteratively, that is each time that we get `usgs_water_chem` for a given state, we can get the locations and corresponding earliest water chemistry data to pull from those data from that state, sensu:
+
+Note in the code blocks below is a rare case where we need to load a library as it is not clear how to namespace the call to `{r}%m-%` from lubridate; using a base-R approach (e.g., `{r}as.character(chem_earliest - months(1)`) generates unexpected NAs.
+
+```{r}
+#| eval: FALSE
+
+library(lubridate)
+
+water_chem_timing <- usgs_water_chem |>
+  dplyr::group_by(usgs_site) |>
+  dplyr::summarise(chem_earliest = min(ActivityStartDate)) |>
+  dplyr::mutate(
+    prior_month = chem_earliest %m-% base::months(1),
+    usgs_site   = stringr::str_extract(usgs_site, "(?<=-)[0-9]+$")
+  ) |> 
+dplyr::ungroup()
+
+```
+
+With the water chemistry data for each site, we can then use the earliest record (minus one month) to harvest the corresponding discharge data.
+
+```{r}
+#| eval: FALSE
+
+retrieve_usgs_discharge_possibly <- purrr::possibly(
+  .f        = firearea::retrieve_usgs_discharge,
+  otherwise = NULL
+)
+
+discharge_daily <- split(
+  x = water_chem_timing,
+  f = water_chem_timing$usgs_site
+  ) |>
+{\(site) purrr::map_dfr(.x = site, ~ retrieve_usgs_discharge_possibly(station_id = .x$usgs_site, start_date = .x$prior_month, daily = TRUE))}()
+
+discharge_daily_expected_cols <- c("agency_cd", "site_no", "dateTime", "tz_cd", "Date", "Flow", "Flow_cd", "usgs_site")
+
+discharge_daily <- discharge_daily |>
+  dplyr::mutate(usgs_site = paste0("USGS-", site_no)) |>      # construct usgs_site from site_no
+  dplyr::select(dplyr::any_of(discharge_daily_expected_cols)) # constrain to expected columns
+```
+
+As with water chemistry, easiest is to use the `DBI::dbWriteTable` function to create the table; we use the append parameter to add additional data to the table once it is created.
+
+```{r}
+#| eval: FALSE
+
+DBI::dbWriteTable(
+  conn      = pg,
+  name      = c("firearea", "discharge_daily"),
+  value     = discharge_daily,
+  overwrite = FALSE,
+  append    = TRUE,
+  row.names = FALSE
+)
+```
+
+
+# delineated catchments --------------------------------------------------------
+
+Whereas the firearea vignette outlined an iterative state-by-state approach to identifying sites, harvesting chemistry, discharge, and delineating catchments, we can just as well identify the sites to delineate from discharge_daily (or water_chem) data in the R environment...
+
+```{r}
+#| eval: FALSE
+
+stream_sites_candidates <- tibble::tibble(usgs_site = unique(discharge_daily$site_no))
+```
+
+```{r}
+#| eval: FALSE
+
+wucd_possibly <- purrr::possibly(
+  .f        = firearea::write_usgs_catchment_delineation,
+  otherwise = NULL
+)
+
+purrr::walk(stream_sites_candidates$usgs_site, ~ wucd_possibly(usgs_site = .x))
+```
+
+
+# fires_catchments -------------------------------------------------------------
+
+```sql
+
+WITH RECURSIVE
+perimeters_transform AS (
+    SELECT
+        gid,
+        event_id,
+        ig_date,
+        ST_Transform(geom, 4326) AS geom
+    FROM
+        firearea.mtbs_fire_perimeters
+),
+fires_catchments AS (
+  SELECT
+    catchments.usgs_site,
+    perimeters_transform.event_id,
+    perimeters_transform.ig_date,
+    ST_Intersection(perimeters_transform.geom, catchments.geometry) AS geometry
+  FROM perimeters_transform
+  INNER JOIN firearea.catchments ON ST_Intersects(perimeters_transform.geom, catchments.geometry)
+  WHERE
+    ST_isvalid(perimeters_transform.geom) = 'TRUE' AND
+    ST_isvalid(catchments.geometry) = 'TRUE'
+)
+INSERT INTO firearea.fires_catchments(
+  usgs_site,
+  event_id,
+  ig_date,
+  geometry
+)
+SELECT
+  DISTINCT fires_catchments.*
+FROM fires_catchments
+ON CONFLICT (usgs_site, event_id) DO NOTHING
+;
+
+```
