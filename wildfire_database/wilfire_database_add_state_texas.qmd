@@ -12,7 +12,8 @@ Initial development of the wildfire database is documented in the [database deve
 
 # site selection pared to ecoregion --------------------------------------------
 
-Critical is that this step is done with the write going to a throwaway database.
+Critical is that the steps in this section only are done with the write going to an empty, throwaway database. The back-and-forth between R and SQL was needed as attempts to dissolve/union the ecoregions into a single polygon in R were not successful and the catchments cannot be selected to within ecoregions (as a multipolygon) as this results in errors seemingly when a catchment does not fall completely within one of the (sub)polygons.
+
 
 ```{r}
 #| eval: FALSE
@@ -25,17 +26,32 @@ wucd_possibly <- purrr::possibly(
 )
 
 purrr::walk(stream_sites_candidates$usgs_site, ~ wucd_possibly(usgs_site = .x))
+```
 
-catchments <- sf::st_read(pg, query = "select * from firearea.catchments ;")
-ecoregions <- sf::st_read("aridland_ecoregions.geojson")
+```{sql}
 
-texas_eco <- sf::st_join(catchments, ecoregions, join = sf::st_within)
-texas_eco <- texas_eco |> dplyr::filter(!is.na(NA_L3CODE))
+COPY (
+WITH ecoregion AS (
+  SELECT
+    st_union(wkb_geometry) AS geometry
+  FROM firearea.ecoregions
+)
+SELECT
+  catchments.usgs_site
+  -- catchments.geometry
+FROM firearea.catchments
+INNER JOIN ecoregion ON st_within(catchments.geometry, ecoregion.geometry)
+) TO '/tmp/texas_eco_catchments.csv' WITH CSV HEADER;
+;
+```
 
-stream_sites_candidates <- stream_sites_candidates |> # from initial
-  dplyr::mutate(usgs_site = paste0("USGS-", site_no)) |>
-  dplyr::filter(usgs_site %in% texas_eco$usgs_site)
+```{r}
+#| eval: FALSE
 
+texas_eco_sites <- readr::read_csv("texas_eco_catchments.csv")
+
+stream_sites_candidates <- texas_eco_sites |> 
+  dplyr::mutate(usgs_site = gsub("USGS-", "", usgs_site))
 ```
 
 
