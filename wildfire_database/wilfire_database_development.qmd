@@ -293,9 +293,40 @@ Add [ecoregions](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/
 ogr2ogr -f PostgreSQL PG:"host=localhost user=_user_ dbname=wildfire_dev active_schema=firearea" aridland_ecoregions.geojson -nln ecoregions
 ```
 
-# fires_catchments -------------------------------------------------------------
+Collapse the collection of ecoregion polygons into a single polygon and filter catchments that intersect and have at least 75% overlap within that area:
 
 ```sql
+
+WITH ecoregion AS (
+  SELECT
+    st_union(wkb_geometry) AS geometry
+  FROM firearea.ecoregions
+)
+SELECT
+    intersection.usgs_site,
+    intersection.ecoregion_pct,
+    intersection.geometry
+INTO firearea.ecoregion_catchments
+FROM (
+    SELECT
+        catchments.usgs_site,
+        ROUND((ST_Area(ST_Intersection(catchments.geometry, ecoregion.geometry)) / ST_Area(catchments.geometry) * 100)::numeric, 1) AS ecoregion_pct,
+        catchments.geometry
+    FROM firearea.catchments, ecoregion
+    WHERE st_intersects(catchments.geometry, ecoregion.geometry)
+) AS intersection
+WHERE intersection.ecoregion_pct >= 75
+;
+```
+
+
+# fires_catchments -------------------------------------------------------------
+
+Recreate this table as needed when new sites sites are added and/or if firearea.ecoregion_catchments changes.
+
+```sql
+DROP TABLE IF EXISTS firearea.fires_catchments ;
+
 WITH RECURSIVE
 perimeters_transform AS (
     SELECT
@@ -323,13 +354,19 @@ SELECT
   DISTINCT fires_catchments.*
 INTO firearea.fires_catchments
 FROM fires_catchments
--- WHERE
---     usgs_site = 'USGS-09386030'
+WHERE
+usgs_site IN (
+    SELECT
+        usgs_site
+    FROM
+        firearea.ecoregion_catchments
+    WHERE
+        usgs_site IS NOT NULL
+    )
 ORDER BY 
   fires_catchments.usgs_site,
   fires_catchments.event_id
 ;
-
 
 ALTER TABLE firearea.fires_catchments
   ALTER COLUMN geometry
