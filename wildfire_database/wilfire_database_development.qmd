@@ -297,6 +297,8 @@ Collapse the collection of ecoregion polygons into a single polygon and filter c
 
 ```sql
 
+DROP TABLE IF EXISTS firearea.ecoregion_catchments ;
+
 WITH ecoregion AS (
   SELECT
     st_union(wkb_geometry) AS geometry
