@@ -283,6 +283,10 @@ shp2pgsql -D -I -s 4269 mtbs_perims_DD.shp firearea.mtbs_fire_perimeters | psql 
 
 ```sql
 CREATE UNIQUE INDEX unique_mtbs_fire_perimeters_event_id ON firearea.mtbs_fire_perimeters (event_id) ;
+
+ALTER TABLE firearea.mtbs_fire_perimeters
+  ALTER COLUMN geom TYPE geometry(MultiPolygon, 4269)
+  USING ST_Multi(geom);
 ```
 
 # ecoregions -------------------------------------------------------------------
