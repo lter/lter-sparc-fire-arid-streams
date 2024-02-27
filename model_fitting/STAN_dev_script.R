@@ -1060,7 +1060,9 @@ data_stan6 <- list(sites = ncol(SC_mx), # number of sites
                    f = F_mx, # Fire data
                    F = as.integer(max(F_mx[,1]))) # max. number of fire indices (a.k.a. 2)
 
-# Fit model - began at 2:44pm, ended at 3:06pm
+# Fit model - 
+# 02/14/24 - began at 2:44pm, ended at 3:06pm
+# 02/15/24 - began at 3:44pm, ended at ??pm 
 stan_lm_run6 <- stan(file = "models/STAN_lm_hierarchical_template.stan",
                      data = data_stan6,
                      chains = 3,
@@ -1068,11 +1070,12 @@ stan_lm_run6 <- stan(file = "models/STAN_lm_hierarchical_template.stan",
                      control = list(max_treedepth = 12))
 
 # Export for safekeeping.
-saveRDS(stan_lm_run6, "data_stanfits/hier_fit_021424.rds")
+saveRDS(stan_lm_run6, "data_stanfits/hier_fit_wdelta_021524.rds")
 
 # Examine summaries of the estimates.
 stan_lm_data6 <- summary(stan_lm_run6,
-                         pars = c("A", "b", "sigma", "Asite", "bsite"),
+                         pars = c("A", "b", "delta_b", "sigma", 
+                                  "Asite", "bsite", "delta_bsite"),
                                 probs = c(0.025, 0.5, 0.975))$summary
 
 # Well, shoot, it converged!! And all the Rhats look great!!

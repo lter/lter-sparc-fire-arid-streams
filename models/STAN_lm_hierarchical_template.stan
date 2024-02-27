@@ -44,6 +44,9 @@ parameters {
   vector[F] Asigma; // universal CQ intercept standard deviation
   matrix [F, sites] Asite; // CQ intercept for each site both pre and post-fire
   
+  //vector[F] sigmasigma; // universal CQ variation
+  //matrix [F, sites] sigmasite; // CQ variation for each site both pre and post-fire
+  
   // Universal & error parameters
   // The first effort with the hierarchical structure will try to get
   // it working using only site-level, and universal parameter estimates.
@@ -67,15 +70,15 @@ model {
   
   // Establish loop framework
   // For each of the 17 sites...
-  for(h in 1:sites) { // line 60
+  for(h in 1:sites) { 
     
   // and for each day within each of the sites...
-  for (j in 1:Ndays[h]) { // line 63
+  for (j in 1:Ndays[h]) { 
     
     // We first trying the most simple hierarchical approach where
     // parameter_site ~ N(parameter, parameter_sigma)
 
-    C[j,h] ~ normal(Asite[f[j,h],h] + bsite[f[j,h],h]*Q[j,h], sigma[f[j,h]]); // line 67
+    C[j,h] ~ normal(Asite[f[j,h],h] + bsite[f[j,h],h]*Q[j,h], sigma[f[j,h]]);
     
     // So, for each indexed parameter, it will find the observation in question,
     // and for that number observation, find the value of the f vector (which
@@ -91,10 +94,12 @@ model {
   // Remember, each site-level estimate will actually be two - one pre and one post-fire
   bsite[k,h] ~ normal(b[k], bsigma[k]);
   Asite[k,h] ~ normal(A[k], Asigma[k]);
+  //sigmasite[k,h] ~ exponential(sigma[k]);
   
   // Cauchy distributions are normal dist. with heavy tails
   bsigma[k] ~ cauchy(0,1);
   Asigma[k] ~ cauchy(0,1);
+  //sigmasigma[k] ~ cauchy(0,1);
   
   // Error priors - keeping values that worked in non-hierarchical format
   sigma[k] ~ exponential(0.1); // error must be positive, equivalent to half-normal(0,10)
@@ -116,12 +121,20 @@ model {
 
 generated quantities{
   
-  //real delta_b; // change in CQ slope
+  vector[sites] delta_bsite; // changes in CQ slope by site
+  
+  real delta_b; // universal change in CQ slope
   //real delta_sigma; // change in variation
   
   // Use estimated pre- and post-fire values
   // to calculate the change
-  //delta_b = b[1] - b[2];
+  for(h in 1:sites) { 
+    
+  delta_bsite[h] = bsite[1,h] - bsite[2,h];
+  
+  }
+  
+  delta_b = b[1] - b[2];
   //delta_sigma = sigma[1] - sigma[2];
   
   // remember, script MUST end in a blank line !!!
