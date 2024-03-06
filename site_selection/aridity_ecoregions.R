@@ -48,7 +48,7 @@ arid_ecos <- ecoregions |>
     ai_median      = exactextractr::exact_extract(global_ai_crop, ecoregions, "median"),
     ai_median_narm = exactextractr::exact_extract(global_ai_crop, ecoregions, function(values, coverage_fraction) median(values, na.rm = "TRUE"))
   ) |> 
-  dplyr::filter(ai_median <= 2000)
+  dplyr::filter(ai_median_narm <= 2000)
 
 
 # PLOT
