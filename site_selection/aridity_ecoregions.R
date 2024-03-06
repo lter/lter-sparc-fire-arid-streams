@@ -42,10 +42,11 @@ ecoregions <- ecoregions |>
 
 arid_ecos <- ecoregions |> 
   dplyr::mutate(
-    ai_mode      = exactextractr::exact_extract(global_ai_crop, ecoregions, "mode"),
-    ai_mean      = exactextractr::exact_extract(global_ai_crop, ecoregions, "mean"),
-    ai_median    = exactextractr::exact_extract(global_ai_crop, ecoregions, "median"),
-    ai_mean_narm = exactextractr::exact_extract(global_ai_crop, ecoregions, function(values, coverage_fraction) mean(values, na.rm = "TRUE"))
+    ai_mode        = exactextractr::exact_extract(global_ai_crop, ecoregions, "mode"),
+    ai_mean        = exactextractr::exact_extract(global_ai_crop, ecoregions, "mean"),
+    ai_mean_narm   = exactextractr::exact_extract(global_ai_crop, ecoregions, function(values, coverage_fraction) mean(values, na.rm = "TRUE")),
+    ai_median      = exactextractr::exact_extract(global_ai_crop, ecoregions, "median"),
+    ai_median_narm = exactextractr::exact_extract(global_ai_crop, ecoregions, function(values, coverage_fraction) median(values, na.rm = "TRUE"))
   ) |> 
   dplyr::filter(ai_median <= 2000)
 
