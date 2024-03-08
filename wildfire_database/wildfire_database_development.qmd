@@ -91,6 +91,12 @@ A note about timestamps:
 #   ;
 #   '
 # )
+# 
+# ```sql
+# COMMENT ON COLUMN firearea.water_chem."ActivityStartTime.Time" IS 'local time' ;
+# COMMENT ON COLUMN firearea.water_chem."ActivityStartDateTime" IS 'UTC' ;
+# ```
+
 ```
 
 
