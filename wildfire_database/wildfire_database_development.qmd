@@ -91,12 +91,15 @@ A note about timestamps:
 #   ;
 #   '
 # )
-# 
-# ```sql
-# COMMENT ON COLUMN firearea.water_chem."ActivityStartTime.Time" IS 'local time' ;
-# COMMENT ON COLUMN firearea.water_chem."ActivityStartDateTime" IS 'UTC' ;
-# ```
+```
 
+```{sql}
+| eval: FALSE
+
+-- run once
+
+COMMENT ON COLUMN firearea.water_chem."ActivityStartTime.Time" IS 'local time' ;
+COMMENT ON COLUMN firearea.water_chem."ActivityStartDateTime" IS 'UTC' ;
 ```
 
 
@@ -206,6 +209,12 @@ Upon initial creation, modify fields and generate an index before adding additio
 # )
 ```
 
+```{sql}
+| eval: FALSE
+
+-- run once
+COMMENT ON COLUMN firearea.discharge_daily."Flow" IS 'cubic feet per second (cfs)' ;
+```
 
 # delineated catchments --------------------------------------------------------
 
