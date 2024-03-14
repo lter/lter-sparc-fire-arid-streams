@@ -1,0 +1,289 @@
+---
+title: "wildfire database development"
+author: "S. Earl"
+format: gfm
+---
+
+# overview ---------------------------------------------------------------------
+
+Documentation and general workflow overview for developing the wildfire database to support the CRASS 2.0 study that will investigate relationships between wildfire and aquatic biogeochemistry in the arid western United States. The focus here is strictly on development of the wildfire database that stores information such as the geometry of study catchments, discharge, and water chemistry data. Other workflows for harvesting, for example covariates, are detailed in other files within this repository. The workflow draws heavily on the [firearea](https://srearl.gitlab.io/firearea/index.html) package that also support this effort. Important is that this is not a reproducible workflow: there is a time-sensitive component to some of the `firearea` queries, especially those related to discharge, such that there could be different returns based on the date of query, and this workflow features iterative steps, such as querying data for USGS sites in individual sites but for multiple states that is not shown, and some, particularly, database actions are run once after initial table construction but not when data are added subsequently.
+
+This workflow documents adding non-usgs data (catchments, pour points) to the wildfire database. Locations include NEON aquatic (Sycamore Creek, AZ; Red Butte, UT), Santa Barbara Coastal LTER (SBC LTER), and Sycamore Creek LTREB (Dos S; Below Mesquite Wash) monitoring sites. The NEON Sycamore Creek site is co-located with the Dos S Sycamore Creek LTREB site and thus the LTREB Sycamore Creek site reflects both the LTREB and NEON programs.
+
+Whereas the USGS catchments, pour points, and chemistry and discharge data employ the nhdplusTools suite of tools, the non-USGS site catchments are delineated with Streamstats.
+
+
+# helpers ----------------------------------------------------------------------
+
+```{r}
+#| eval: FALSE
+
+dcss_possibly <- purrr::possibly(
+  .f        = firearea::delineate_catchment_streamstats,
+  otherwise = NULL
+)
+```
+
+# site metadata ----------------------------------------------------------------
+
+```{r}
+#| eval: FALSE
+
+(
+  non_usgs <- readr::read_csv("non_usgs_data.csv") |> 
+    janitor::clean_names() |> 
+    dplyr::filter(!grepl("SYCR_SS", site_name, ignore.case = TRUE)) |> 
+    dplyr::mutate(
+      usgs_site = dplyr::case_when(
+        grepl("bell 3", site_name, ignore.case = TRUE) ~ "hanan_bell_3",
+        grepl("bell 4", site_name, ignore.case = TRUE) ~ "hanan_bell_4",
+        grepl("sycamore", site_name, ignore.case = TRUE) ~ "neon_sycr",
+        grepl("butte", site_name, ignore.case = TRUE) ~ "neon_rebu",
+        grepl("Teakettle", site_name, ignore.case = TRUE) ~ "neon_tecr",
+        grepl("onofre", site_name, ignore.case = TRUE) ~ "sbc_lter_ono",
+        grepl("gaviota", site_name, ignore.case = TRUE) ~ "sbc_lter_gav",
+        grepl("hondo", site_name, ignore.case = TRUE) ~ "sbc_lter_hon",
+        grepl("refugio", site_name, ignore.case = TRUE) ~ "sbc_lter_ref",
+        grepl("tecolote", site_name, ignore.case = TRUE) ~ "sbc_lter_tec",
+        grepl("bell", site_name, ignore.case = TRUE) ~ "sbc_lter_bel",
+        grepl("devereaux", site_name, ignore.case = TRUE) ~ "sbc_lter_dev",
+        grepl("pedro", site_name, ignore.case = TRUE) ~ "sbc_lter_ped",
+        grepl("atascadero", site_name, ignore.case = TRUE) ~ "sbc_lter_ata",
+        grepl("atascadero", site_name, ignore.case = TRUE) ~ "sbc_lter_ata",
+        grepl("burro", site_name, ignore.case = TRUE) ~ "sbc_lter_bur",
+        grepl("nook", site_name, ignore.case = TRUE) ~ "sbc_lter_noo",
+        grepl("mission", site_name, ignore.case = TRUE) & !grepl("nook", site_name, ignore.case = TRUE) ~ "sbc_lter_mis",
+        grepl("rattle", site_name, ignore.case = TRUE) ~ "sbc_lter_rat",
+        grepl("bmw", site_name, ignore.case = TRUE) ~ "sycr_bmw",
+        TRUE ~ NA
+      )
+    )
+)
+```
+
+# delineations and pour points -------------------------------------------------
+
+## california
+
+### hanan bell sites
+
+#### pour points
+
+```{r}
+#| eval: FALSE
+
+hanan_bell_pour_points <- dplyr::bind_rows(
+  sf::st_read("~/localRepos/lter-sparc-fire-arid-streams/data/hanan_bell_3_pp.geojson") |> 
+    dplyr::rename(usgs_site = Name) |> 
+    dplyr::mutate(usgs_site = "hanan_bell_3"),
+  sf::st_read("~/localRepos/lter-sparc-fire-arid-streams/data/hanan_bell_4_pp.geojson") |> 
+    dplyr::rename(usgs_site = Name) |> 
+    dplyr::mutate(usgs_site = "hanan_bell_4")
+) |> 
+  dplyr::select(-Name1)
+```
+
+```{r}
+#| eval: FALSE
+
+DBI::dbWriteTable(
+  conn      = pg,
+  name      = c("firearea", "non_usgs_pour_points"),
+  value     = hanan_bell_pour_points,
+  overwrite = FALSE,
+  append    = TRUE,
+  row.names = FALSE
+)
+```
+
+#### catchments
+
+```{r}
+#| eval: FALSE
+
+hanan_bell_catchments <- dplyr::bind_rows(
+  sf::st_read("~/localRepos/lter-sparc-fire-arid-streams/data/hanan_bell_3_ws.geojson") |> 
+    dplyr::rename(usgs_site = Name) |> 
+    dplyr::mutate(usgs_site = "hanan_bell_3"),
+  sf::st_read("~/localRepos/lter-sparc-fire-arid-streams/data/hanan_bell_4_ws.geojson") |> 
+    dplyr::rename(usgs_site = Name) |> 
+    dplyr::mutate(usgs_site = "hanan_bell_4")
+) |> 
+  dplyr::select(usgs_site, geometry)
+```
+
+```{r}
+#| eval: FALSE
+
+DBI::dbWriteTable(
+  conn      = pg,
+  name      = c("firearea", "non_usgs_catchments"),
+  value     = hanan_bell_catchments,
+  overwrite = FALSE,
+  append    = TRUE,
+  row.names = FALSE
+)
+```
+
+### sbc lter
+
+```{r}
+#| eval: FALSE
+
+(
+  non_usgs_ca <- non_usgs |> 
+    dplyr::filter(grepl("sbc", data_source, ignore.case = TRUE))
+)
+```
+
+
+```{r}
+#| eval: FALSE
+
+non_usgs_ca_ws <- split(
+  x = non_usgs_ca,
+  f = non_usgs_ca$site_name
+) |>
+  {\(df) purrr::map_df(.x = df, ~ dcss_possibly(longitude = .x$longitude, latitude = .x$latitude, state_code = "ca", location_identifier = .x$usgs_site))}()
+```
+
+
+```{r}
+#| eval: FALSE
+
+non_usgs_ca_ws |>
+  dplyr::full_join(
+    non_usgs_ca,
+    by = c("location_id" = "usgs_site")
+  ) |> 
+  # print(n = Inf)
+  dplyr::filter(sf::st_is_empty(geometry)) |> 
+  sf::st_drop_geometry()
+```
+
+```{r}
+#| eval: FALSE
+
+DBI::dbWriteTable(
+  conn      = pg,
+  name      = c("firearea", "non_usgs_catchments"),
+  value     = non_usgs_ca_ws |> dplyr::rename(usgs_site = location_id),
+  overwrite = FALSE,
+  append    = TRUE,
+  row.names = FALSE
+)
+```
+
+### rattlesnake creek
+
+```{r}
+#| eval: FALSE
+
+sbc_lter_rat_ws <- firearea::delineate_catchment_streamstats(
+  longitude           = non_usgs[grepl("rattle", non_usgs$site_name, ignore.case = TRUE), ]$longitude,
+  latitude            = non_usgs[grepl("rattle", non_usgs$site_name, ignore.case = TRUE), ]$latitude,
+  state_code          = "ca",
+  location_identifier = "sbc_lter_rat"
+)
+```
+
+```{r}
+#| eval: FALSE
+
+DBI::dbWriteTable(
+  conn      = pg,
+  name      = c("firearea", "non_usgs_catchments"),
+  value     = sbc_lter_rat_ws |> dplyr::rename(usgs_site = location_id),
+  overwrite = FALSE,
+  append    = TRUE,
+  row.names = FALSE
+)
+```
+
+
+## arizona: ss + bmw
+
+```{r}
+#| eval: FALSE
+
+non_usgs_az <- non_usgs |> 
+  dplyr::filter(grepl("syc", site_name, ignore.case = TRUE))
+```
+
+```{r}
+#| eval: FALSE
+
+non_usgs_az_ws <- split(
+  x = non_usgs_az,
+  f = non_usgs_az$site_name
+) |>
+  {\(df) purrr::map_df(.x = df, ~ dcss_possibly(longitude = .x$longitude, latitude = .x$latitude, state_code = "az", location_identifier = .x$usgs_site))}()
+```
+
+
+```{r}
+#| eval: FALSE
+
+DBI::dbWriteTable(
+  conn      = pg,
+  name      = c("firearea", "non_usgs_catchments"),
+  value     = non_usgs_az_ws |> dplyr::rename(usgs_site = location_id),
+  overwrite = FALSE,
+  append    = TRUE,
+  row.names = FALSE
+)
+```
+
+## red butte canyon: the other (not sycr) neon site
+
+```{r}
+#| eval: FALSE
+
+neon_rebu <- firearea::delineate_catchment_streamstats(
+  longitude           = non_usgs[grepl("red", non_usgs$site_name, ignore.case = TRUE), ]$longitude,
+  latitude            = non_usgs[grepl("red", non_usgs$site_name, ignore.case = TRUE), ]$latitude,
+  state_code          = "ut",
+  location_identifier = "neon_rebu"
+)
+```
+
+```{r}
+#| eval: FALSE
+
+DBI::dbWriteTable(
+  conn      = pg,
+  name      = c("firearea", "non_usgs_catchments"),
+  value     = neon_rebu |> dplyr::rename(usgs_site = location_id),
+  overwrite = FALSE,
+  append    = TRUE,
+  row.names = FALSE
+)
+```
+
+## pour points (except Hanan's Bell sites that are already uploaded)
+
+```{r}
+#| eval: FALSE
+
+non_usgs_pour_points <- non_usgs |> 
+  dplyr::filter(
+    grepl("sbc", data_source, ignore.case = TRUE) | grepl("syc|red", site_name, ignore.case = TRUE)
+  ) |>
+  sf::st_as_sf(
+    coords = c("longitude", "latitude"),
+    crs    = 4326
+  )
+```
+
+```{r}
+#| eval: FALSE
+
+DBI::dbWriteTable(
+  conn      = pg,
+  name      = c("firearea", "non_usgs_pour_points"),
+  value     = non_usgs_pour_points,
+  overwrite = FALSE,
+  append    = TRUE,
+  row.names = FALSE
+)
+```
