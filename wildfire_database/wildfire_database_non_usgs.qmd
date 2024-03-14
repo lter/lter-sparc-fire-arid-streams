@@ -30,7 +30,7 @@ dcss_possibly <- purrr::possibly(
 #| eval: FALSE
 
 (
-  non_usgs <- readr::read_csv("non_usgs_data.csv") |> 
+  non_usgs <- readr::read_csv("data/non_usgs_data.csv") |> 
     janitor::clean_names() |> 
     dplyr::filter(!grepl("SYCR_SS", site_name, ignore.case = TRUE)) |> 
     dplyr::mutate(
@@ -73,10 +73,10 @@ dcss_possibly <- purrr::possibly(
 #| eval: FALSE
 
 hanan_bell_pour_points <- dplyr::bind_rows(
-  sf::st_read("~/localRepos/lter-sparc-fire-arid-streams/data/hanan_bell_3_pp.geojson") |> 
+  sf::st_read("data/hanan_bell_3_pp.geojson") |> 
     dplyr::rename(usgs_site = Name) |> 
     dplyr::mutate(usgs_site = "hanan_bell_3"),
-  sf::st_read("~/localRepos/lter-sparc-fire-arid-streams/data/hanan_bell_4_pp.geojson") |> 
+  sf::st_read("data/hanan_bell_4_pp.geojson") |> 
     dplyr::rename(usgs_site = Name) |> 
     dplyr::mutate(usgs_site = "hanan_bell_4")
 ) |> 
@@ -102,10 +102,10 @@ DBI::dbWriteTable(
 #| eval: FALSE
 
 hanan_bell_catchments <- dplyr::bind_rows(
-  sf::st_read("~/localRepos/lter-sparc-fire-arid-streams/data/hanan_bell_3_ws.geojson") |> 
+  sf::st_read("data/hanan_bell_3_ws.geojson") |> 
     dplyr::rename(usgs_site = Name) |> 
     dplyr::mutate(usgs_site = "hanan_bell_3"),
-  sf::st_read("~/localRepos/lter-sparc-fire-arid-streams/data/hanan_bell_4_ws.geojson") |> 
+  sf::st_read("data/hanan_bell_4_ws.geojson") |> 
     dplyr::rename(usgs_site = Name) |> 
     dplyr::mutate(usgs_site = "hanan_bell_4")
 ) |> 
@@ -136,7 +136,6 @@ DBI::dbWriteTable(
 )
 ```
 
-
 ```{r}
 #| eval: FALSE
 
@@ -147,6 +146,7 @@ non_usgs_ca_ws <- split(
   {\(df) purrr::map_df(.x = df, ~ dcss_possibly(longitude = .x$longitude, latitude = .x$latitude, state_code = "ca", location_identifier = .x$usgs_site))}()
 ```
 
+Examine output to identify sites that were not delineated.
 
 ```{r}
 #| eval: FALSE
@@ -175,6 +175,8 @@ DBI::dbWriteTable(
 ```
 
 ### rattlesnake creek
+
+It is generally, though not necessarily the case, that one or more locations among the California sites will not delineate. This seems unrelated to the sites but rather that `Streamstats` on occasion does not find a solution. For sites that were not delineated in the purrr workflow, delineate and add sites to the database individually. The example here is Rattlesnake Creek, which seems to fail often when run as part of a batch, but could be any site.
 
 ```{r}
 #| eval: FALSE
@@ -219,7 +221,6 @@ non_usgs_az_ws <- split(
 ) |>
   {\(df) purrr::map_df(.x = df, ~ dcss_possibly(longitude = .x$longitude, latitude = .x$latitude, state_code = "az", location_identifier = .x$usgs_site))}()
 ```
-
 
 ```{r}
 #| eval: FALSE
@@ -272,6 +273,10 @@ non_usgs_pour_points <- non_usgs |>
   sf::st_as_sf(
     coords = c("longitude", "latitude"),
     crs    = 4326
+  ) |> 
+  dplyr::select(
+    usgs_site,
+    geometry
   )
 ```
 
