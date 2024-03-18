@@ -292,3 +292,60 @@ DBI::dbWriteTable(
   row.names = FALSE
 )
 ```
+
+
+# database configurations ------------------------------------------------------
+
+```{r}
+#| eval: FALSE
+
+# run once after table creation
+
+## add primary key
+
+DBI::dbExecute(
+  conn      = pg,
+  statement = "ALTER TABLE firearea.non_usgs_catchments ADD PRIMARY KEY (usgs_site) ;"
+)
+
+DBI::dbExecute(
+  conn      = pg,
+  statement = "ALTER TABLE firearea.non_usgs_pour_points ADD PRIMARY KEY (usgs_site) ;"
+)
+
+## add index on geometry
+
+DBI::dbExecute(
+  conn      = pg,
+  statement = "CREATE INDEX non_usgs_catchments_geometry_idx ON firearea.non_usgs_catchments USING GIST (geometry) ;"
+)
+
+DBI::dbExecute(
+  conn      = pg,
+  statement = "CREATE INDEX non_usgs_pour_points_geometry_idx ON firearea.non_usgs_pour_points USING GIST (geometry) ;"
+)
+
+## designate geometry type and crs
+
+DBI::dbExecute(
+  conn      = pg,
+  statement = "
+  ALTER TABLE firearea.non_usgs_catchments
+    ALTER COLUMN geometry
+    TYPE geometry(geometry, 4326)
+    USING ST_SetSRID(geometry, 4326)
+  ;
+  "
+)
+
+DBI::dbExecute(
+  conn      = pg,
+  statement = "
+  ALTER TABLE firearea.non_usgs_pour_points
+    ALTER COLUMN geometry
+    TYPE geometry(geometry, 4326)
+    USING ST_SetSRID(geometry, 4326)
+  ;
+  "
+)
+```
