@@ -348,4 +348,34 @@ DBI::dbExecute(
   ;
   "
 )
+
+## fix ring self-intersection
+
+DBI::dbExecute(
+  conn      = pg,
+  statement = "
+  UPDATE firearea.non_usgs_catchments
+  SET geometry = st_makevalid(geometry)
+  WHERE NOT st_isvalid(geometry)
+  ;
+  "
+)
+
+```
+
+# add non_usgs_catchments to ecoregion_catchments ------------------------------
+
+```{r}
+#| eval: FALSE
+
+DBI::dbExecute(
+  conn      = pg,
+  statement = "
+  INSERT INTO firearea.ecoregion_catchments (usgs_site, geometry)
+  SELECT usgs_site, geometry FROM firearea.non_usgs_catchments
+  WHERE usgs_site !~* 'ono|dev'
+  ;
+  "
+)
+
 ```

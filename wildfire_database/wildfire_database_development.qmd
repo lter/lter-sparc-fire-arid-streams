@@ -331,6 +331,8 @@ FROM (
 ) AS intersection
 WHERE intersection.ecoregion_pct >= 75
 ;
+
+ALTER TABLE firearea.ecoregion_catchments ADD PRIMARY KEY (usgs_site) ;
 ```
 
 
