@@ -63,6 +63,9 @@ plot(sf_file["usgs_site"], axes = T, add = T)
             # Extract ----
 ## -------------------------------- ##
 
+# No scale factor used
+# Valid range is >= -32767 and <= 32767
+
 # Actually extract elevation data
 elev_v1 <- exactextractr::exact_extract(x = elev_rast, y = sf_file,
                                         include_cols = group_cols,

@@ -77,6 +77,10 @@ plot(sf_file["usgs_site"], axes = T, add = T)
             # Extract ----
 ## -------------------------------- ##
 
+# Define scale factor and fill value
+scale_factor <- 0.0001
+# Fill values are 32761-32767
+
 # Create an empty list for storing extracted data
 out_list <- list()
 
@@ -104,12 +108,10 @@ for(focal_layer in wanted_layers){
     # Filter to only values within allowed range
     dplyr::filter(value >= 0 & value <= 30000) %>% 
     # Apply scaling factor
-    dplyr::mutate(value_fix = value * 0.0001) %>% 
-    # Drop unwanted columns
-    dplyr::select(-value, -coverage_fraction) %>% 
+    dplyr::mutate(value_scaled = value * scale_factor) %>% 
     # Summarize across pixels within time
     dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>% 
-    dplyr::summarize(value_avg = mean(value_fix, na.rm = T)) %>% 
+    dplyr::summarize(value_avg = mean(value_scaled, na.rm = T)) %>% 
     dplyr::ungroup() %>%
     # Add a column for the layer name and layer time
     dplyr::mutate(time = layer_time, 

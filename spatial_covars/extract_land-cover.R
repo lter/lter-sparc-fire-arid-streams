@@ -81,6 +81,9 @@ plot(sf_file["usgs_site"], axes = T, add = T)
           # Extract ----
 ## -------------------------------- ##
 
+# Define scale factor and fill value
+fill_value <- 255
+
 # Create an empty list for storing extracted data
 out_list <- list()
 
@@ -105,6 +108,8 @@ for(focal_layer in wanted_layers){
     purrr::list_rbind(x = .) %>%
     # Filter out NAs
     dplyr::filter(!is.na(value)) %>%
+    # Filter out fill values
+    dplyr::filter(value != fill_value) %>% 
     # Count number of pixels per land cover type
     dplyr::group_by(dplyr::across(dplyr::all_of(c(group_cols, "value")))) %>% 
     dplyr::summarize(pixel_ct = dplyr::n()) %>% 
