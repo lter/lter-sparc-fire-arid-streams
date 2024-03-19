@@ -76,6 +76,10 @@ plot(sf_file["usgs_site"], axes = T, add = T)
              # Extract ----
 ## -------------------------------- ##
 
+# Define scale factor and fill value
+scale_factor <- 0.02
+fill_value <- 0
+
 # Create an empty list for storing extracted data
 out_list <- list()
 
@@ -109,9 +113,13 @@ for(span_nc in temp_spans){
       purrr::list_rbind(x = .) %>%
       # Filter out NAs
       dplyr::filter(!is.na(value)) %>%
+      # Filter out fill values
+      dplyr::filter(value != fill_value) %>% 
+      # Apply scaling factor
+      dplyr::mutate(value_scaled = value * scale_factor) %>% 
       # Summarize across pixels within time
       dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>% 
-      dplyr::summarize(value_avg = mean(value, na.rm = T)) %>% 
+      dplyr::summarize(value_avg = mean(value_scaled, na.rm = T)) %>% 
       dplyr::ungroup() %>%
       # Add a column timing
       dplyr::mutate(time = terra::time(span_rast[[focal_layer]]),
