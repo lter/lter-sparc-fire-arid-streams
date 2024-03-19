@@ -116,10 +116,12 @@ for(span_nc in temp_spans){
       # Filter out fill values
       dplyr::filter(value != fill_value) %>% 
       # Apply scaling factor
-      dplyr::mutate(value_scaled = value * scale_factor) %>% 
+      ## NOTE: commenting out because it makes unreasinable numbers
+      # dplyr::mutate(value_scaled = value * scale_factor) %>%
       # Summarize across pixels within time
       dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>% 
-      dplyr::summarize(value_avg = mean(value_scaled, na.rm = T)) %>% 
+      dplyr::summarize(value_avg = mean(value, na.rm = T)) %>% 
+      # dplyr::summarize(value_avg = mean(value_scaled, na.rm = T)) %>% 
       dplyr::ungroup() %>%
       # Add a column timing
       dplyr::mutate(time = terra::time(span_rast[[focal_layer]]),
