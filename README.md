@@ -10,8 +10,6 @@
 
 ## Script Explanations
 
-- `extract_...` - Extract climate data (for the variable defined in the `...` part of the script name) within site polygons (provided as a GeoJSON)
-
 - In the `models` folder, the following STAN scripts are available for progressively built out model structures:
 1. `STAN_lm_template.stan` - Provides a basic linear model with the structure of y = mx + b.
 2. `STAN_lm_prepost_template.stan` - Splits observations into pre- and post-fire and estimates CQ slopes before and after.
