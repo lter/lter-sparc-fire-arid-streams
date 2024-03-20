@@ -41,7 +41,7 @@ rm(list = ls()); gc()
 
 # Load in the catchment delineations (stored as GeoJSON)
 sf_file <- geojsonio::geojson_read(x = file.path(path, "catchment-geojsons",
-                                                 "four_corners_catchments.geojson"),
+                                                 "aridland_fire_catchments.geojson"),
                                    what = "sp") %>%
   ## Convert to simple features object
   sf::st_as_sf(x = .)
