@@ -85,10 +85,10 @@ elev_v1 <- exactextractr::exact_extract(x = elev_rast, y = sf_file,
 elev_v2 <- elev_v1 %>% 
   # Summarize within existing groups
   dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
-  dplyr::summarize(elev_avg = mean(value, na.rm = T),
-                   elev_median = median(value, na.rm = T),
-                   elev_min = min(value, na.rm = T),
-                   elev_max = max(value, na.rm = T)) %>%
+  dplyr::summarize(elev_avg_m = mean(value, na.rm = T),
+                   elev_median_m = median(value, na.rm = T),
+                   elev_min_m = min(value, na.rm = T),
+                   elev_max_m = max(value, na.rm = T)) %>%
   dplyr::ungroup()
 
 # Check structure
