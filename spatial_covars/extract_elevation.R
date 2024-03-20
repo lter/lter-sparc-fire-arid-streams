@@ -143,35 +143,20 @@ slope_v3 <- slope_list %>%
   purrr::list_rbind(x = .) %>% 
   # Within catchments, summarize various aspects of slope
   dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
-  # dplyr::summarize(elev_avg = mean(value, na.rm = T),
-  #                  elev_median = median(value, na.rm = T),
-  #                  elev_min = min(value, na.rm = T),
-  #                  elev_max = max(value, na.rm = T)) %>%
-  dplyr::summarize(elev_avg = mean(value, na.rm = T),
-                   elev_median = median(value, na.rm = T),
-                   elev_min = min(value, na.rm = T),
-                   elev_max = max(value, na.rm = T)) %>%
+  dplyr::summarize(slope_avg_deg = spatialEco::mean_angle(slope, angle = "degree"),
+                   slope_median_deg = median(slope, na.rm = T),
+                   slope_min_deg = min(slope, na.rm = T),
+                   slope_max_deg = max(slope, na.rm = T)) %>%
   dplyr::ungroup()
 
-      dplyr::summarize(basin_slope_median_degree = stats::median(slope, na.rm = T),
-                       basin_slope_mean_degree = spatialEco::mean_angle(slope, angle = "degree"),
-                       basin_slope_min_degree = min(slope, na.rm = T),
-                       basin_slope_max_degree = max(slope, na.rm = T))
-    
-
-# Unlist into one big dataframe
-slope_actual <- slope_list %>% purrr::map_dfr(.f = select, everything())
-
-# Glimpse this
-dplyr::glimpse(slope_actual)
-
-
+# Check structure of that output
+dplyr::glimpse(slope_v3)
 
 ## -------------------------------- ##
              # Export ----
 ## -------------------------------- ##
 
-# Pick final object name
+# Pick final object names
 final_elev <- elev_v2
 
 # Create folder to export to
