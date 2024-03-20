@@ -128,8 +128,17 @@ for(k in 1:nrow(sf_file)){
     # Attach each piece of ID info to the slope information
     for(gp in group_cols){ slope_v2[[gp]] <- catch_id[[gp]] }
     
+    # Within catchments, summarize various aspects of slope
+    slope_v3 <- slope_v2 %>% 
+      dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
+      dplyr::summarize(slope_avg_deg = spatialEco::mean_angle(slope, angle = "degree"),
+                       slope_median_deg = median(slope, na.rm = T),
+                       slope_min_deg = min(slope, na.rm = T),
+                       slope_max_deg = max(slope, na.rm = T)) %>%
+      dplyr::ungroup()
+    
     # Add to the list of slope information
-    slope_list[[k]] <- slope_v2 }
+    slope_list[[k]] <- slope_v3 }
   
 } # Close loop
 
@@ -137,20 +146,13 @@ for(k in 1:nrow(sf_file)){
         # Wrangle Slope ----
 ## -------------------------------- ##
 
-# Wrangle the extracted slope information
-slope_v3 <- slope_list %>% 
+# Wrangle the extracted/summarized slope information
+slope_v4 <- slope_list %>% 
   # Unlist the list
-  purrr::list_rbind(x = .) %>% 
-  # Within catchments, summarize various aspects of slope
-  dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
-  dplyr::summarize(slope_avg_deg = spatialEco::mean_angle(slope, angle = "degree"),
-                   slope_median_deg = median(slope, na.rm = T),
-                   slope_min_deg = min(slope, na.rm = T),
-                   slope_max_deg = max(slope, na.rm = T)) %>%
-  dplyr::ungroup()
+  purrr::list_rbind(x = .)
 
 # Check structure of that output
-dplyr::glimpse(slope_v3)
+dplyr::glimpse(slope_v4)
 
 ## -------------------------------- ##
              # Export ----
