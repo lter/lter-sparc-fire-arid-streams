@@ -17,7 +17,7 @@
 
 # Read needed libraries
 # install.packages("librarian")
-librarian::shelf(tidyverse, sf, ncdf4, terra, exactextractr, geojsonio, scicomptools, googledrive)
+librarian::shelf(tidyverse, sf, ncdf4, terra, exactextractr, spatialEco, geojsonio, scicomptools, googledrive)
 
 # Silence `dplyr::summarize` preemptively
 options(dplyr.summarise.inform = FALSE)
