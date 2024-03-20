@@ -155,11 +155,22 @@ slope_v4 <- slope_list %>%
 dplyr::glimpse(slope_v4)
 
 ## -------------------------------- ##
+  # Combine Elevation & Slope ----
+## -------------------------------- ##
+
+# Combine the two dataframes
+dem_out <- dplyr::full_join(x = elev_v2, y = slope_v4,
+                            by = group_cols)
+
+# Check structure
+dplyr::glimpse(dem_out)
+
+## -------------------------------- ##
              # Export ----
 ## -------------------------------- ##
 
-# Pick final object names
-final_elev <- elev_v2
+# Pick final object name
+final_elev <- dem_out
 
 # Create folder to export to
 dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
