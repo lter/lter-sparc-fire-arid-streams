@@ -138,7 +138,7 @@ dplyr::glimpse(lc_v1)
 # Perform needed wrangling
 lc_v2 <- lc_v1 %>% 
   # Move the site info columns to the left
-  dplyr::relocate(usgs_site:area_km2, .before = type) %>% 
+  dplyr::relocate(dplyr::all_of(group_cols), .before = type) %>% 
   # Clean up layer type column
   dplyr::mutate(type = gsub(pattern = "_[[:digit:]]{1,2}", replacement = "", x = type)) %>% 
   # Get a better variant of the "type" column that is less ambiguous
@@ -223,7 +223,7 @@ lc_v2 <- lc_v1 %>%
     lc_system == "PFT" & value == "11" ~ "barren",
     T ~ 'x'), .before = value) %>% 
   # Calculate total pixels per LC system
-  dplyr::group_by(usgs_site, area_m2, area_km2, time, lc_system) %>% 
+  dplyr::group_by(dplyr::across(dplyr::all_of(group_cols)), time, lc_system) %>% 
   dplyr::mutate(total_pixels = sum(pixel_ct, na.rm = T)) %>% 
   dplyr::ungroup() %>% 
   # Express 'pixel count' as a percent
