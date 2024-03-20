@@ -101,51 +101,63 @@ dplyr::glimpse(elev_v2)
 # Create an empty list to store results
 slope_list <- list()
 
-# For each watershed shapefile...
-for (i in 1:nrow(sheds)){
+# For each catchment polygon:
+for(k in 1:nrow(sf_file)){
   
   # Starting message
-  message("Extracting slope for watershed ", i, " (", (nrow(sheds) - i), " remaining)")
+  message("Extracting slope for catchment ", k, " (", (nrow(sf_file) - k), " remaining)")
   
   # Crop and mask the elevation raster to each shapefile
-  cropped_raster <- terra::crop(x = elev_raw, y = terra::vect(sheds[i,]), mask = TRUE)
+  elev_crop <- terra::crop(x = elev_rast, y = terra::vect(sf_file[k,]), mask = T)
   
   # Calculate the slopes
-  slope_raster <- terra::terrain(cropped_raster, v = "slope", unit = "degrees")
+  slope_rast <- terra::terrain(elev_crop, v = "slope", unit = "degrees")
   
   # Extract the slopes into a dataframe
-  slope_dataframe <- terra::as.data.frame(slope_raster)
+  slope_v1 <- terra::as.data.frame(slope_rast)
   
-  # Create a dummy dataframe if the extracted dataframe has 0 rows
-  if (nrow(slope_dataframe) == 0){
-    LTER_Shapefile_slope_dataframe <- data.frame(LTER = sheds[i,]$LTER,
-                                                 Shapefile_Name = sheds[i,]$Shapefile_Name,
-                                                 basin_slope_median_degree = NA,
-                                                 basin_slope_mean_degree = NA,
-                                                 basin_slope_min_degree = NA,
-                                                 basin_slope_max_degree = NA)
+  # If the dataframe is NOT empty...
+  if(nrow(slope_v1) != 0){
     
-    # Save the dataframe into our list
-    slope_list[[i]] <- LTER_Shapefile_slope_dataframe
+    # Duplicate the data object
+    slope_v2 <- slope_v1
     
-    # If the dataframe is NOT empty...
-  } else {
-    # Calculate slope statistics
-    LTER_Shapefile_slope_dataframe <- slope_dataframe %>%
-      # Keep LTER/shapefile name for summarizing and joining later
-      dplyr::mutate(LTER = sheds[i,]$LTER,
-                    Shapefile_Name = sheds[i,]$Shapefile_Name) %>%
-      # Calculate slope statistics within those groups
-      dplyr::group_by(LTER, Shapefile_Name) %>%
+    # Get a non-spatial version of catchment identifying information
+    catch_id <- sf::st_drop_geometry(sf_file[k,])
+    
+    # Attach each piece of ID info to the slope information
+    for(gp in group_cols){ slope_v2[[gp]] <- catch_id[[gp]] }
+    
+    # Add to the list of slope information
+    slope_list[[k]] <- slope_v2 }
+  
+} # Close loop
+
+## -------------------------------- ##
+        # Wrangle Slope ----
+## -------------------------------- ##
+
+# Wrangle the extracted slope information
+slope_v3 <- slope_list %>% 
+  # Unlist the list
+  purrr::list_rbind(x = .) %>% 
+  # Within catchments, summarize various aspects of slope
+  dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
+  # dplyr::summarize(elev_avg = mean(value, na.rm = T),
+  #                  elev_median = median(value, na.rm = T),
+  #                  elev_min = min(value, na.rm = T),
+  #                  elev_max = max(value, na.rm = T)) %>%
+  dplyr::summarize(elev_avg = mean(value, na.rm = T),
+                   elev_median = median(value, na.rm = T),
+                   elev_min = min(value, na.rm = T),
+                   elev_max = max(value, na.rm = T)) %>%
+  dplyr::ungroup()
+
       dplyr::summarize(basin_slope_median_degree = stats::median(slope, na.rm = T),
                        basin_slope_mean_degree = spatialEco::mean_angle(slope, angle = "degree"),
                        basin_slope_min_degree = min(slope, na.rm = T),
                        basin_slope_max_degree = max(slope, na.rm = T))
     
-    # Save the dataframe into our list
-    slope_list[[i]] <- LTER_Shapefile_slope_dataframe }
-  
-} # Close loop
 
 # Unlist into one big dataframe
 slope_actual <- slope_list %>% purrr::map_dfr(.f = select, everything())
