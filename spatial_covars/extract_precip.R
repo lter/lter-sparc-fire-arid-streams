@@ -147,7 +147,7 @@ dplyr::glimpse(precip_v1)
 # Do needed wrangling
 precip_v2 <- precip_v1 %>% 
   # Reorder columns
-  dplyr::relocate(usgs_site:area_km2, .before = year) %>% 
+  dplyr::relocate(dplyr::all_of(group_cols), .before = year) %>% 
   # Rename the value column more intuitively
   dplyr::rename(precip_mm = value_avg)
 
