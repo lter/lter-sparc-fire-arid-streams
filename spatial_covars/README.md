@@ -8,3 +8,4 @@ Note that _these scripts take a <u>long</u> time to run on a standard computer._
 
 - `extract_...` - Extract climate data (for the variable defined in the `...` part of the script name) within site polygons (provided as a GeoJSON)
     - Data product name and information link is provided in the first few lines of the respective script
+    - Note that `extract-elevation.R` handles elevation _and_ basin slope information as both require a DEM (digital elevation model)
