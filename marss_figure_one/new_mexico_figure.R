@@ -228,7 +228,8 @@ nm_y_breaks <- seq(nm_south + 0.05, nm_north - 0.05, by = 0.1)
       linewidth = 2,
       fill      = NA
     )
-  )
+  ) +
+  ggspatial::annotation_scale(location = "tr")
 )
 
 # new mexico combined map ------------------------------------------------------

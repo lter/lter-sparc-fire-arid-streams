@@ -242,15 +242,15 @@ ca_y_breaks <- seq(ca_south + 0.05, ca_north - 0.05, by = 0.1)
       "catchment" = NA,
       "fire"      = fires_color,
       "outlet"    = NA
-    ),
-    guide  = ggplot2::guide_legend(
-      override.aes = list(
-        size     = c(NA, NA, NA),
-        shape    = c(NA, NA, 16),
-        linetype = c(1, 1, 0),
-        fill     = c(NA, "red", NA)
-      )
-    )
+    ) #,
+    # guide  = ggplot2::guide_legend(
+    #   override.aes = list(
+    #     size     = c(NA, NA, NA),
+    #     shape    = c(NA, NA, 16),
+    #     linetype = c(1, 1, 0),
+    #     fill     = c(NA, "red", NA)
+    #   )
+    # )
   ) +
   ggplot2::scale_x_continuous(breaks = ca_x_breaks, expand = c(0, 0)) +
   ggplot2::scale_y_continuous(breaks = ca_y_breaks, expand = c(0, 0)) +
@@ -265,7 +265,8 @@ ca_y_breaks <- seq(ca_south + 0.05, ca_north - 0.05, by = 0.1)
       linewidth = 2,
       fill      = NA
     )
-  )
+  ) +
+  ggspatial::annotation_scale(location = "tr")
 )
 
 # california combined map ------------------------------------------------------
