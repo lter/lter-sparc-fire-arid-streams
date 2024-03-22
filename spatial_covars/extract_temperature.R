@@ -31,6 +31,10 @@ rm(list = ls()); gc()
                                                       "lter-sparc-fire-arid"),
                               local_path = getwd()))
 
+# Create needed folders
+dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
+dir.create(path = file.path(path, "extracted-data", "temperature_subs"), showWarnings = F)
+
 ## -------------------------------- ##
         # Extraction Prep ----
 ## -------------------------------- ##
@@ -76,6 +80,9 @@ plot(sf_file["usgs_site"], axes = T, add = T)
              # Extract ----
 ## -------------------------------- ##
 
+# If data for a particular day has already been extracted, should it be updated?
+re_extract <- FALSE
+
 # Define scale factor and fill value
 scale_factor <- 0.02
 fill_value <- 0
@@ -101,37 +108,57 @@ for(span_nc in temp_spans){
   # Loop across days
   for(k in 1:length(span_names)){
     
-    # Identify focal layer name
-    focal_layer <- sort(span_names)[k]
+    # Define a path object for this replicate of information
+    file_k <- file.path(path, "extracted-data", "temperature_subs", paste0(span_nc, "_", k, ".csv"))
     
-    # Strip out the precipitation of that day
-    small_out_df <- exactextractr::exact_extract(x = span_rast[[focal_layer]],
-                                                 y = sf_file,
-                                                 include_cols = group_cols,
-                                                 progress = F) %>%
-      # Above returns a list so switch it to a dataframe
-      purrr::list_rbind(x = .) %>%
-      # Filter out NAs
-      dplyr::filter(!is.na(value)) %>%
-      # Filter out fill values
-      dplyr::filter(value != fill_value) %>% 
-      # Apply scaling factor
-      ## NOTE: commenting out because it makes unreasinable numbers
-      # dplyr::mutate(value_scaled = value * scale_factor) %>%
-      # Summarize across pixels within time
-      dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>% 
-      dplyr::summarize(value_avg = mean(value, na.rm = T)) %>% 
-      # dplyr::summarize(value_avg = mean(value_scaled, na.rm = T)) %>% 
-      dplyr::ungroup() %>%
-      # Add a column timing
-      dplyr::mutate(time = terra::time(span_rast[[focal_layer]]),
-                    .before = value_avg)
+    # If that file exists already and `re_extract` is *not* TRUE:
+    if(file.exists(file_k) == TRUE & re_extract == FALSE){
+      # Just read it in and add to list
+      out_list[[paste0(span_nc, "_", k)]] <- read.csv(file = file_k)
+      
+      # Message completion
+      message("Layer ", k, " (of ", length(span_names), ") already exists and has been read in")
+    } # Close skipping re-extraction conditional
     
-    # Add to list
-    out_list[[paste0(span_nc, "_", k)]] <- small_out_df
+    # If that file doesn't exist OR it does but re-extraction is desired:
+    if(file.exists(file_k) != TRUE |
+       file.exists(file_k) == TRUE & re_extract == TRUE){
+      
+      # Identify focal layer name
+      focal_layer <- sort(span_names)[k]
     
-    # Success message
-    message("Processing complete for layer ", k, " of ", length(span_names)) 
+      # Strip out the precipitation of that day
+      small_out_df <- exactextractr::exact_extract(x = span_rast[[focal_layer]],
+                                                   y = sf_file,
+                                                   include_cols = group_cols,
+                                                   progress = F) %>%
+        # Above returns a list so switch it to a dataframe
+        purrr::list_rbind(x = .) %>%
+        # Filter out NAs
+        dplyr::filter(!is.na(value)) %>%
+        # Filter out fill values
+        dplyr::filter(value != fill_value) %>% 
+        # Apply scaling factor
+        ## NOTE: commenting out because it makes unreasinable numbers
+        # dplyr::mutate(value_scaled = value * scale_factor) %>%
+        # Summarize across pixels within time
+        dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>% 
+        dplyr::summarize(value_avg = mean(value, na.rm = T)) %>% 
+        # dplyr::summarize(value_avg = mean(value_scaled, na.rm = T)) %>% 
+        dplyr::ungroup() %>%
+        # Add a column timing
+        dplyr::mutate(time = terra::time(span_rast[[focal_layer]]),
+                      .before = value_avg)
+      
+      # Export to make it easier to re-run this loop in future if it fails partway through
+      write.csv(x = small_out_df, na = "", row.names = F, file = file_k)
+      
+      # Add to list
+      out_list[[paste0(span_nc, "_", k)]] <- small_out_df
+      
+      # Success message
+      message("Processing complete for layer ", k, " of ", length(span_names))
+    } # Close extraction conditional
   } # Close day loop
 } # Close year loop
 
@@ -173,9 +200,6 @@ dplyr::glimpse(temp_v2)
 
 # Pick final object name
 final_temp <- temp_v2
-
-# Create folder to export to
-dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
 
 # Define file path for CSV
 temp_path <- file.path(path, "extracted-data", "fire-arid_temperature.csv")
