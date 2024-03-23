@@ -85,7 +85,7 @@ source("plot_legends.R")
       plot       = plot_with_ppt,
       label      = "Latitude",
       vpadding   = grid::unit(0, "lines"),
-      y          = 7.000,
+      y          = 6.500,
       x          = 0.015,
       vjust      = 0.100,
       hjust      = 0.100,
@@ -136,16 +136,16 @@ cowplot::draw_line(
 ) +
 cowplot::draw_text(
   text  = "Mediterranean",
-  x     = 0.060,
-  y     = 0.815,
+  x     = 0.075,
+  y     = 0.850,
   size  = 12,
   hjust = 0.0,
   vjust = 0.0
 ) +
 cowplot::draw_text(
   text  = "monsoonal",
-  x     = 0.060,
-  y     = 0.495,
+  x     = 0.075,
+  y     = 0.545,
   size  = 12,
   hjust = 0.0,
   vjust = 0.0
@@ -157,4 +157,9 @@ cowplot::draw_grob(
   nm_bound
 )
 
-ggplot2::ggsave("/tmp/stacked.jpg")
+ggplot2::ggsave(
+  filename = "/tmp/stacked.jpg",
+  width    = 9,
+  height   = 7,
+  units    = c("in")
+)
