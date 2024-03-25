@@ -142,7 +142,7 @@ dplyr::glimpse(gpp_v1)
 # Do needed wrangling
 gpp_v2 <- gpp_v1 %>% 
   # Move the site info columns to the left
-  dplyr::relocate(usgs_site:area_km2, .before = time) %>% 
+  dplyr::relocate(dplyr::all_of(group_cols), .before = time) %>% 
   # Rename extracted information
   dplyr::rename(gpp_kg_C_m2 = value_avg) %>% 
   # Separate time into useful subcomponents
