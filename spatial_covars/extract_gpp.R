@@ -53,7 +53,7 @@ plot(sf_file["usgs_site"], axes = T)
 
 # Read in the netCDF file and examine for context on units / etc.
 gpp_nc <- ncdf4::nc_open(filename = file.path(path, "raw-spatial-data", "modis_gpp", 
-                                               "MOD17A2H.061_500m_aid0001.nc"))
+                                               "MOD17A2HGF.061_500m_aid0001.nc"))
 
 # Look at this
 print(gpp_nc)
@@ -61,7 +61,7 @@ print(gpp_nc)
 # Read it as a raster too
 ## This format is more easily manipulable for our purposes
 gpp_rast <- terra::rast(x = file.path(path, "raw-spatial-data", "modis_gpp", 
-                                      "MOD17A2H.061_500m_aid0001.nc"))
+                                      "MOD17A2HGF.061_500m_aid0001.nc"))
 
 # Check names
 names(gpp_rast)
