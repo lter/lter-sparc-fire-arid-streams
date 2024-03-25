@@ -31,6 +31,9 @@ rm(list = ls()); gc()
                                                       "lter-sparc-fire-arid"),
                               local_path = getwd()))
 
+# Create needed folders
+dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
+
 ## -------------------------------- ##
         # Extraction Prep ----
 ## -------------------------------- ##
@@ -85,7 +88,10 @@ scale_factor <- 0.0001
 out_list <- list()
 
 # Identify the names of the layers we want to extract
-(wanted_layers <- setdiff(x = names(gpp_rast), y = paste0("Psn_QC_500m_", 1:133)))
+wanted_layers <- setdiff(x = names(gpp_rast), y = paste0("Psn_QC_500m_", 1:10^6))
+
+# Double check that leaves only GPP layers
+unique(stringr::str_sub(string = wanted_layers, start = 1, end = 8))
 
 # Loop across layers extracting each as we go
 for(focal_layer in wanted_layers){
@@ -161,9 +167,6 @@ dplyr::glimpse(gpp_v2)
 
 # Pick final object name
 final_gpp <- gpp_v2
-
-# Create folder to export to
-dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
 
 # Define file path for CSV
 gpp_path <- file.path(path, "extracted-data", "fire-arid_gpp.csv")
