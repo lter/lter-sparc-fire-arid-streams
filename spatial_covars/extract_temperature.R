@@ -139,7 +139,7 @@ for(span_nc in temp_spans){
         # Filter out fill values
         dplyr::filter(value != fill_value) %>% 
         # Apply scaling factor
-        ## NOTE: commenting out because it makes unreasinable numbers
+        ## NOTE: commenting out because it makes unreasonable numbers
         # dplyr::mutate(value_scaled = value * scale_factor) %>%
         # Summarize across pixels within time
         dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>% 
@@ -167,7 +167,13 @@ for(span_nc in temp_spans){
 ## -------------------------------- ##
 
 # Unlist the output of that loop for easier wrangling
-temp_v1 <- purrr::list_rbind(x = out_list)
+temp_v1 <- out_list %>% 
+  # Make sure all columns are in the right class
+  purrr::map(.x = ., .f = dplyr::mutate,
+             usgs_site = as.character(usgs_site),
+             time = as.character(time)) %>% 
+  # Actually flatten the list
+  purrr::list_rbind(x = .)
 
 # Check structure
 dplyr::glimpse(temp_v1)
@@ -175,7 +181,7 @@ dplyr::glimpse(temp_v1)
 # Do needed wrangling
 temp_v2 <- temp_v1 %>% 
   # Move the site info columns to the left
-  dplyr::relocate(usgs_site:area_km2, .before = time) %>% 
+  dplyr::relocate(dplyr::all_of(group_cols), .before = time) %>% 
   # Rename extracted information
   dplyr::rename(temp_K = value_avg) %>% 
   # Separate time into useful subcomponents
