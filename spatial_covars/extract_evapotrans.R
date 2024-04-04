@@ -78,18 +78,18 @@ plot(et_rast$PET_500m_1, axes = T, reset = F)
 plot(sf_file["usgs_site"], axes = T, add = T)
 
 ## -------------------------------- ##
-# Extract ----
+            # Extract ----
 ## -------------------------------- ##
 
 # Define scale factor and fill value
-scale_factor <- 0.0001
+scale_factor <- 0.1
 # Fill values are 32761-32767
 
 # Create an empty list for storing extracted data
 out_list <- list()
 
 # Identify the names of the layers we want to extract
-wanted_layers <- setdiff(x = names(et_rast), y = paste0("et_QC_500m_", 1:10^6))
+wanted_layers <- setdiff(x = names(et_rast), y = paste0("ET_QC_500m_", 1:10^5))
 
 # Double check that leaves only et layers
 unique(stringr::str_sub(string = wanted_layers, start = 1, end = 8))
@@ -131,7 +131,7 @@ for(focal_layer in wanted_layers){
   message("Processing complete for ", focal_layer, " at ", layer_time) }
 
 ## -------------------------------- ##
-# Wrangle ----
+            # Wrangle ----
 ## -------------------------------- ##
 
 # Unlist the output of that loop for easier wrangling
@@ -145,7 +145,7 @@ et_v2 <- et_v1 %>%
   # Move the site info columns to the left
   dplyr::relocate(dplyr::all_of(group_cols), .before = time) %>% 
   # Rename extracted information
-  dplyr::rename(et_kg_C_m2_yr = value_avg) %>% 
+  dplyr::rename(pet_kg_m2_8day = value_avg) %>% 
   # Separate time into useful subcomponents
   dplyr::mutate(year = as.numeric(stringr::str_sub(string = time, start = 1, end = 4)),
                 month = as.numeric(stringr::str_sub(string = time, start = 6, end = 7)),
@@ -163,7 +163,7 @@ et_v2 <- et_v1 %>%
 dplyr::glimpse(et_v2)
 
 ## -------------------------------- ##
-# Export ----
+            # Export ----
 ## -------------------------------- ##
 
 # Pick final object name
