@@ -5,14 +5,14 @@
 
 # Purpose:
 ## Using the provided shapefile(s), extract the following data:
-## NET PRIMARY PRODUCTIVITY (NPP)
+## POTENTIAL EVAPOTRANSPIRATION (PET)
 
 # Data Source
 ## MODIS/Aqua Net Primary Production Gap-Filled Yearly L4 Global 500 m SIN Grid
-## https://lpdaac.usgs.gov/products/myd17a3hgfv061/
+## https://lpdaac.usgs.gov/products/mod16a2gfv061/
 
 ## -------------------------------- ##
-# Housekeeping ----
+          # Housekeeping ----
 ## -------------------------------- ##
 
 # Read needed libraries
@@ -35,7 +35,7 @@ rm(list = ls()); gc()
 dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
 
 ## -------------------------------- ##
-# Extraction Prep ----
+        # Extraction Prep ----
 ## -------------------------------- ##
 
 # Load in the catchment delineations (stored as GeoJSON)
@@ -54,26 +54,27 @@ plot(sf_file["usgs_site"], axes = T)
 # Identify the grouping columns
 (group_cols <- c(setdiff(x = names(sf_file), y = c("geometry", "geom"))))
 
+# Define file name for desired PET NetCDF
+nc_name <- "MOD16A2.061_500m_aid0001.nc"
+
 # Read in the netCDF file and examine for context on units / etc.
-npp_nc <- ncdf4::nc_open(filename = file.path(path, "raw-spatial-data", "modis_npp", 
-                                              "MYD17A3HGF.061_500m_aid0001.nc"))
+et_nc <- ncdf4::nc_open(filename = file.path(path, "raw-spatial-data", "modis_pet", nc_name))
 
 # Look at this
-print(npp_nc)
+print(et_nc)
 
 # Read it as a raster too
 ## This format is more easily manipulable for our purposes
-npp_rast <- terra::rast(x = file.path(path, "raw-spatial-data", "modis_npp", 
-                                      "MYD17A3HGF.061_500m_aid0001.nc"))
+et_rast <- terra::rast(x = file.path(path, "raw-spatial-data", "modis_pet", nc_name))
 
 # Check names
-names(npp_rast)
+names(et_rast)
 
 # Check out just one of those
-print(npp_rast$Npp_500m_1)
+print(et_rast$PET_500m_1)
 
 # Visual check for overlap
-plot(npp_rast$Npp_500m_1, axes = T, reset = F)
+plot(et_rast$PET_500m_1, axes = T, reset = F)
 plot(sf_file["usgs_site"], axes = T, add = T)
 
 ## -------------------------------- ##
@@ -88,9 +89,9 @@ scale_factor <- 0.0001
 out_list <- list()
 
 # Identify the names of the layers we want to extract
-wanted_layers <- setdiff(x = names(npp_rast), y = paste0("Npp_QC_500m_", 1:10^6))
+wanted_layers <- setdiff(x = names(et_rast), y = paste0("et_QC_500m_", 1:10^6))
 
-# Double check that leaves only npp layers
+# Double check that leaves only et layers
 unique(stringr::str_sub(string = wanted_layers, start = 1, end = 8))
 
 # Loop across layers extracting each as we go
@@ -100,10 +101,10 @@ for(focal_layer in wanted_layers){
   message("Extraction begun for '", focal_layer, "'")
   
   # Identify time of this layer
-  layer_time <- terra::time(x = npp_rast[[focal_layer]])
+  layer_time <- terra::time(x = et_rast[[focal_layer]])
   
   # Extract information
-  small_out_df <- exactextractr::exact_extract(x = npp_rast[[focal_layer]],
+  small_out_df <- exactextractr::exact_extract(x = et_rast[[focal_layer]],
                                                y = sf_file,
                                                include_cols = group_cols,
                                                progress = T) %>%
@@ -134,17 +135,17 @@ for(focal_layer in wanted_layers){
 ## -------------------------------- ##
 
 # Unlist the output of that loop for easier wrangling
-npp_v1 <- purrr::list_rbind(x = out_list)
+et_v1 <- purrr::list_rbind(x = out_list)
 
 # Check structure
-dplyr::glimpse(npp_v1)
+dplyr::glimpse(et_v1)
 
 # Do needed wrangling
-npp_v2 <- npp_v1 %>% 
+et_v2 <- et_v1 %>% 
   # Move the site info columns to the left
   dplyr::relocate(dplyr::all_of(group_cols), .before = time) %>% 
   # Rename extracted information
-  dplyr::rename(npp_kg_C_m2_yr = value_avg) %>% 
+  dplyr::rename(et_kg_C_m2_yr = value_avg) %>% 
   # Separate time into useful subcomponents
   dplyr::mutate(year = as.numeric(stringr::str_sub(string = time, start = 1, end = 4)),
                 month = as.numeric(stringr::str_sub(string = time, start = 6, end = 7)),
@@ -159,23 +160,23 @@ npp_v2 <- npp_v1 %>%
     T ~ 'x'), .after = month)
 
 # Re-check structure
-dplyr::glimpse(npp_v2)
+dplyr::glimpse(et_v2)
 
 ## -------------------------------- ##
 # Export ----
 ## -------------------------------- ##
 
 # Pick final object name
-final_npp <- npp_v2
+final_et <- et_v2
 
 # Define file path for CSV
-npp_path <- file.path(path, "extracted-data", "fire-arid_npp.csv")
+et_path <- file.path(path, "extracted-data", "fire-arid_pet.csv")
 
 # Export the summarized data
-write.csv(x = final_npp, na = '', row.names = F, file = npp_path)
+write.csv(x = final_et, na = '', row.names = F, file = et_path)
 
 # Upload to GoogleDrive
-googledrive::drive_upload(media = npp_path, overwrite = T,
+googledrive::drive_upload(media = et_path, overwrite = T,
                           path = googledrive::as_id("https://drive.google.com/drive/u/0/folders/1XxvY56h1cMmaYatF7WhVrbYbaOgdRBGC"))
 
 # End ----
