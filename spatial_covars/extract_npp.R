@@ -35,7 +35,7 @@ rm(list = ls()); gc()
 dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
 
 ## -------------------------------- ##
-# Extraction Prep ----
+        # Extraction Prep ----
 ## -------------------------------- ##
 
 # Load in the catchment delineations (stored as GeoJSON)
@@ -56,7 +56,7 @@ plot(sf_file["usgs_site"], axes = T)
 
 # Read in the netCDF file and examine for context on units / etc.
 npp_nc <- ncdf4::nc_open(filename = file.path(path, "raw-spatial-data", "modis_npp", 
-                                              "MOD17A2HGF.061_500m_aid0001.nc"))
+                                              "MYD17A3HGF.061_500m_aid0001.nc"))
 
 # Look at this
 print(npp_nc)
@@ -64,20 +64,20 @@ print(npp_nc)
 # Read it as a raster too
 ## This format is more easily manipulable for our purposes
 npp_rast <- terra::rast(x = file.path(path, "raw-spatial-data", "modis_npp", 
-                                      "MOD17A2HGF.061_500m_aid0001.nc"))
+                                      "MYD17A3HGF.061_500m_aid0001.nc"))
 
 # Check names
 names(npp_rast)
 
 # Check out just one of those
-print(npp_rast$npp_500m_1)
+print(npp_rast$Npp_500m_1)
 
 # Visual check for overlap
-plot(npp_rast$npp_500m_1, axes = T, reset = F)
+plot(npp_rast$Npp_500m_1, axes = T, reset = F)
 plot(sf_file["usgs_site"], axes = T, add = T)
 
 ## -------------------------------- ##
-# Extract ----
+            # Extract ----
 ## -------------------------------- ##
 
 # Define scale factor and fill value
@@ -88,7 +88,7 @@ scale_factor <- 0.0001
 out_list <- list()
 
 # Identify the names of the layers we want to extract
-wanted_layers <- setdiff(x = names(npp_rast), y = paste0("Psn_QC_500m_", 1:10^6))
+wanted_layers <- setdiff(x = names(npp_rast), y = paste0("Npp_QC_500m_", 1:10^6))
 
 # Double check that leaves only npp layers
 unique(stringr::str_sub(string = wanted_layers, start = 1, end = 8))
@@ -111,8 +111,8 @@ for(focal_layer in wanted_layers){
     purrr::list_rbind(x = .) %>%
     # Filter out NAs
     dplyr::filter(!is.na(value)) %>%
-    # Filter to only values within allowed range
-    dplyr::filter(value >= 0 & value <= 30000) %>% 
+    # Filter out fill values
+    dplyr::filter(value <= 32700) %>% 
     # Apply scaling factor
     dplyr::mutate(value_scaled = value * scale_factor) %>% 
     # Summarize across pixels within time
@@ -130,7 +130,7 @@ for(focal_layer in wanted_layers){
   message("Processing complete for ", focal_layer, " at ", layer_time) }
 
 ## -------------------------------- ##
-# Wrangle ----
+            # Wrangle ----
 ## -------------------------------- ##
 
 # Unlist the output of that loop for easier wrangling
@@ -144,7 +144,7 @@ npp_v2 <- npp_v1 %>%
   # Move the site info columns to the left
   dplyr::relocate(dplyr::all_of(group_cols), .before = time) %>% 
   # Rename extracted information
-  dplyr::rename(npp_kg_C_m2 = value_avg) %>% 
+  dplyr::rename(npp_kg_C_m2_yr = value_avg) %>% 
   # Separate time into useful subcomponents
   dplyr::mutate(year = as.numeric(stringr::str_sub(string = time, start = 1, end = 4)),
                 month = as.numeric(stringr::str_sub(string = time, start = 6, end = 7)),
@@ -162,7 +162,7 @@ npp_v2 <- npp_v1 %>%
 dplyr::glimpse(npp_v2)
 
 ## -------------------------------- ##
-# Export ----
+              # Export ----
 ## -------------------------------- ##
 
 # Pick final object name
