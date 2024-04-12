@@ -55,7 +55,7 @@ plot(sf_file["usgs_site"], axes = T)
 (group_cols <- c(setdiff(x = names(sf_file), y = c("geometry", "geom"))))
 
 # Define file name for desired PET NetCDF
-nc_name <- "MOD16A2.061_500m_aid0001.nc"
+nc_name <- "MOD16A2GF.061_500m_aid0001.nc"
 
 # Read in the netCDF file and examine for context on units / etc.
 et_nc <- ncdf4::nc_open(filename = file.path(path, "raw-spatial-data", "modis_pet", nc_name))
