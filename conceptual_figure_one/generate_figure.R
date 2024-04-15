@@ -59,13 +59,20 @@ western_states <- tigris::states() |>
 # MAPPING: ecoregions
 
 western_ecos <- ecoregions[sf::st_intersects(x = ecoregions, y = western_states, sparse = FALSE), ] |> 
-dplyr::filter(
-  !grepl(
-    pattern     = "louisiana|southeastern|marine",
-    x           = NA_L2NAME,
-    ignore.case = TRUE
-  )
-)
+  dplyr::filter(
+    !grepl(
+      pattern     = "louisiana|southeastern|marine",
+      x           = NA_L2NAME,
+      ignore.case = TRUE
+    )
+  ) |>
+    dplyr::filter(
+      !grepl(
+        pattern = "plains",
+        NA_L1NAME,
+        ignore.case = TRUE
+      )
+    )
 
 ## ecoregions metadata
 
@@ -108,9 +115,9 @@ dplyr::filter(
     ggplot2::scale_fill_manual(
       breaks = c(
         # plains
-        "SOUTH CENTRAL SEMIARID PRAIRIES",
-        "WEST-CENTRAL SEMIARID PRAIRIES",
-        "TAMAULIPAS-TEXAS SEMIARID PLAIN",
+        # "SOUTH CENTRAL SEMIARID PRAIRIES",
+        # "WEST-CENTRAL SEMIARID PRAIRIES",
+        # "TAMAULIPAS-TEXAS SEMIARID PLAIN",
         # deserts
         "COLD DESERTS",
         "WARM DESERTS",
@@ -123,9 +130,9 @@ dplyr::filter(
         ),
       values = c(
         # plains
-        "#9bc4e2",
-        "#bcd4e6",
-        "#e7feff",
+        # "#9bc4e2",
+        # "#bcd4e6",
+        # "#e7feff",
         # deserts
         "#fcb071",
         "#ec8c54",
