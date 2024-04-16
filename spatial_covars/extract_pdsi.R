@@ -132,12 +132,42 @@ pdsi_v1 <- purrr::list_rbind(x = out_list) %>%
 # Check structure
 dplyr::glimpse(pdsi_v1)
 
+# Wrangle time information too
+pdsi_v2 <- pdsi_v1 %>% 
+  # Time is just the year so rename column
+  dplyr::rename(year = time) %>% 
+  # Remove unwanted years (for faster/easier processing from here on out)
+  dplyr::filter(year >= 1978) %>% 
+  # Exactly 12 layers / year means that's how month is stored
+  dplyr::group_by(dplyr::across(dplyr::all_of(group_cols)), year) %>% 
+  dplyr::mutate(month = dplyr::row_number(),
+                .after = year) %>% 
+  dplyr::ungroup() %>% 
+  # Get month names too in case they are wanted
+  dplyr::mutate(month_name = dplyr::case_when(
+    month == 1 ~ "jan", month == 2 ~ "feb", month == 3 ~ "mar",
+    month == 4 ~ "apr", month == 5 ~ "may", month == 6 ~ "jun",
+    month == 7 ~ "jul", month == 8 ~ "aug", month == 9 ~ "sep",
+    month == 10 ~ "oct", month == 11 ~ "nov", month == 12 ~ "dec",
+    T ~ 'x'), .after = month) %>% 
+  # Drop layer number column
+  dplyr::select(-layer_num)
+
+# Make sure there are no non-month numbers
+pdsi_v2 %>% 
+  dplyr::filter(month_name == "x") %>% 
+  dplyr::select(year, month) %>% 
+  dplyr::distinct()
+
+# Check structure again
+dplyr::glimpse(pdsi_v2)
+
 ## -------------------------------- ##
               # Export ----
 ## -------------------------------- ##
 
 # Pick final object name
-final_pdsi <- pdsi_v1
+final_pdsi <- pdsi_v2
 
 # Create folder to export to
 dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
