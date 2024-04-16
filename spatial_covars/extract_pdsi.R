@@ -8,8 +8,11 @@
 ## PALMER DROUGHT SEVERITY INDEX (PDSI)
 
 # Data Source
-## NOAA Palmer Drought Severity Index
-## https://catalog.data.gov/dataset/palmer-drought-severity-index
+## Dai Global Palmer Drought Severity Index (PDSI)
+## https://rda.ucar.edu/datasets/ds299.0/
+
+# Specific Data Download Link
+## https://thredds.rda.ucar.edu/thredds/catalog/files/g/ds299.0/catalog.html?dataset=files/g/ds299.0/pdsisc.monthly.1900-2100.r2.5x2.5.EnsAvg25Models.TP2.ipe-2.ssp245.nc
 
 ## -------------------------------- ##
           # Housekeeping ----
@@ -52,16 +55,16 @@ plot(sf_file["usgs_site"], axes = T)
 (group_cols <- c(setdiff(x = names(sf_file), y = c("geometry", "geom"))))
 
 # Read in the netCDF file and examine for context on units / etc.
-pdsi_nc <- ncdf4::nc_open(filename = file.path(path, "raw-spatial-data", "noaa_pdsi", 
-                                               "noaa_pdsi-monthly.nc"))
+pdsi_nc <- ncdf4::nc_open(filename = file.path(path, "raw-spatial-data", "ncar_pdsi", 
+                                               "pdsisc.monthly.1900-2100.r2.5x2.5.EnsAvg25Models.TP2.ipe-2.ssp245.nc"))
 
 # Look at this
 print(pdsi_nc)
 
 # Read it as a raster too
 ## This format is more easily manipulable for our purposes
-pdsi_rast <- terra::rast(x = file.path(path, "raw-spatial-data", "noaa_pdsi", 
-                                       "noaa_pdsi-monthly.nc"))
+pdsi_rast <- terra::rast(x = file.path(path, "raw-spatial-data", "ncar_pdsi", 
+                                       "pdsisc.monthly.1900-2100.r2.5x2.5.EnsAvg25Models.TP2.ipe-2.ssp245.nc"))
 
 # Check names
 names(pdsi_rast)
@@ -125,7 +128,7 @@ for(k in 1:layer_ct){
 # Unlist the output of that loop for easier wrangling
 pdsi_v1 <- purrr::list_rbind(x = out_list) %>% 
   # Rename extracted column more intuitively
-  dplyr::rename(noaa_pdsi = value_avg)
+  dplyr::rename(ncar_pdsi = value_avg)
 
 # Check structure
 dplyr::glimpse(pdsi_v1)
