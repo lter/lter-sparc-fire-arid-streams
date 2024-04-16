@@ -11,9 +11,6 @@
 ## Dai Global Palmer Drought Severity Index (PDSI)
 ## https://rda.ucar.edu/datasets/ds299.0/
 
-# Specific Data Download Link
-## https://thredds.rda.ucar.edu/thredds/catalog/files/g/ds299.0/catalog.html?dataset=files/g/ds299.0/pdsisc.monthly.1900-2100.r2.5x2.5.EnsAvg25Models.TP2.ipe-2.ssp245.nc
-
 ## -------------------------------- ##
           # Housekeeping ----
 ## -------------------------------- ##
@@ -55,7 +52,7 @@ plot(sf_file["usgs_site"], axes = T)
 (group_cols <- c(setdiff(x = names(sf_file), y = c("geometry", "geom"))))
 
 # Define filename as an object (easier to change if/as needed)
-pdsi_src <- "pdsisc.monthly.1900-2100.r2.5x2.5.EnsAvg25Models.TP2.ipe-2.ssp245.nc"
+pdsi_src <- "pdsisc.monthly.maps.1850-2018.fawc-1.r2.5x2.5.ipe-2.nc"
 
 # Read in the netCDF file and examine for context on units / etc.
 pdsi_nc <- ncdf4::nc_open(filename = file.path(path, "raw-spatial-data", "ncar_pdsi", pdsi_src))
@@ -71,10 +68,10 @@ pdsi_rast <- terra::rast(x = file.path(path, "raw-spatial-data", "ncar_pdsi", pd
 names(pdsi_rast)
 
 # Check out just one of those
-print(pdsi_rast$pdsisc_1)
+print(pdsi_rast$sc_PDSI_pm_1)
 
 # Visual check for overlap
-plot(pdsi_rast$pdsisc_1, axes = T, reset = F)
+plot(pdsi_rast$sc_PDSI_pm_1, axes = T, reset = F)
 plot(sf_file["usgs_site"], axes = T, add = T)
 
 ## -------------------------------- ##
@@ -91,7 +88,7 @@ out_list <- list()
 for(k in 1:layer_ct){
 
   # Build name of layer
-  focal_layer <- paste0("pdsisc_", k)
+  focal_layer <- paste0("sc_PDSI_pm_", k)
   
   # Starting message
   message("Extraction begun for '", focal_layer, "'")
@@ -114,6 +111,7 @@ for(k in 1:layer_ct){
     dplyr::ungroup() %>%
     # Add a column for what timestamp this is
     dplyr::mutate(time = layer_time, 
+                  layer_num = k,
                   .before = value_avg)
   
   # Add it to the list
