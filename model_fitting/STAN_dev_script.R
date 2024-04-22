@@ -17,6 +17,7 @@ library(rstan)
 library(shinystan)
 library(bayesplot)
 library(data.table)
+library(viridis)
 
 # Load dataset.
 data <- readRDS("data_working/usgs_chem_filtered_011924.rds")
@@ -470,6 +471,9 @@ stan_lm_run4 <- lapply(data_stan4,
                          control = list(max_treedepth = 12))
                        )
 
+# And export for plotting in other scripts.
+saveRDS(stan_lm_run4, "data_stanfits/sepsites_fit_030824.rds")
+
 # Examine summaries of the estimates.
 stan_lm_data4 <- map(stan_lm_run4,
                           function(x) summary(x,
@@ -485,6 +489,9 @@ stan_lm_data4_df <- plyr::ldply(stan_lm_data4,
   rename("parameter" = "names",
          usgs_site = `.id`)
 # Rhat values all < 1.05 YESSS!!!
+
+# And export for plotting in other scripts.
+saveRDS(stan_lm_data4_df, "data_stanfits/sepsites_fit_030824.rds")
 
 # Plot parameter estimates
 color_scheme_set("purple")
@@ -778,19 +785,30 @@ data_stan5 <- lapply(dat5_l, function(x) stan_data_compile(x))
 # Making smaller dataset for faster run time.
 data_stan5.2 <- data_stan5[1:2]
 
-# Fit model - should run in 5 minutes
-stan_lm_run5 <- lapply(data_stan5.2,
-                       function(x) stan(file = "models/STAN_lm_delta_unified_template.stan",
-                                        data = x,
-                                        chains = 3,
-                                        iter = 5000,
-                                        control = list(max_treedepth = 12)))
+# Fit model - should run in 1 minute
+# stan_lm_run5.2 <- lapply(data_stan5.2,
+#                        function(x) stan(file = "models/STAN_lm_delta_unified_template.stan",
+#                                         data = x,
+#                                         chains = 3,
+#                                         iter = 5000,
+#                                         control = list(max_treedepth = 12)))
+
+# Fit full model - should run in ~15 minutes
+stan_lm_run5 <- lapply(data_stan5,
+                         function(x) stan(file = "models/STAN_lm_delta_unified_template.stan",
+                                          data = x,
+                                          chains = 3,
+                                          iter = 5000,
+                                          control = list(max_treedepth = 12)))
+
+# Export for safekeeping.
+# saveRDS(stan_lm_run5, "data_stanfits/unified_fit_wdeltas_042224.rds")
 
 # Examine summaries of the estimates.
 stan_lm_data5 <- map(stan_lm_run5,
                      function(x) summary(x,
                                          pars = c("A", "b", "sigma", 
-                                                  "delta_b", "delta_sigma"),
+                                                  "delta_A", "delta_b", "delta_sigma"),
                                          probs = c(0.025, 0.5, 0.975))$summary )
 
 # Turn back into a dataframe for easier summary viewing.
@@ -798,16 +816,43 @@ stan_lm_data5_df <- plyr::ldply(stan_lm_data5,
                                 function(x) data.frame(names = row.names(x), x)) %>%
   rename("parameter" = "names",
          usgs_site = `.id`)
-# Rhat values all < 1.05 YESSS!!!
+# Rhat values all < 1.05 YAS QUEEEN!!!
+# And no divergence notices!!!
 
-ggplot(stan_lm_data5_df, aes(x = `X50.`, y = parameter, color = usgs_site)) +
-  geom_point(size = 3) +
-  geom_linerange(aes(xmin = `X2.5.`, xmax = `X97.5.`)) +
+# Just so we can see the differences a bit more, I'm going to filter
+# for only the delta values.
+ggplot(stan_lm_data5_df %>%
+         filter(parameter %in% c("delta_A", "delta_b", "delta_sigma")), 
+       aes(x = `X50.`, y = parameter, color = usgs_site)) +
+  geom_point(alpha = 0.8, size = 3, position = position_dodge(0.3)) +
+  geom_linerange(aes(xmin = `X2.5.`, xmax = `X97.5.`), position = position_dodge(0.3)) +
+  scale_color_viridis(discrete = TRUE) +
   labs(x = "Median Value & 95% C.I.s",
        y = "Parameter") +
   theme_bw()
 
 # Well, this is looking pretty neat - lots of changes.
+
+# Let's try coloring this similar to how the MARSS figure was made.
+stan_lm_data5_deltas <- stan_lm_data5_df %>%
+  filter(parameter %in% c("delta_A", "delta_b", "delta_sigma")) %>%
+  mutate(effect = factor(case_when(`X2.5.` < 0 & `X97.5.` < 0 ~ "Negative",
+                            `X2.5.` > 0 & `X97.5.` > 0 ~ "Positive",
+                            TRUE ~ "None"),
+                         levels = c("Positive", "None", "Negative")))
+
+# And plot once more.
+ggplot(stan_lm_data5_deltas, 
+       aes(x = `X50.`, y = parameter, color = effect)) +
+  geom_point(alpha = 0.8, size = 3, position = position_dodge(0.3)) +
+  geom_linerange(aes(xmin = `X2.5.`, xmax = `X97.5.`), position = position_dodge(0.3)) +
+  scale_color_viridis(discrete = "TRUE") +
+  labs(x = "Median Value & 95% C.I.s",
+       y = "Parameter",
+       color = "Effect") +
+  theme_bw()
+
+# Ahhh, this is so cool.
 
 #### Formula 6 - Multi-level Model ####
 
@@ -1070,12 +1115,12 @@ stan_lm_run6 <- stan(file = "models/STAN_lm_hierarchical_template.stan",
                      control = list(max_treedepth = 12))
 
 # Export for safekeeping.
-saveRDS(stan_lm_run6, "data_stanfits/hier_fit_wdelta_021524.rds")
+# saveRDS(stan_lm_run6, "data_stanfits/hier_fit_wdelta_021524.rds")
 
 # Examine summaries of the estimates.
 stan_lm_data6 <- summary(stan_lm_run6,
-                         pars = c("A", "b", "delta_b", "sigma", 
-                                  "Asite", "bsite", "delta_bsite"),
+                         pars = c("A", "b","sigma", 
+                                  "Asite", "bsite"),
                                 probs = c(0.025, 0.5, 0.975))$summary
 
 # Well, shoot, it converged!! And all the Rhats look great!!
@@ -1121,5 +1166,32 @@ ggplot(stan_lm_data6_df %>%
   theme(legend.position = "none")
 
 # Ahhhhh yayyyy!!! So glad this worked!!!
+
+# Manipulating the data a bit for plotting for the group.
+stan_lm_data6_df_before <- stan_lm_data6_df[7:74,] %>%
+  filter(fire == "before") %>%
+  mutate(site = rep(c("USGS-07103700","USGS-07105500","USGS-07105800","USGS-07106300",
+                      "USGS-07106500","USGS-07109500","USGS-08313000","USGS-08330000",
+                      "USGS-08354900","USGS-08355490","USGS-08358400","USGS-09095500",
+                      "USGS-09152500","USGS-09163500","USGS-09261000","USGS-09367540",
+                      "USGS-09367580"), 2)) %>%
+  select(site, parameter_cd, fire, X50.)
+
+stan_lm_data6_df_after <- stan_lm_data6_df[7:74,] %>%
+  filter(fire == "after") %>%
+  mutate(site = rep(c("USGS-07103700","USGS-07105500","USGS-07105800","USGS-07106300",
+                      "USGS-07106500","USGS-07109500","USGS-08313000","USGS-08330000",
+                      "USGS-08354900","USGS-08355490","USGS-08358400","USGS-09095500",
+                      "USGS-09152500","USGS-09163500","USGS-09261000","USGS-09367540",
+                      "USGS-09367580"), 2)) %>%
+  select(site, parameter_cd, fire, X50.)
+
+stan_lm_data6_trim <- rbind(stan_lm_data6_df_before, stan_lm_data6_df_after)
+
+stan_lm_data6_delta <- stan_lm_data6_trim %>%
+  pivot_wider(names_from = fire, values_from = X50.) %>%
+  mutate(delta = before - after)
+
+#saveRDS(stan_lm_data6_delta, "data_working/delta_calc_17sites_030824.rds")
 
 # End of script.
