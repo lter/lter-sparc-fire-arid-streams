@@ -8,8 +8,11 @@
 ## pH
 
 # Data Source
-## NASA Shuttle Radar Topography Mission Global 3 arc second
-## https://lpdaac.usgs.gov/products/srtmgl3v003/
+## POLARIS: A 30-meter probabilistic soil series map of the contiguous United States
+## https://pubs.usgs.gov/publication/70170912
+
+# Actual download link
+## http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/ph/mean/0_5/
 
 ## -------------------------------- ##
 # Housekeeping ----
@@ -17,7 +20,7 @@
 
 # Read needed libraries
 # install.packages("librarian")
-librarian::shelf(tidyverse, sf, ncdf4, terra, exactextractr, spatialEco, geojsonio, scicomptools, googledrive)
+librarian::shelf(tidyverse, sf, terra, exactextractr, geojsonio, scicomptools, googledrive)
 
 # Silence `dplyr::summarize` preemptively
 options(dplyr.summarise.inform = FALSE)
@@ -63,9 +66,6 @@ plot(sf_file["usgs_site"], axes = T, add = T)
 # Extract pH ----
 ## -------------------------------- ##
 
-# No scale factor used
-# Valid range is >= -32767 and <= 32767
-
 # Actually extract pH data
 ph_v1 <- exactextractr::exact_extract(x = ph_rast, y = sf_file,
                                         include_cols = group_cols,
@@ -73,9 +73,7 @@ ph_v1 <- exactextractr::exact_extract(x = ph_rast, y = sf_file,
   # Above returns a list so switch it to a dataframe
   purrr::list_rbind(x = .) %>% 
   # Filter out NAs
-  dplyr::filter(!is.na(value)) %>%
-  # Drop fill values
-  dplyr::filter(value > -32768)
+  dplyr::filter(!is.na(value))
 
 ## -------------------------------- ##
 # Wrangle pH ----
@@ -95,88 +93,17 @@ ph_v2 <- ph_v1 %>%
 dplyr::glimpse(ph_v2)
 
 ## -------------------------------- ##
-# Identify Slope ----
-## -------------------------------- ##
-
-# Create an empty list to store results
-slope_list <- list()
-
-# For each catchment polygon:
-for(k in 1:nrow(sf_file)){
-  
-  # Starting message
-  message("Extracting slope for catchment ", k, " (", (nrow(sf_file) - k), " remaining)")
-  
-  # Crop and mask the pH raster to each shapefile
-  ph_crop <- terra::crop(x = ph_rast, y = terra::vect(sf_file[k,]), mask = T)
-  
-  # Calculate the slopes
-  slope_rast <- terra::terrain(ph_crop, v = "slope", unit = "degrees")
-  
-  # Extract the slopes into a dataframe
-  slope_v1 <- terra::as.data.frame(slope_rast)
-  
-  # If the dataframe is NOT empty...
-  if(nrow(slope_v1) != 0){
-    
-    # Duplicate the data object
-    slope_v2 <- slope_v1
-    
-    # Get a non-spatial version of catchment identifying information
-    catch_id <- sf::st_drop_geometry(sf_file[k,])
-    
-    # Attach each piece of ID info to the slope information
-    for(gp in group_cols){ slope_v2[[gp]] <- catch_id[[gp]] }
-    
-    # Within catchments, summarize various aspects of slope
-    slope_v3 <- slope_v2 %>% 
-      dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
-      dplyr::summarize(slope_avg_deg = spatialEco::mean_angle(slope, angle = "degree"),
-                       slope_median_deg = median(slope, na.rm = T),
-                       slope_min_deg = min(slope, na.rm = T),
-                       slope_max_deg = max(slope, na.rm = T)) %>%
-      dplyr::ungroup()
-    
-    # Add to the list of slope information
-    slope_list[[k]] <- slope_v3 }
-  
-} # Close loop
-
-## -------------------------------- ##
-# Wrangle Slope ----
-## -------------------------------- ##
-
-# Wrangle the extracted/summarized slope information
-slope_v4 <- slope_list %>% 
-  # Unlist the list
-  purrr::list_rbind(x = .)
-
-# Check structure of that output
-dplyr::glimpse(slope_v4)
-
-## -------------------------------- ##
-# Combine pH & Slope ----
-## -------------------------------- ##
-
-# Combine the two dataframes
-dem_out <- dplyr::full_join(x = ph_v2, y = slope_v4,
-                            by = group_cols)
-
-# Check structure
-dplyr::glimpse(dem_out)
-
-## -------------------------------- ##
 # Export ----
 ## -------------------------------- ##
 
 # Pick final object name
-final_ph <- dem_out
+final_ph <- ph_v2
 
 # Create folder to export to
 dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
 
 # Define file path for CSV
-ph_path <- file.path(path, "extracted-data", "fire-arid_phation.csv")
+ph_path <- file.path(path, "extracted-data", "fire-arid_soil-ph.csv")
 
 # Export the summarized data
 write.csv(x = final_ph, na = '', row.names = F, file = ph_path)
