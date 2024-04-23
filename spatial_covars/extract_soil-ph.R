@@ -34,8 +34,11 @@ rm(list = ls()); gc()
                                                       "lter-sparc-fire-arid"),
                               local_path = getwd()))
 
+# Define soil-specific path
+soil_path <- file.path(path, "raw-spatial-data", "polaris_soil", "polaris_ph-mean-0-5_tiles")
+
 ## -------------------------------- ##
-# Extraction Prep ----
+       # Extraction Prep ----
 ## -------------------------------- ##
 
 # Load in the catchment delineations (stored as GeoJSON)
@@ -54,9 +57,8 @@ plot(sf_file["usgs_site"], axes = T)
 # Identify the grouping columns
 (group_cols <- c(setdiff(x = names(sf_file), y = c("geometry", "geom"))))
 
-# Read in pH raster
-ph_rast <- terra::rast(x = file.path(path, "raw-spatial-data", "nasa_phation", 
-                                       "SRTMGL3_NC.003_SRTMGL3_DEM_doy2000042_aid0001.tif"))
+# Read in a pH raster
+ph_rast <- terra::rast(x = file.path(soil_path, "lat2425_lon-98-97.tif"))
 
 # Visual check for overlap
 plot(ph_rast, axes = T, reset = F)
@@ -66,34 +68,61 @@ plot(sf_file["usgs_site"], axes = T, add = T)
 # Extract pH ----
 ## -------------------------------- ##
 
-# Actually extract pH data
-ph_v1 <- exactextractr::exact_extract(x = ph_rast, y = sf_file,
-                                        include_cols = group_cols,
-                                        progress = T) %>%
-  # Above returns a list so switch it to a dataframe
-  purrr::list_rbind(x = .) %>% 
-  # Filter out NAs
-  dplyr::filter(!is.na(value))
+# List all files in that folder
+ph_files <- sort(dir(path = soil_path))
+
+# Make an empty list
+ph_list <- list()
+
+# Loop across each raster tile
+for(focal_ph in ph_files){
+  
+  # Progress message
+  message("Beginning extraction for raster tile '", focal_ph, "'")
+  
+  # Read it in as a raster
+  focal_rast <- terra::rast(x = file.path(soil_path, focal_ph))
+  
+  # Actually extract the data
+  focal_df <- exactextractr::exact_extract(x = focal_rast, y = sf_file,
+                                           include_cols = group_cols,
+                                           progress = F) %>%
+    # Above returns a list so switch it to a dataframe
+    purrr::list_rbind(x = .) %>% 
+    # Filter out NAs
+    dplyr::filter(!is.na(value))
+  
+  # Add to the list
+  ph_list[[focal_ph]] <- focal_df
+  
+} # Close list
 
 ## -------------------------------- ##
-# Wrangle pH ----
+          # Wrangle pH ----
 ## -------------------------------- ##
+
+# Unlist the loop output
+ph_v1 <- ph_list %>% 
+  purrr::list_rbind(x = .)
+
+# Check structure
+dplyr::glimpse(ph_v1)
 
 # Do needed post-processing
 ph_v2 <- ph_v1 %>% 
   # Summarize within existing groups
   dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
-  dplyr::summarize(ph_avg_m = mean(value, na.rm = T),
-                   ph_median_m = median(value, na.rm = T),
-                   ph_min_m = min(value, na.rm = T),
-                   ph_max_m = max(value, na.rm = T)) %>%
+  dplyr::summarize(soil_ph_avg = mean(value, na.rm = T),
+                   soil_ph_median = median(value, na.rm = T),
+                   soil_ph_min = min(value, na.rm = T),
+                   soil_ph_max = max(value, na.rm = T)) %>%
   dplyr::ungroup()
 
 # Check structure
 dplyr::glimpse(ph_v2)
 
 ## -------------------------------- ##
-# Export ----
+            # Export ----
 ## -------------------------------- ##
 
 # Pick final object name
