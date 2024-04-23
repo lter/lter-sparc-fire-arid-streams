@@ -72,11 +72,13 @@ model {
 generated quantities{
   
   real delta_b; // change in CQ slope
+  real delta_A; // change in CQ intercept
   real delta_sigma; // change in variation
   
   // Use estimated pre- and post-fire values
   // to calculate the change
   delta_b = b[1] - b[2];
+  delta_A = A[1] - A[2];
   delta_sigma = sigma[1] - sigma[2];
   
   // remember, script MUST end in a blank line

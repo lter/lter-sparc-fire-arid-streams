@@ -19,9 +19,11 @@ library(calecopal)
 # https://drive.google.com/drive/folders/1XxvY56h1cMmaYatF7WhVrbYbaOgdRBGC
 elev_dat <- read_csv("data/fire-arid_elevation.csv")
 gpp_dat <- read_csv("data/fire-arid_gpp.csv")
+npp_dat <- read_csv("data/fire-arid_npp.csv")
 lc_dat <- read_csv("data/fire-arid_land-cover.csv")
 pdsi_dat <- read_csv("data/fire-arid_pdsi.csv")
 precip_dat <- read_csv("data/fire-arid_precipitation.csv")
+pet_dat <- read_csv("data/fire-arid_pet.csv")
 temp_dat <- read_csv("data/fire-arid_temperature.csv")
 
 # Load dataset containing sites with chemistry data of interest
@@ -31,54 +33,62 @@ usgs_chem <- readRDS("data_working/usgs_chem_filtered_011924.rds")
 # Get site list.
 usgs_sites <- unique(usgs_chem$usgs_site)
 
+# PLEASE NOTE - THIS IS NOT THE FULL CHEM DATASET THAT WE WILL
+# EVENTUALLY BE WORKING WITH, SO PLOTTING ALL INPUT DATA FOR NOW.
+
 #### Elevation ####
 
-elev_trim <- elev_dat %>%
-  filter(usgs_site %in% usgs_sites)
-
 # What is the range in watershed size x elevation?
-(fig1 <- ggplot(elev_trim, aes(x = area_km2, y = elev_median)) +
-  # geom_errorbar(color = "#BD973D",
-  #               alpha = 0.8,
-  #               aes(ymin = elev_min, ymax = elev_max)) +
-  geom_point(color = "#3B7D6E", alpha = 0.8) +
-  scale_x_log10() +
-  labs(x = "Watershed Size (km^2)",
-       y = "Median Elevation (m)",
-       title = "What is the variation in median elevation by watershed size?") +
+(fig1 <- ggplot(elev_dat, aes(x = elev_median_m)) +
+  geom_histogram(fill = "#3B7D6E", alpha = 0.8) +
+  labs(x = "Median Elevation (m)",
+       title = "What is the variation in median elevation?") +
   theme_bw())
 
-(fig2 <- ggplot(elev_trim, aes(x = area_km2, y = elev_max)) +
-    geom_point(color = "#5F5C29", alpha = 0.8) +
-    scale_x_log10() +
-    labs(x = "Watershed Size (km^2)",
-         y = "Maximum Elevation (m)",
-         title = "What is the variation in maximum elevation by watershed size?") +
-    theme_bw())
-
-(fig3 <- ggplot(elev_trim, aes(x = area_km2, y = elev_min)) +
-    geom_point(color = "#BD973D", alpha = 0.8) +
-    scale_x_log10() +
-    labs(x = "Watershed Size (km^2)",
-         y = "Minimum Elevation (m)",
-         title = "What is the variation in minimum elevation by watershed size?") +
+(fig2 <- ggplot(elev_dat, aes(x = slope_median_deg)) +
+    geom_histogram(fill = "#5F5C29", alpha = 0.8) +
+    scale_x_log10() + # note the log scale!!
+    labs(x = "Median Slope (degrees)",
+         title = "What is the variation in median slope?") +
     theme_bw())
 
 # Combine plots.
-(fig_elev <- fig1 / fig2 / fig3)
+(fig_elev_slope <- fig1 / fig2)
 
 # Export figure.
-# ggsave(plot = fig_elev,
-#        filename = "figures/elevation_wshedsize_012924.jpg",
+# ggsave(plot = fig_elev_slope,
+#        filename = "figures/elevation_slope_042224.jpg",
 #        width = 15,
-#        height = 30,
+#        height = 15,
 #        units = "cm",
 #        dpi = 200)
 
 #### Land Cover ####
 
-lc_trim <- lc_dat %>%
-  filter(usgs_site %in% usgs_sites) %>%
+# First, it seems like there are timeseries of land cover? Let's see when those
+# measurements are actually recorded.
+(fig4 <- ggplot(lc_dat %>%
+                  filter(usgs_site == "USGS-06230190"), 
+                aes(x = time, y = perc_cover, 
+                    color = land_cover, shape = lc_system)) +
+    geom_point(alpha = 0.8) +
+    scale_y_log10() +
+    labs(x = "Date", y = "Percent Cover",
+         title = "What is the variation in land cover at site 06230190?") +
+    theme_bw())
+
+# Ok, so there are multiple different groups of land cover measurements. We
+# should take care to only use one. But measurements are annual.
+
+# Let's see what the categories are for each system.
+systems <- lc_dat %>%
+  group_by(lc_system, land_cover) %>%
+  summarize(n = n()) %>%
+  ungroup() %>%
+  pivot_wider(names_from = lc_system, values_from = land_cover) %>%
+  select(BGC, IGBP, LAI, PFT, UMD)
+
+lc_grouped <- lc_dat %>%
   mutate(land_cover_group = case_when(
     land_cover %in% c("cropland", "cropland_natural_mosaic", "broadleaf_cropland", "cereal_cropland") ~ "agriculture",
     land_cover %in% c("evergreen_needleleaf_forest", "evergreen_needleleaf_vegetation", "evergreen_broadleaf_vegetation", "evergreen_needleleaf_trees", "evergreen_broadleaf_trees") ~ "evergreen",
@@ -89,24 +99,33 @@ lc_trim <- lc_dat %>%
     land_cover %in% c("woody_savanna", "savanna", "grassland", "grass") ~ "savanna/grassland",
     land_cover %in% c("urban") ~ "urban",
     land_cover %in% c("barren", "snow_and_ice", "non_vegetated", "permanent_snow_and_ice") ~ "barren/frozen",
-    land_cover %in% c("mixed_forest") ~ "forested"))
+    land_cover %in% c("mixed_forest") ~ "forested")) %>%
+  # and need to actually sum and group else the histograms below are messed up
+  group_by(usgs_site, lc_system, land_cover_group) %>%
+  # made sure to group by system, else it'd be over-representing things
+  summarize(mean_annual_perc_cover = mean(perc_cover, na.rm = TRUE)) %>%
+  ungroup()
 
 # Make a palette large enough for all land cover types.
 my_palette <- cal_palette("chaparral1", n = 10, type = "continuous")
 
 # What is the range in representation of each land cover type?
-(fig4 <- ggplot(lc_trim, aes(x = perc_cover, fill = land_cover_group)) +
+(fig5 <- ggplot(lc_grouped %>%
+                  filter(lc_system == "IGBP"), # choosing one system randomly for now
+                aes(x = mean_annual_perc_cover, fill = land_cover_group)) +
     geom_histogram(alpha = 0.8) +
     scale_fill_manual(values = my_palette) +
     #scale_x_log10() +
-    scale_y_log10() +
+    #scale_y_log10() +
     labs(x = "Percent Cover", y = "Site Count",
          title = "What is the variation in land cover by site?") +
     theme_bw() +
     facet_wrap(.~land_cover_group, nrow = 2) +
     theme(legend.position = "none"))
 
-(fig5 <- ggplot(lc_trim, aes(x = land_cover_group, y = perc_cover, 
+(fig6 <- ggplot(lc_grouped %>%
+                  filter(lc_system == "IGBP"), 
+                aes(x = land_cover_group, y = mean_annual_perc_cover, 
                              fill = land_cover_group,
                              color = land_cover_group)) +
     geom_boxplot(alpha = 0.8) +
@@ -119,39 +138,56 @@ my_palette <- cal_palette("chaparral1", n = 10, type = "continuous")
     theme(legend.position = "none") +
     coord_flip())
 
-# What is the dominant land cover type compared to watershed size?
-lc_max <- lc_trim %>%
-  group_by(usgs_site) %>%
-  filter(perc_cover == max(perc_cover)) %>%
-  ungroup()
-
-(fig6 <- ggplot(lc_max, aes(x = area_km2, y = perc_cover, 
-                             color = land_cover_group)) +
-    geom_point() +
-    scale_color_manual(values = cal_palette("chaparral1")) +
-    scale_x_log10() +
-    labs(x = "Watershed Size (km^2)", y = "Percent Cover",
-         title = "What is the dominant land cover by watershed size?",
-         color = "Land Cover Type") +
-    theme_bw())
-
 # Combine plots.
-(fig_lc <- fig5 / fig6)
+(fig_lc <- fig5 | fig6)
 
 # Export figure.
 # ggsave(plot = fig_lc,
-#        filename = "figures/landcover_wshedsize_012924.jpg",
-#        width = 18,
-#        height = 20,
+#        filename = "figures/landcover_igbp_042224.jpg",
+#        width = 30,
+#        height = 15,
 #        units = "cm",
 #        dpi = 200)
 
+# !!! CAUTION !!!, the below code was made using a past version of this data 
+# and may no longer work.
+# And now to examine just the 17 sites that were used in model development.
+lc_trimtrim <- lc_trim %>%
+  filter(usgs_site %in% my17sites) %>%
+  filter(lc_system == "IGBP") %>%
+  dplyr::group_by(usgs_site, land_cover_group, time) %>%
+  summarize(cum_cover = sum(perc_cover)) %>%
+  ungroup() %>%
+  group_by(usgs_site, land_cover_group) %>%
+  summarize(mean_cover = mean(cum_cover)) %>%
+  ungroup()
+
+# Join with hastily made delta data from other script.
+lc_joined_delta <- left_join(lc_trimtrim, stan_lm_data6_delta, 
+                             by = c("usgs_site" = "site"))
+
+(fig6.2 <- ggplot(lc_joined_delta, aes(x = mean_cover, y = delta, 
+                             fill = land_cover_group,
+                             color = land_cover_group)) +
+    geom_point(alpha = 0.8) +
+    #scale_y_log10() +
+    labs(x = "Percent Cover", y = "Change in CQ Slope",
+         title = "What is the variation in changes in slope by land cover?") +
+    theme_bw() +
+    theme(legend.position = "none") +
+    facet_wrap(.~land_cover_group, scales = "free"))
+
 #### GPP ####
 
-gpp_trim <- gpp_dat %>%
-  filter(usgs_site %in% usgs_sites) %>%
-  mutate(date = ymd(time))
-
+# Again, let's take a look at what the frequency of this data is. 
+(fig7 <- ggplot(gpp_dat %>%
+                  filter(usgs_site == "USGS-08330600"), 
+                aes(x = time, y = gpp_kg_C_m2)) +
+   geom_point(alpha = 0.8) +
+   #scale_y_log10() +
+   labs(x = "Date", y = "GPP (Kg C/m2)",
+        title = "What is the variation in GPP at site 08330600?") +
+   theme_bw())
 # Note, these are approximately weekly.
 
 # What is the range in values through time?
@@ -159,8 +195,7 @@ gpp_trim <- gpp_dat %>%
 # L4 Global 500 m SIN Grid
 # For more info see:
 # https://lpdaac.usgs.gov/products/mod17a2hv061/
-(fig7 <- ggplot(gpp_trim, aes(x = date, y = gpp_kg_C_m2,
-                              group = date)) +
+(fig8 <- ggplot(gpp_dat, aes(x = time, y = gpp_kg_C_m2, group = time)) +
     geom_boxplot(color = "#607345",
                  fill = "#607345",
                  alpha = 0.8) +
@@ -169,44 +204,46 @@ gpp_trim <- gpp_dat %>%
          title = "What is the variation in weekly GPP through time?") +
     theme_bw())
 
-# What is the range in values across sites?
-gpp_med <- gpp_trim %>%
-  group_by(usgs_site) %>%
-  summarize(gpp_median = median(gpp_kg_C_m2)) %>%
-  ungroup()
-
-gpp_trim <- left_join(gpp_trim, gpp_med)
-
-(fig8 <- ggplot(gpp_trim %>%
-                  mutate(usgs_site = fct_reorder(usgs_site, 
-                                                 gpp_median)), 
-                aes(x = usgs_site, y = gpp_kg_C_m2)) +
-    geom_boxplot(color = "#7F8C72",
-                 fill = "#7F8C72",
-                 alpha = 0.8) +
-    labs(x = "Site",
-         y = "Weekly GPP (kg C/m^2)",
-         title = "What is the variation in weekly GPP across sites?") +
-    theme_bw() +
-    theme(axis.text.x = element_blank(),
-          axis.ticks.x = element_blank()))
-
-# What is the range in values by watershed size?
-(fig8.2 <- ggplot(gpp_trim, aes(x = area_km2, y = gpp_median)) +
-    geom_point(color = "#7F8C72",
-               alpha = 0.7) +
-    scale_x_log10() +
-    labs(x = "Watershed Size (km^2)",
-         y = "Median Weekly GPP (kg C/m^2)",
-         title = "What is the variation in weekly GPP by watershed size?") +
-    theme_bw())
-
 # Combine plots.
-(fig_gpp <- fig7 / fig8 / fig8.2)
+(fig_gpp <- fig7 / fig8)
 
 # Export figure.
 # ggsave(plot = fig_gpp,
-#        filename = "figures/gpp_013124.jpg",
+#        filename = "figures/gpp_042224.jpg",
+#        width = 20,
+#        height = 30,
+#        units = "cm",
+#        dpi = 200)
+
+#### NPP ####
+
+# Let's take a look at what the frequency of this data is. 
+(fig9 <- ggplot(npp_dat %>%
+                  filter(usgs_site == "USGS-09383400"), 
+                aes(x = time, y = npp_kg_C_m2_yr)) +
+   geom_point(alpha = 0.8) +
+   #scale_y_log10() +
+   labs(x = "Date", y = "NPP (Kg C/m2 yr)",
+        title = "What is the variation in NPP at site 09383400?") +
+   theme_bw())
+# Note, these are now annual.
+
+# What is the range in values through time?
+(fig10 <- ggplot(npp_dat, aes(x = time, y = npp_kg_C_m2_yr, group = time)) +
+    geom_boxplot(color = "#609500",
+                 fill = "#609500",
+                 alpha = 0.8) +
+    labs(x = "Date",
+         y = "Annual NPP (kg C/m^2 yr)",
+         title = "What is the variation in annual NPP through time?") +
+    theme_bw())
+
+# Combine plots.
+(fig_npp <- fig9 / fig10)
+
+# Export figure.
+# ggsave(plot = fig_npp,
+#        filename = "figures/npp_042224.jpg",
 #        width = 20,
 #        height = 30,
 #        units = "cm",
@@ -214,51 +251,115 @@ gpp_trim <- left_join(gpp_trim, gpp_med)
 
 #### PDSI ####
 
-pdsi_trim <- pdsi_dat %>%
-  filter(usgs_site %in% usgs_sites) %>%
-  mutate(date = ymd(time))
+# Adding a date column to the PDSI data.
+pdsi_dat <- pdsi_dat %>%
+  mutate(day = 1) %>%
+  mutate(date = make_date(year, month, day))
+
+# Let's take a look at what the frequency of this data is. 
+(fig11 <- ggplot(pdsi_dat %>%
+                  filter(usgs_site == "USGS-10172914"), 
+                aes(x = date, y = ncar_pdsi)) +
+   geom_point(alpha = 0.8) +
+   #scale_y_log10() +
+   labs(x = "Date", y = "PDSI (NCAR)",
+        title = "What is the variation in PDSI at site 10172914?") +
+   theme_bw())
+# Note, these are now monthly.
 
 # What is the range in values through time?
-# More positive values are wetter, more negative values are dried
+# More positive values are wetter, more negative values are drier
 # For more info see:
 # https://climatedataguide.ucar.edu/climate-data/palmer-drought-severity-index-pdsi
-(fig9 <- ggplot(pdsi_trim, aes(x = date, y = noaa_pdsi)) +
-    geom_point(color = "#ECBD95") +
+(fig12 <- ggplot(pdsi_dat, aes(x = date, y = ncar_pdsi, group = date)) +
+    geom_boxplot(color = "#ECBD95",
+               fill = "#ECBD95",
+               alpha = 0.8) +
     labs(x = "Date",
-         y = "PDSI (NOAA)",
+         y = "PDSI (NCAR)",
          title = "What is the variation in PDSI through time?") +
     theme_bw())
 
+# Combine plots.
+(fig_pdsi <- fig11 / fig12)
+
 # Export figure.
-# ggsave(plot = fig9,
-#        filename = "figures/pdsi_013124.jpg",
+# ggsave(plot = fig_pdsi,
+#        filename = "figures/pdsi_042224.jpg",
 #        width = 20,
-#        height = 10,
+#        height = 30,
+#        units = "cm",
+#        dpi = 200)
+
+#### PET ####
+
+# Adding a date column to the PDSI data.
+pet_dat <- pet_dat %>%
+  mutate(day = 1) %>%
+  mutate(date = make_date(year, month, day))
+
+# Let's take a look at what the frequency of this data is. 
+(fig13 <- ggplot(pet_dat %>%
+                   filter(usgs_site == "USGS-13077650"), 
+                 aes(x = date, y = pet_kg_m2_8day)) +
+    geom_point(alpha = 0.8) +
+    scale_y_log10() +
+    labs(x = "Date", y = "PET (Kg/m2 8day)",
+         title = "What is the variation in PET at site 13077650?") +
+    theme_bw())
+# Note, these are now roughly weekly (every 8 days).
+
+# What is the range in values through time?
+(fig14 <- ggplot(pet_dat, aes(x = date, y = pet_kg_m2_8day, group = date)) +
+    geom_boxplot(color = "#6592D6",
+                 fill = "#6592D6",
+                 alpha = 0.8) +
+    labs(x = "Date",
+         y = "PET (Kg/m2 8day)",
+         title = "What is the variation in PET through time?") +
+    theme_bw())
+
+# Combine plots.
+(fig_pet <- fig13 / fig14)
+
+# Export figure.
+# ggsave(plot = fig_pet,
+#        filename = "figures/pet_042224.jpg",
+#        width = 20,
+#        height = 30,
 #        units = "cm",
 #        dpi = 200)
 
 #### Precip ####
 
-precip_trim <- precip_dat %>%
-  filter(usgs_site %in% usgs_sites) %>%
+precip_dat <- precip_dat %>%
   # make date column based on data available
   mutate(date = parse_date_time(x = paste(year, day), 
                                 orders = "yj"))
 
+# Let's take a look at what the frequency of this data is. 
+(fig15 <- ggplot(precip_dat %>%
+                   filter(usgs_site == "USGS-07311783"), 
+                 aes(x = date, y = precip_mm)) +
+    geom_point(alpha = 0.8) +
+    #scale_y_log10() +
+    labs(x = "Date", y = "Precipitation (mm)",
+         title = "What is the variation in precip at site 07311783?") +
+    theme_bw())
+# Note, these are now roughly weekly (every 8 days).
+
 # Daily precipitation proved too challenging to meaningfully plot,
 # so choosing to aggregate by year instead.
 
-precip_trim_ann <- precip_trim %>%
-  group_by(usgs_site, area_km2, year) %>%
+precip_ann <- precip_dat %>%
+  group_by(usgs_site, year) %>%
   summarize(sum_ann_ppt = sum(precip_mm)) %>%
   ungroup()
 
 # What is the range in values through time?
 # Data Source: GridMET using watershed shapefiles
 # For more info see: https://www.climatologylab.org/gridmet.html
-(fig10 <- ggplot(precip_trim_ann, aes(x = year, 
-                                      y = sum_ann_ppt,
-                                      group = year)) +
+(fig16 <- ggplot(precip_ann, aes(x = year, y = sum_ann_ppt, group = year)) +
     geom_boxplot(color = "#69B9FA",
                  fill = "#69B9FA",
                  alpha = 0.8) +
@@ -267,71 +368,87 @@ precip_trim_ann <- precip_trim %>%
          title = "What is the variation in annual Ppt through time?") +
     theme_bw())
 
-# What is the range in values across sites?
-ppt_med <- precip_trim_ann %>%
-  group_by(usgs_site) %>%
-  summarize(ann_ppt_median = median(sum_ann_ppt)) %>%
-  ungroup()
-
-precip_trim_ann <- left_join(precip_trim_ann, ppt_med)
-
-(fig11 <- ggplot(precip_trim_ann %>%
-                   mutate(usgs_site = fct_reorder(usgs_site, 
-                                                  ann_ppt_median)), 
-                 aes(x = usgs_site, y = sum_ann_ppt)) +
-    geom_boxplot(color = "#59A3F8",
-                 fill = "#59A3F8",
-                 alpha = 0.8) +
-    labs(x = "Site",
-         y = "Cumulative Annual Precipitation (mm)",
-         title = "What is the variation in annual Ppt across sites?") +
-    theme_bw() +
-    theme(axis.text.x = element_blank(),
-          axis.ticks.x = element_blank()))
-
-# What is the range in values by watershed size?
-(fig12 <- ggplot(precip_trim_ann, aes(x = area_km2, 
-                                      y = ann_ppt_median)) +
-    geom_point(color = "#4B8FF7",
-                 alpha = 0.8) +
-    scale_x_log10() +
-    labs(x = "Watershed Size (km^2)",
-         y = "Median Cumulative Annual Precipitation (mm)",
-         title = "What is the variation in annual Ppt by watershed size?") +
-    theme_bw() +
-    theme(axis.text.x = element_blank(),
-          axis.ticks.x = element_blank()))
-
 # Combine plots.
-(fig_ppt <- fig10 / fig11 / fig12)
+(fig_ppt <- fig15 / fig16)
 
 # Export figure.
 # ggsave(plot = fig_ppt,
-#        filename = "figures/ppt_013124.jpg",
+#        filename = "figures/ppt_042224.jpg",
 #        width = 20,
 #        height = 30,
 #        units = "cm",
 #        dpi = 200)
 
+# !!! CAUTION !!!, the below code was made using a past version of this data 
+# and may no longer work.
+# Made annual precip for 17 sites only and joining with delta data.
+precip_mean_ann <- precip_trim_ann %>%
+  group_by(usgs_site) %>%
+  summarize(mean_cum_ann_ppt = mean(sum_ann_ppt)) %>%
+  ungroup()
+
+precip_join_delta <- left_join(precip_mean_ann, stan_lm_data6_delta,
+                               by = c("usgs_site" = "site"))
+
+(fig12.2 <- ggplot(precip_join_delta, aes(x = mean_cum_ann_ppt, 
+                                      y = delta)) +
+    geom_point(color = "#4B8FF7",
+               alpha = 0.8,
+               size = 5) +
+    scale_x_log10() +
+    labs(x = "Median Cumulative Annual Precipitation (mm)",
+         y = "Change in CQ Slope",
+         title = "What is the variation in changes in slope by annual Ppt?") +
+    theme_bw())
+
 #### Temperature ####
 
-temp_trim <- temp_dat %>%
-  filter(usgs_site %in% usgs_sites) %>%
-  mutate(date = ymd(time)) %>%
+temp_dat <- temp_dat %>%
+  mutate(date = make_date(year, month, day)) %>%
   mutate(temp_C = temp_K - 273.15)
+
+# Let's take a look at what the frequency of this data is. 
+(fig17 <- ggplot(temp_dat %>%
+                   filter(usgs_site == "USGS-06712000"), 
+                 aes(x = date, y = temp_K)) +
+    geom_point(alpha = 0.8) +
+    #scale_y_log10() +
+    labs(x = "Date", y = "Temperature (K)",
+         title = "What is the variation in temperature at site 06712000?") +
+    theme_bw())
+# Note, these are now roughly daily.
+
+# Also, we're still getting the weird Kelvin/Celsius stuff...
 
 # Daily temperature proved too challenging to meaningfully plot,
 # so choosing to again aggregate by year instead.
 
-temp_trim_ann <- temp_trim %>%
-  group_by(usgs_site, area_km2, year) %>%
+temp_ann <- temp_dat %>%
+  filter(temp_K > 100) %>% # removing unrealistic values
+  group_by(usgs_site, year) %>%
   summarize(ann_mean_temp = mean(temp_C)) %>%
   ungroup()
 
-# Hmmmm...something weird is happening here, it looks like some
-# data was pulled in in Kelvin, and the rest in Celsius, so need
-# to check with Nick.
+(fig18 <- ggplot(temp_ann, aes(x = year, y = ann_mean_temp, group = year)) +
+    geom_boxplot(color = "#E38377",
+                 fill = "#E38377",
+                 alpha = 0.8) +
+    labs(x = "Year",
+         y = "Mean Annual Temperature (Celsius)",
+         title = "What is the variation in annual Temp through time?") +
+    theme_bw())
 
-"#E7A655", "#E59D7F", "#E38377", "#6D4847"
+# Combine plots.
+(fig_temp <- fig17 / fig18)
+
+# Export figure.
+# ggsave(plot = fig_temp,
+#        filename = "figures/temp_042224.jpg",
+#        width = 20,
+#        height = 30,
+#        units = "cm",
+#        dpi = 200)
+
+# Also, we're still getting the weird Kelvin/Celsius stuff...
 
 # End of script.

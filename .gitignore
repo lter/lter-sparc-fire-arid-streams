@@ -43,3 +43,11 @@ vignettes/*.pdf
 
 # DS_Store (for Mac users)
 .DS_Store
+
+# Data folders
+data
+data_stanfits
+data_working
+
+# Model fits
+*_template.rds

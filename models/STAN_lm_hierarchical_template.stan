@@ -78,7 +78,10 @@ model {
     // We first trying the most simple hierarchical approach where
     // parameter_site ~ N(parameter, parameter_sigma)
 
-    C[j,h] ~ normal(Asite[f[j,h],h] + bsite[f[j,h],h]*Q[j,h], sigma[f[j,h]]);
+    C[j,h] ~ normal(Asite[f[j,h],h] + bsite[f[j,h],h]*Q[j,h], sigma[f[j,h]]); 
+    // sigma is estimating pre- & post-fire variance
+    
+    // data structure - compress j,h to i
     
     // So, for each indexed parameter, it will find the observation in question,
     // and for that number observation, find the value of the f vector (which
@@ -92,21 +95,21 @@ model {
   
   // Site-level priors
   // Remember, each site-level estimate will actually be two - one pre and one post-fire
-  bsite[k,h] ~ normal(b[k], bsigma[k]);
-  Asite[k,h] ~ normal(A[k], Asigma[k]);
+  bsite[k,h] ~ normal(b[k], bsigma[k]); // try (0, 10)
+  Asite[k,h] ~ normal(A[k], Asigma[k]); // try (0, 10)
   //sigmasite[k,h] ~ exponential(sigma[k]);
   
   // Cauchy distributions are normal dist. with heavy tails
-  bsigma[k] ~ cauchy(0,1);
-  Asigma[k] ~ cauchy(0,1);
+  // bsigma[k] ~ cauchy(0,1);
+  // Asigma[k] ~ cauchy(0,1);
   //sigmasigma[k] ~ cauchy(0,1);
   
   // Error priors - keeping values that worked in non-hierarchical format
   sigma[k] ~ exponential(0.1); // error must be positive, equivalent to half-normal(0,10)
   
   // Parameter priors - keeping fairly uninformative for now
-  A[k] ~ normal(0, 10); // intercept parameter prior
-  b[k] ~ normal(0, 10); // slope parameter prior
+  // A[k] ~ normal(0, 10); // intercept parameter prior
+  // b[k] ~ normal(0, 10); // slope parameter prior
   
   } // closes pre-/post-fire data loop
   
@@ -123,7 +126,7 @@ generated quantities{
   
   vector[sites] delta_bsite; // changes in CQ slope by site
   
-  real delta_b; // universal change in CQ slope
+  // real delta_b; // universal change in CQ slope
   //real delta_sigma; // change in variation
   
   // Use estimated pre- and post-fire values
@@ -134,10 +137,17 @@ generated quantities{
   
   }
   
-  delta_b = b[1] - b[2];
+  // delta_b = b[1] - b[2];
   //delta_sigma = sigma[1] - sigma[2];
   
   // remember, script MUST end in a blank line !!!
   
 }
+
+// hierarchical model
+// asite model
+// bsite model
+
+// multi-variate regression
+// bsite/asite (matrix) ~ basin slope etc. for all covariates (variance/covariance matrix)
 
