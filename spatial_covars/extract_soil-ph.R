@@ -65,7 +65,7 @@ plot(ph_rast, axes = T, reset = F)
 plot(sf_file["usgs_site"], axes = T, add = T)
 
 ## -------------------------------- ##
-# Extract pH ----
+            # Extract pH ----
 ## -------------------------------- ##
 
 # List all files in that folder
@@ -138,7 +138,7 @@ ph_path <- file.path(path, "extracted-data", "fire-arid_soil-ph.csv")
 write.csv(x = final_ph, na = '', row.names = F, file = ph_path)
 
 # Upload to GoogleDrive
-# googledrive::drive_upload(media = ph_path, overwrite = T,
-#                           path = googledrive::as_id("https://drive.google.com/drive/u/0/folders/1XxvY56h1cMmaYatF7WhVrbYbaOgdRBGC"))
+googledrive::drive_upload(media = ph_path, overwrite = T,
+                          path = googledrive::as_id("https://drive.google.com/drive/u/0/folders/1XxvY56h1cMmaYatF7WhVrbYbaOgdRBGC"))
 
 # End ----
