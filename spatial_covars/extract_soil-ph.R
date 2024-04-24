@@ -1,5 +1,5 @@
 ## ------------------------------------------------------- ##
-# SPARC Fire & Aridlands - Extract Climate Covariate
+    # SPARC Fire & Aridlands - Extract Climate Covariate
 ## ------------------------------------------------------- ##
 # Written by: Nick J Lyon
 
@@ -15,7 +15,7 @@
 ## http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/ph/mean/0_5/
 
 ## -------------------------------- ##
-# Housekeeping ----
+        # Housekeeping ----
 ## -------------------------------- ##
 
 # Read needed libraries
@@ -61,8 +61,8 @@ plot(sf_file["usgs_site"], axes = T)
 ph_rast <- terra::rast(x = file.path(soil_path, "lat2425_lon-98-97.tif"))
 
 # Visual check for overlap
-plot(ph_rast, axes = T, reset = F)
-plot(sf_file["usgs_site"], axes = T, add = T)
+# plot(ph_rast, axes = T, reset = F)
+# plot(sf_file["usgs_site"], axes = T, add = T)
 
 ## -------------------------------- ##
             # Extract pH ----
@@ -92,8 +92,8 @@ for(focal_ph in ph_files){
     # Filter out NAs
     dplyr::filter(!is.na(value))
   
-  # Add to the list
-  ph_list[[focal_ph]] <- focal_df
+  # Add to the list if there's any content
+  if(nrow(focal_df) >= 1){ ph_list[[as.character(focal_ph)]] <- focal_df }
   
 } # Close list
 
