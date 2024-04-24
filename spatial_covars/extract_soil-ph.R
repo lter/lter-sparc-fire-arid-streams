@@ -69,7 +69,7 @@ ph_rast <- terra::rast(x = file.path(soil_path, "lat2425_lon-98-97.tif"))
 ## -------------------------------- ##
 
 # List all files in that folder
-ph_files <- sort(dir(path = soil_path))
+ph_files <- sort(dir(path = soil_path, pattern = ".tif"))
 
 # Make an empty list
 ph_list <- list()
@@ -95,14 +95,55 @@ for(focal_ph in ph_files){
   # Add to the list if there's any content
   if(nrow(focal_df) >= 1){ ph_list[[as.character(focal_ph)]] <- focal_df }
   
-} # Close list
+} # Close extraction loop
 
 ## -------------------------------- ##
           # Wrangle pH ----
 ## -------------------------------- ##
 
-# Unlist the loop output
-ph_v1 <- ph_list %>% 
+# Make a second empty list
+ph_v0 <- list()
+
+# Loop across *sites* to do summarization
+for(focal_site in sort(unique(sf_file$usgs_site))){
+  
+  # Processing message
+  message("Summarizing soil data for '", focal_site, "'")
+  
+  # Make a list for this site
+  site_list <- list()
+  
+  # Loop across list elements of the original extraction
+  for(k in 1:length(ph_list)){
+  
+    # Grab list element & subset to just this focal site
+    focal_ph_data <- ph_list[k] %>% 
+      dplyr::filter(usgs_site == focal_site)
+    
+    # Add this to the list for this site
+    site_list[[paste0(focal_site, "-", k)]] <- focal_ph_data
+    
+  } # Close inner loop
+  
+  # Process the site-specific list
+  site_df <- site_list %>% 
+    # Unlist
+    purrr::list_rbind(x = .) %>% 
+    # Summarize to reduce data size
+    dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
+    dplyr::summarize(soil_ph_avg = mean(value, na.rm = T),
+                     soil_ph_median = median(value, na.rm = T),
+                     soil_ph_min = min(value, na.rm = T),
+                     soil_ph_max = max(value, na.rm = T)) %>%
+    dplyr::ungroup()
+  
+  # Add to larger list
+  ph_v0[[paste(focal_site)]] <- site_df
+  
+} # Close outer loop
+
+# Process that output
+ph_v1 <- ph_v0 %>% 
   purrr::list_rbind(x = .)
 
 # Check structure
