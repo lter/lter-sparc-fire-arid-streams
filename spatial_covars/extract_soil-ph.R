@@ -97,6 +97,9 @@ for(focal_ph in ph_files){
   
 } # Close extraction loop
 
+# Tidy environment
+rm(list = setdiff(x = ls(), y = c("sf_file", "group_cols", "path", "soil_path", "ph_list")))
+
 ## -------------------------------- ##
           # Wrangle pH ----
 ## -------------------------------- ##
