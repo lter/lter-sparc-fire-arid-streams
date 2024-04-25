@@ -5,7 +5,7 @@
 
 # Purpose:
 ## Using the provided shapefile(s), extract the following data:
-## pH
+## SOIL PH
 
 # Data Source
 ## POLARIS: A 30-meter probabilistic soil series map of the contiguous United States
