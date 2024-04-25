@@ -5,7 +5,7 @@
 
 # Purpose:
 ## Using the provided shapefile(s), extract the following data:
-## ORGANIC MATTER (log10 %)
+## SOIL ORGANIC MATTER (log10 %)
 
 # Data Source
 ## POLARIS: A 30-meter probabilistic soil series map of the contiguous United States
@@ -97,7 +97,7 @@ for(focal_om in om_files){
 rm(list = setdiff(x = ls(), y = c("sf_file", "group_cols", "path", "soil_path", "om_list")))
 
 ## -------------------------------- ##
-            # Wrangle pH ----
+           # Wrangle OM ----
 ## -------------------------------- ##
 
 # Make a second empty list
