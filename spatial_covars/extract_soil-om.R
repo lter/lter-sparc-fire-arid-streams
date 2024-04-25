@@ -1,11 +1,11 @@
 ## ------------------------------------------------------- ##
-# SPARC Fire & Aridlands - Extract Climate Covariate
+    # SPARC Fire & Aridlands - Extract Climate Covariate
 ## ------------------------------------------------------- ##
 # Written by: Nick J Lyon
 
 # Purpose:
 ## Using the provided shapefile(s), extract the following data:
-## pH
+## ORGANIC MATTER (log10 %)
 
 # Data Source
 ## POLARIS: A 30-meter probabilistic soil series map of the contiguous United States
@@ -15,7 +15,7 @@
 ## http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/ph/mean/0_5/
 
 ## -------------------------------- ##
-# Housekeeping ----
+          # Housekeeping ----
 ## -------------------------------- ##
 
 # Read needed libraries
@@ -38,7 +38,7 @@ rm(list = ls()); gc()
 soil_path <- file.path(path, "raw-spatial-data", "polaris_soil", "polaris_om-mean-0-5_tiles")
 
 ## -------------------------------- ##
-# Extraction Prep ----
+        # Extraction Prep ----
 ## -------------------------------- ##
 
 # Load in the catchment delineations (stored as GeoJSON)
@@ -60,12 +60,8 @@ plot(sf_file["usgs_site"], axes = T)
 # Read in a pH raster
 om_rast <- terra::rast(x = file.path(soil_path, "lat2425_lon-98-97.tif"))
 
-# Visual check for overlap
-# plot(om_rast, axes = T, reset = F)
-# plot(sf_file["usgs_site"], axes = T, add = T)
-
 ## -------------------------------- ##
-# Extract pH ----
+            # Extract OM ----
 ## -------------------------------- ##
 
 # List all files in that folder
@@ -101,7 +97,7 @@ for(focal_om in om_files){
 rm(list = setdiff(x = ls(), y = c("sf_file", "group_cols", "path", "soil_path", "om_list")))
 
 ## -------------------------------- ##
-# Wrangle pH ----
+            # Wrangle pH ----
 ## -------------------------------- ##
 
 # Make a second empty list
@@ -153,7 +149,7 @@ om_v1 <- om_v0 %>%
 dplyr::glimpse(om_v1)
 
 ## -------------------------------- ##
-# Export ----
+            # Export ----
 ## -------------------------------- ##
 
 # Pick final object name
@@ -163,7 +159,7 @@ final_om <- om_v1
 dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
 
 # Define file path for CSV
-om_path <- file.path(path, "extracted-data", "fire-arid_soil-ph.csv")
+om_path <- file.path(path, "extracted-data", "fire-arid_soil-om.csv")
 
 # Export the summarized data
 write.csv(x = final_om, na = '', row.names = F, file = om_path)
