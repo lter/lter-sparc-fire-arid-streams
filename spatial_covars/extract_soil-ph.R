@@ -120,7 +120,7 @@ for(focal_site in sort(unique(sf_file$usgs_site))){
   for(k in 1:length(ph_list)){
   
     # Grab list element & subset to just this focal site
-    focal_ph_data <- ph_list[k] %>% 
+    focal_ph_data <- ph_list[[k]] %>% 
       dplyr::filter(usgs_site == focal_site)
     
     # Add this to the list for this site
@@ -152,25 +152,12 @@ ph_v1 <- ph_v0 %>%
 # Check structure
 dplyr::glimpse(ph_v1)
 
-# Do needed post-processing
-ph_v2 <- ph_v1 %>% 
-  # Summarize within existing groups
-  dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
-  dplyr::summarize(soil_ph_avg = mean(value, na.rm = T),
-                   soil_ph_median = median(value, na.rm = T),
-                   soil_ph_min = min(value, na.rm = T),
-                   soil_ph_max = max(value, na.rm = T)) %>%
-  dplyr::ungroup()
-
-# Check structure
-dplyr::glimpse(ph_v2)
-
 ## -------------------------------- ##
             # Export ----
 ## -------------------------------- ##
 
 # Pick final object name
-final_ph <- ph_v2
+final_ph <- ph_v1
 
 # Create folder to export to
 dir.create(path = file.path(path, "extracted-data"), showWarnings = F)
