@@ -58,7 +58,7 @@ plot(sf_file["usgs_site"], axes = T)
 (group_cols <- c(setdiff(x = names(sf_file), y = c("geometry", "geom"))))
 
 # Read in a pH raster
-porosity_rast <- terra::rast(x = file.path(soil_path, "lat2425_lon-98-97.tif"))
+porosity_rast <- terra::rast(x = file.path(soil_path, "lat2526_lon-100-99.tif"))
 
 ## -------------------------------- ##
         # Extract Porosity ----
