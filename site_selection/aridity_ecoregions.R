@@ -29,7 +29,7 @@ global_ai_crop <- terra::clamp(global_ai_crop, lower = 0.001, values = FALSE)
 # DATA: ecoregions (here using north America level III)
 
 ecoregions <- sf::st_read(
-  dsn   = "path-to-directory",
+  dsn   = "../data/",
   layer = "NA_CEC_Eco_Level3"
 )
 

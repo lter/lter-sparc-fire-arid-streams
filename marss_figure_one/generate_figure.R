@@ -26,14 +26,14 @@ library(tibble)
 library(plyr)
 
 ## source required functions from a clone of `ggmap`
-source("path-to-clone/ggmap/R/LonLat2XY.R")
-source("path-to-clone/ggmap/R/XY2LonLat.R")
-source("path-to-clone/ggmap/R/helpers.R")
-source("path-to-clone/ggmap/R/register_stadiamaps.R")
-source("path-to-clone/ggmap/R/ggmap_options.R")
-source("path-to-clone/ggmap/R/attach.R")
-source("path-to-clone/ggmap/R/file_drawer.R")
-source("path-to-clone/ggmap/R/get_stadiamap.R")
+source("~/localRepos/ggmap/R/LonLat2XY.R")
+source("~/localRepos/ggmap/R/XY2LonLat.R")
+source("~/localRepos/ggmap/R/helpers.R")
+source("~/localRepos/ggmap/R/register_stadiamaps.R")
+source("~/localRepos/ggmap/R/ggmap_options.R")
+source("~/localRepos/ggmap/R/attach.R")
+source("~/localRepos/ggmap/R/file_drawer.R")
+source("~/localRepos/ggmap/R/get_stadiamap.R")
 
 
 # settings
@@ -85,7 +85,7 @@ source("plot_legends.R")
       plot       = plot_with_ppt,
       label      = "Latitude",
       vpadding   = grid::unit(0, "lines"),
-      y          = 7.000,
+      y          = 6.500,
       x          = 0.015,
       vjust      = 0.100,
       hjust      = 0.100,
@@ -135,17 +135,17 @@ cowplot::draw_line(
   size  = 1
 ) +
 cowplot::draw_text(
-  text  = "SB",
-  x     = 0.545,
-  y     = 0.530,
+  text  = "Mediterranean",
+  x     = 0.075,
+  y     = 0.850,
   size  = 12,
   hjust = 0.0,
   vjust = 0.0
 ) +
 cowplot::draw_text(
-  text  = "VC",
-  x     = 0.632,
-  y     = 0.535,
+  text  = "monsoonal",
+  x     = 0.075,
+  y     = 0.545,
   size  = 12,
   hjust = 0.0,
   vjust = 0.0
@@ -157,4 +157,9 @@ cowplot::draw_grob(
   nm_bound
 )
 
-ggplot2::ggsave("/tmp/stacked.jpg")
+ggplot2::ggsave(
+  filename = "/tmp/stacked.jpg",
+  width    = 9,
+  height   = 7,
+  units    = c("in")
+)

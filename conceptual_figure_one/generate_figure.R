@@ -12,10 +12,11 @@ font_size <- 12
 # DATA: ecoregions (here using north America level II)
 
 # data in drive: https://drive.google.com/file/d/1mL0mwaCPSLnn1zQ286ZcGCn4kdEXQJZd/view?usp=drive_link
+# data in repo: data/NA_CEC_Eco_Level2.*
 # data source: https://www.epa.gov/eco-research/ecoregions-north-america
 
 ecoregions <- sf::st_read(
-  dsn   = "path-to-directory",
+  dsn   = "../data/",
   layer = "NA_CEC_Eco_Level2"
 )
 
@@ -44,26 +45,34 @@ dplyr::rename(mm = wc2.1_10m_bio_12)
 # DATA: western USA
 
 western_states <- tigris::states() |> 
-dplyr::filter(
-  grepl(
-    pattern     = "nev|ore|was|cal|mex|ariz|tex|uta|col|wyo|monta|idah",
-    x           = NAME,
-    ignore.case = TRUE
-  )
+  dplyr::filter(
+    grepl(
+      pattern     = "nev|ore|was|cal|mex|ariz|tex|uta|col|wyo|monta|idah",
+      x           = NAME,
+      ignore.case = TRUE
+    )
   ) |> 
-dplyr::summarise()
+  sf::st_transform(crs = 4326) |>
+  dplyr::summarise()
 
 
 # MAPPING: ecoregions
 
 western_ecos <- ecoregions[sf::st_intersects(x = ecoregions, y = western_states, sparse = FALSE), ] |> 
-dplyr::filter(
-  !grepl(
-    pattern     = "louisiana|southeastern|marine",
-    x           = NA_L2NAME,
-    ignore.case = TRUE
-  )
-)
+  dplyr::filter(
+    !grepl(
+      pattern     = "louisiana|southeastern|marine",
+      x           = NA_L2NAME,
+      ignore.case = TRUE
+    )
+  ) |>
+    dplyr::filter(
+      !grepl(
+        pattern = "plains",
+        NA_L1NAME,
+        ignore.case = TRUE
+      )
+    )
 
 ## ecoregions metadata
 
@@ -106,9 +115,9 @@ dplyr::filter(
     ggplot2::scale_fill_manual(
       breaks = c(
         # plains
-        "SOUTH CENTRAL SEMIARID PRAIRIES",
-        "WEST-CENTRAL SEMIARID PRAIRIES",
-        "TAMAULIPAS-TEXAS SEMIARID PLAIN",
+        # "SOUTH CENTRAL SEMIARID PRAIRIES",
+        # "WEST-CENTRAL SEMIARID PRAIRIES",
+        # "TAMAULIPAS-TEXAS SEMIARID PLAIN",
         # deserts
         "COLD DESERTS",
         "WARM DESERTS",
@@ -121,9 +130,9 @@ dplyr::filter(
         ),
       values = c(
         # plains
-        "#9bc4e2",
-        "#bcd4e6",
-        "#e7feff",
+        # "#9bc4e2",
+        # "#bcd4e6",
+        # "#e7feff",
         # deserts
         "#fcb071",
         "#ec8c54",
@@ -241,8 +250,8 @@ qn01 <- scales::rescale(x = c(qn, range(global_map_df$mm)))
 
 (
   ecos_map <- cowplot::plot_grid(
-    western_ecos_plot,
     ppt,
+    western_ecos_plot,
     nrow       = 2,
     ncol       = 1,
     labels     = c("A", "B"),
@@ -254,6 +263,8 @@ qn01 <- scales::rescale(x = c(qn, range(global_map_df$mm)))
 # ggsave
 
 ggplot2::ggsave(
-  filename = "/tmp/ecoregions_MAP.jpg"
-  # width    = 12
+  filename = "/tmp/ecoregions_MAP.jpg",
+  width    = 9,
+  height   = 7,
+  units    = c("in")
 )
