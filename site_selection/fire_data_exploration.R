@@ -141,4 +141,21 @@ ggplot(fire_large_each, aes(x = per_cent_burned)) +
 # ok, so little fires everywhere again
 # but appears over half would burn >1%
 
+# If we instead use the full fire dataset...
+fire_biggies <- fire_data %>% 
+  # filter by size
+  filter(per_cent_burned > 10) %>% 
+  group_by(usgs_site, event_id, ignition_date) %>% 
+  # make sure to add any duplicate events together
+  summarize(total_per_cent_burned = sum(per_cent_burned)) %>% 
+  ungroup() %>%
+  mutate(Year = year(ignition_date))
+
+fire_biggies <- fire_biggies %>%
+  arrange(Year) %>%
+  group_by(usgs_site) %>% 
+  # calculate the change in years between events
+  mutate(diff_time = Year - lag(Year)) %>% 
+  ungroup()
+
 # End of script.
