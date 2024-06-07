@@ -119,4 +119,26 @@ ggplot(fire_multiples, aes(x = fires)) +
   scale_y_log10() +
   theme_bw()
 
+# What is the frequency of two fires that burn >10% of the watershed back to back?
+fire_large <- fire_trim %>%
+  filter(per_cent_burned >= 10) # only 37 instances of fires that large
+
+length(unique(fire_large$usgs_site)) # 36 unique sites
+# and the duplicate appears to be the same fire, so
+# there are NO INSTANCES of large, back-to-back fires in this dataset.
+
+# What does the data spread of fire size look like, if we select only for the largest
+# fire in each catchment?
+fire_large_each <- fire_trim %>%
+  group_by(usgs_site) %>%
+  slice_max(per_cent_burned) %>%
+  ungroup()
+
+ggplot(fire_large_each, aes(x = per_cent_burned)) +
+  geom_histogram(fill = "coral", alpha = 0.8) +
+  scale_x_log10() +
+  theme_bw()
+# ok, so little fires everywhere again
+# but appears over half would burn >1%
+
 # End of script.
