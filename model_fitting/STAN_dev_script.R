@@ -19,8 +19,11 @@ library(bayesplot)
 library(data.table)
 library(viridis)
 
-# Load dataset.
+# Load chemistry dataset.
 data <- readRDS("data_working/usgs_chem_filtered_011924.rds")
+
+# Load fire dataset.
+fire_data <- readxl::read_excel("data/dd_area_stats.xlsx") 
 
 # Run each time you load in "rstan"
 rstan_options(auto_write=TRUE)
@@ -28,9 +31,16 @@ rstan_options(auto_write=TRUE)
 options(mc.cores=parallel::detectCores())
 # during runs, each chain needs a dedicated core
 
-#### Formula 1 - Basic LM ####
+#### CQ Model Fits ####
 
-##### Data Prep #####
+# The below iterative model building will work towards developing the
+# concentration-discharge model structure that will be used for all
+# sites/chemical analytes to examine pre to post-fire changes in CQ slope,
+# intercept, and variance.
+
+##### Formula 1 - Basic LM #####
+
+###### Data Prep ######
 
 # To first get the models working, I'm going to pare down
 # which data I'll use as a test dataset. For now, I will
@@ -64,7 +74,7 @@ sum(is.na(oc_dat1$scaleQ)) # 0
 sum(is.nan(oc_dat1$scaleOC)) # 0
 sum(is.nan(oc_dat1$scaleQ)) # 0
 
-##### Model Fit #####
+###### Model Fit ######
 
 # Prep data for STAN as a list
 data_stan <- list(
@@ -105,12 +115,12 @@ mcmc_areas(stan_lm_run,
     subtitle = "with medians and 95% intervals"
   )
 
-#### Formula 2 - Pre/Post Fire ####
+##### Formula 2 - Pre/Post Fire ####
 
 # Now, I'm going to add in the extra step of calculating pre- and
 # post-fire CQ slope values.
 
-##### Data Prep #####
+###### Data Prep #####
 
 # Create dataset for modeling (similar to above).
 oc_dat2 <- data %>%
@@ -145,7 +155,7 @@ sum(is.nan(oc_dat2$scaleOC)) # 0
 sum(is.nan(oc_dat2$scaleQ)) # 0
 sum(is.nan(oc_dat2$fire)) # 0
 
-##### Model Fit #####
+###### Model Fit #####
 
 # Prep data for STAN as a list
 data_stan2 <- list(
@@ -190,12 +200,12 @@ mcmc_intervals(stan_lm_run2,
     subtitle = "with medians and 95% intervals"
   )
 
-#### Formula 3 - Delta Slope ####
+##### Formula 3 - Delta Slope ####
 
 # Next, I'm going to estimate the change in slopes between
 # pre- and post-fire periods.
 
-##### Data Prep OC #####
+###### Data Prep OC #####
 
 # Create dataset for modeling (similar to above).
 oc_dat3 <- data %>%
@@ -227,7 +237,7 @@ sum(is.nan(oc_dat3$scaleOC)) # 0
 sum(is.nan(oc_dat3$scaleQ)) # 0
 sum(is.nan(oc_dat3$fire)) # 0
 
-##### Model Fit OC #####
+###### Model Fit OC #####
 
 # Prep data for STAN as a list
 data_stan3 <- list(
@@ -292,7 +302,7 @@ mcmc_intervals(stan_lm_run3,
     subtitle = "with medians and 95% intervals"
   )
 
-##### Data Prep SC #####
+###### Data Prep SC #####
 
 # Ok, so part of the issue here may be that there is too little "delta"
 # for the model to glom onto here, so let's look for another site at which
@@ -333,7 +343,7 @@ sum(is.nan(sc_dat3$scaleSC)) # 0
 sum(is.nan(sc_dat3$scaleQ)) # 0
 sum(is.nan(sc_dat3$fire)) # 0
 
-##### Model Fit SC #####
+###### Model Fit SC #####
 
 # Prep data for STAN as a list
 data_stan3.1 <- list(
@@ -371,9 +381,9 @@ mcmc_intervals(stan_lm_run3.1,
     subtitle = "with medians and 95% intervals"
   )
 
-#### Formula 4 - Multiple Sites ####
+##### Formula 4 - Multiple Sites ####
 
-##### Data Prep #####
+###### Data Prep #####
 
 # Now, I need to make the model iterate over multiple sites,
 # so I need to first prepare a list of 10 sites with pre-
@@ -440,7 +450,7 @@ sum(is.nan(dat4$scaleSC)) # 0
 sum(is.nan(dat4$scaleQ)) # 0
 sum(is.nan(dat4$fire)) # 0
 
-##### Model Fit #####
+###### Model Fit #####
 
 # Split list by site
 dat4_l <- split(dat4, dat4$usgs_site)
@@ -686,9 +696,9 @@ mcmc_intervals(stan_lm_run4$`USGS-09367580`,
     subtitle = "with medians and 95% intervals"
   ) # +0.3
 
-#### Formula 5 - Pre/Post as One Model ####
+##### Formula 5 - Pre/Post as One Model ####
 
-##### Data Prep #####
+###### Data Prep #####
 
 # I will prepare a list of 10 sites with pre-
 # and post-fire specific conductivity data to
@@ -758,7 +768,7 @@ sum(is.nan(dat5$scaleSC)) # 0
 sum(is.nan(dat5$scaleQ)) # 0
 sum(is.nan(dat5$fire)) # 0
 
-##### Model Fit #####
+###### Model Fit #####
 
 # Split list by site
 dat5_l <- split(dat5, dat5$usgs_site)
@@ -854,9 +864,9 @@ ggplot(stan_lm_data5_deltas,
 
 # Ahhh, this is so cool.
 
-#### Formula 6 - Multi-level Model ####
+##### Formula 6 - Multi-level Model ####
 
-##### Data Prep #####
+###### Data Prep #####
 
 # I will prepare a df of sites with pre-
 # and post-fire specific conductivity data to
@@ -1094,7 +1104,7 @@ F_mx <- matrix(unlist(subset_F), nrow = 5229, ncol = 17)
 # Coercing the matrix to be integers rather than real
 mode(F_mx) <- "integer"
 
-##### Model Fit #####
+###### Model Fit #####
 
 # Compile data for hierarchical run build #1
 data_stan6 <- list(sites = ncol(SC_mx), # number of sites
@@ -1193,5 +1203,139 @@ stan_lm_data6_delta <- stan_lm_data6_trim %>%
   mutate(delta = before - after)
 
 #saveRDS(stan_lm_data6_delta, "data_working/delta_calc_17sites_030824.rds")
+
+#### Regression Model Fits ####
+
+# The below iterative model building will work towards developing the
+# regression model structure to explain the variability in CQ slopes,
+# intercepts, and (potentially) variance. But we'll start the builds
+# using changes in slope.
+
+##### Formula R1 - Basic LM ####
+
+###### Data Prep #####
+
+# I will use the outputs from Formula 5 above and
+# fire characteristics to examine the effect of % of
+# the watershed burned on changes in CQ slope.
+
+# First, load the model fit.
+stan_lm_run5 <- readRDS("data_stanfits/unified_fit_wdeltas_042224.rds")
+
+# And extract the iterations.
+# Going to create a function to pull out all iterations.
+extract_siteparams <- function(df){
+  rstan::extract(df, c("delta_b", "delta_A", "delta_sigma"))
+}
+
+# Map to all sites from model fit.
+data_out_its_params <- map(stan_lm_run5, extract_siteparams)
+
+# And transform into a dataframe.
+data_out_its_df <- map_df(data_out_its_params,
+                          ~as.data.frame(.x), .id = "usgs_site")
+
+# Summarize to calculate means and sd for each parameter.
+data_param_summary <- data_out_its_df %>%
+  group_by(usgs_site) %>%
+  summarize(mean_delta_b = mean(delta_b),
+            sd_delta_b = sd(delta_b),
+            mean_delta_A = mean(delta_A),
+            sd_delta_A = sd(delta_A),
+            mean_delta_sigma = mean(delta_sigma),
+            sd_delta_sigma = sd(delta_sigma)) %>%
+  ungroup()
+
+# And now add fire data to this.
+# First, we have to select for the most recent fires (since that's
+# how the 17 for this small analysis were chosen).
+fire_largest <- fire_data %>%
+  group_by(usgs_site) %>%
+  slice_max(per_cent_burned) %>%
+  ungroup()
+
+data_param_fire <- left_join(data_param_summary, fire_largest,
+                             by = c("usgs_site"))
+
+# Ok so something wonky is happening with the dates for sites 12 & 14
+# but I'm going to leave it for now since these were hard coded and this
+# is just a test. But I do need to remove row 6 since there's a duplicate
+# "largest" fire at this site, and I chose the later one.
+data_param_fire <- data_param_fire[-6,]
+
+# And finally, scale all variables prior to modeling.
+data_param_fire <- data_param_fire %>%
+  # need to scale changes in CQ slope
+  mutate(scale_mean_delta_b = scale(mean_delta_b)) %>%
+  mutate(scale_sd_delta_b = scale(sd_delta_b)) %>%
+  # and scale percent of the watershed burned
+  mutate(scale_perc_burned = scale(per_cent_burned))
+
+# Quick plot of the data with rough lm()s added.
+ggplot(data_param_fire, aes(x = scale_perc_burned, 
+                            y = scale_mean_delta_b)) +
+  geom_point(fill = "coral", alpha = 0.5) +
+  geom_smooth(method = "lm", fill = NA) +
+  theme_bw()
+# At first glance, larger % burned results in more negative change
+# Decreasing CQ slope means transition towards source-limited system
+
+# Ensure no NAs or NaNs are present in the data,
+# because STAN does not allow this.
+sum(is.na(data_param_fire$scale_mean_delta_b)) # 0
+sum(is.na(data_param_fire$scale_sd_delta_b)) # 0
+sum(is.na(data_param_fire$scale_perc_burned)) # 0
+sum(is.nan(data_param_fire$scale_mean_delta_b)) # 0
+sum(is.nan(data_param_fire$scale_sd_delta_b)) # 0
+sum(is.nan(data_param_fire$scale_perc_burned)) # 0
+
+###### Model Fit #####
+
+# Function to compile necessary data
+stan_data_compile <- function(x){
+  
+  data <- list(
+    N = nrow(x), # number of observations
+    delta = x$scale_mean_delta_b[1:nrow(x)], # change in CQ slope
+    B = x$scale_perc_burned[1:nrow(x)] # % watershed burned
+  )
+  
+  return(data)
+  
+}
+
+# Apply function to dataset
+data_stanr1 <- stan_data_compile(data_param_fire)
+
+# Fit model - should run in 1 minute
+stan_lm_runr1 <- stan(file = "models/STAN_lm_template_R.stan",
+                      data = data_stanr1,
+                      chains = 3,
+                      iter = 5000,
+                      control = list(max_treedepth = 12))
+
+# Export for safekeeping.
+# saveRDS(stan_lm_runr1, "data_stanfits/regression_lm_060724.rds")
+
+# Examine model convergence
+shinystan::launch_shinystan(stan_lm_runr1)
+# No divergent transitions.
+
+# Examine summaries of the estimates.
+stan_lm_data_r1 <- summary(stan_lm_runr1,
+                        pars = c("a", "b", "sigma"),
+                        probs = c(0.025, 0.5, 0.975))$summary
+# And Rhat values all look good (Rhat < 1.05)
+
+# Plot parameter estimates
+color_scheme_set("teal")
+mcmc_areas(stan_lm_runr1,
+           pars = c("a", "b"),
+           point_est = "median",
+           prob = 0.95) +
+  labs(
+    title = "Posterior distributions",
+    subtitle = "with medians and 95% intervals"
+  ) # negative but not significant (CIs cross 0)
 
 # End of script.
