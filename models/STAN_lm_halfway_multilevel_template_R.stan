@@ -11,7 +11,12 @@
 // The input data are vectors 'delta', 'delta_sd', and 'B' of length 'N'.
 data {
   
-  int<lower=0> N; // maximum possible number of observations
+  // data necessary for region-level grouping
+  int<lower=0> N; // number of observations
+  int<lower=1> R; // total number of regions
+  int<lower=1, upper=R> region [N]; // integers denoting regions
+  
+  // data necessary to fit regression
   vector[N] delta; // observations - mean estimates of change in CQ slopes from posterior probability distributions
   vector[N] delta_sd; // variability of observations - sd estimates of change in CQ slopes from posterior probability distributions
   vector[N] B; // predictor - percent of the watershed burned (%)
@@ -19,12 +24,18 @@ data {
 }
 
 // The parameters accepted by the model. Our model
-// accepts three parameters 'a', 'b', and 'sigma'.
+// accepts two parameters 'aregion' and 'b_Bregion'.
+
+// This formulation estimates all parameters at all regions.
 
 parameters {
   
-  real a; // intercept
-  real b; // slope
+  // HUC level parameters
+  vector[R] b_Bregion; // slope for each region
+  
+  vector[R] aregion; // intercept for each region
+  
+  // no hyperparameters in this version
   
 }
 
@@ -36,16 +47,24 @@ transformed parameters{
 
 // The model to be estimated. We model the output
 // 'delta' to be normally distributed with the mean value
-// using the linear formula and standard deviation 'sigma'.
+// using the linear formula and standard deviation 'delta_sd'.
 model {
   
-  // Likelihood
-  delta ~ normal(a + b*B, delta_sd);
-  // place delta_sd in place of sigma
+  // Establish loop framework
+  // For each observation...
+  for(j in 1:N){
   
-  // model priors - keeping fairly uninformative for now
-  a ~ normal(0, 10); // intercept parameter prior
-  b ~ normal(0, 10); // slope parameter prior
+  // Likelihood
+  delta[j] ~ normal(aregion[region[j]] + b_Bregion[region[j]]*B[j], delta_sd[j]);
+  // delta, B, and delta_sd are at site-level
+  
+  // regional model priors 
+  aregion ~ normal(0, 10); // no hyperparameters
+  b_Bregion ~ normal(0, 10); // no hyperparameters
+  
+  //} // closes observations loop
+  
+  } // closes regions for loop
   
   // remember, script MUST end in a blank line
   
