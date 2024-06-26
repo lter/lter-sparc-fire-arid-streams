@@ -25,6 +25,10 @@ pdsi_dat <- read_csv("data/fire-arid_pdsi.csv")
 precip_dat <- read_csv("data/fire-arid_precipitation.csv")
 pet_dat <- read_csv("data/fire-arid_pet.csv")
 temp_dat <- read_csv("data/fire-arid_temperature.csv")
+ssilt_dat <- read_csv("data/fire-arid_soil-silt.csv")
+sporosity_dat <- read_csv("data/fire-arid_soil-porosity.csv")
+som_dat <- read_csv("data/fire-arid_soil-om.csv")
+sph_dat <- read_csv("data/fire-arid_soil-ph.csv")
 
 # Load dataset containing sites with chemistry data of interest
 # and representative of the full hydrograph (n = 291 sites).
@@ -450,5 +454,52 @@ temp_ann <- temp_dat %>%
 #        dpi = 200)
 
 # Also, we're still getting the weird Kelvin/Celsius stuff...
+
+#### Soil ####
+
+# All soil parameters appear to be one-time measures, so these would be
+# categorical rather than pre/post fire changes.
+
+# What is the range in % silt across sites?
+(fig19 <- ggplot(ssilt_dat, aes(x = soil_silt_perc_median)) +
+   geom_histogram(fill = "#DED4CB") +
+   labs(x = "Median Percent Silt",
+        title = "What is the variation in median % silt?") +
+   theme_bw())
+
+# What is the range in porosity across sites?
+(fig20 <- ggplot(sporosity_dat, aes(x = soil_porosity_brooks.corey_median)) +
+    geom_histogram(fill = "#7E7576") +
+    labs(x = "Median Porosity (Brooks Corey)",
+         title = "What is the variation in median porosity?") +
+    theme_bw())
+
+# What is the range in % SOM across sites?
+(fig21 <- ggplot(som_dat %>%
+                   mutate(soil_om_perc_median = 10^(soil_om_log10_perc_median)), 
+                 aes(x = soil_om_perc_median)) +
+    scale_x_log10() +
+    geom_histogram(fill = "#A79787") +
+    labs(x = "Median Percent Soil Organic Matter",
+         title = "What is the variation in median soil OM?") +
+    theme_bw())
+
+# What is the range in pH across sites?
+(fig22 <- ggplot(sph_dat, aes(x = soil_ph_median)) +
+    geom_histogram(fill = "#3A2C21") +
+    labs(x = "Median pH",
+         title = "What is the variation in median soil pH?") +
+    theme_bw())
+
+# Combine plots.
+(fig_soil <- (fig19 | fig20) / (fig21 | fig22))
+
+# Export figure.
+# ggsave(plot = fig_soil,
+#        filename = "figures/soil_character_062624.jpg",
+#        width = 30,
+#        height = 15,
+#        units = "cm",
+#        dpi = 200)
 
 # End of script.
