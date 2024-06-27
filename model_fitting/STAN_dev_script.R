@@ -866,6 +866,10 @@ ggplot(stan_lm_data5_deltas,
 
 ##### Formula 6 - Multi-level Model ####
 
+# NOTE - After discussion with Xiaoli, we decided it does not make
+# sense to pursue the hierarchical format for this first model
+# structure.
+
 ###### Data Prep #####
 
 # I will prepare a df of sites with pre-
@@ -1274,7 +1278,7 @@ data_param_fire <- data_param_fire %>%
 # Quick plot of the data with rough lm()s added.
 ggplot(data_param_fire, aes(x = scale_perc_burned, 
                             y = scale_mean_delta_b)) +
-  geom_point(fill = "coral", alpha = 0.5) +
+  geom_point(color = "coral", alpha = 0.5) +
   geom_smooth(method = "lm", fill = NA) +
   theme_bw()
 # At first glance, larger % burned results in more negative change
@@ -1355,7 +1359,8 @@ stan_data_compile <- function(x){
   data <- list(
     N = nrow(x), # number of observations
     delta = x$scale_mean_delta_b[1:nrow(x)], # mean change in CQ slope
-    delta_sd = x$scale_sd_delta_b[1:nrow(x)], # sd change in CQ slope
+    delta_sd = abs(x$scale_sd_delta_b[1:nrow(x)]), # sd change in CQ slope
+    # sd must be positive!
     B = x$scale_perc_burned[1:nrow(x)] # % watershed burned
   )
   
@@ -1374,7 +1379,7 @@ stan_lm_runr2 <- stan(file = "models/STAN_lm_error_template_R.stan",
                       control = list(max_treedepth = 12))
 
 # Export for safekeeping.
-#saveRDS(stan_lm_runr2, "data_stanfits/regression_lm_error_060724.rds")
+# saveRDS(stan_lm_runr2, "data_stanfits/regression_lm_error_062624.rds")
 
 # Examine model convergence
 shinystan::launch_shinystan(stan_lm_runr2)
@@ -1382,20 +1387,94 @@ shinystan::launch_shinystan(stan_lm_runr2)
 
 # Examine summaries of the estimates.
 stan_lm_data_r2 <- summary(stan_lm_runr2,
-                           pars = c("a", "b_B", "sigma"),
+                           pars = c("a", "b"),
                            probs = c(0.025, 0.5, 0.975))$summary
 # And Rhat values all look good (Rhat < 1.05)
 
 # Plot parameter estimates
 color_scheme_set("teal")
 mcmc_areas(stan_lm_runr2,
-           pars = c("a", "b_B"),
+           pars = c("a", "b"),
            point_est = "median",
            prob = 0.95) +
-  labs(
-    title = "Posterior distributions",
-    subtitle = "with medians and 95% intervals"
-  ) # negative but not significant (CIs cross 0)
+  labs(title = "Posterior distributions",
+    subtitle = "with medians and 95% intervals") 
+# negative AND significant (CIs DO NOT cross 0)
+
+##### Formula R2.5 - Halfway Multi-level LM ####
+
+###### Data Prep #####
+
+# I will use the same data used in Formula R2.
+
+# Need to add a regional column.
+
+data_param_fire <- data_param_fire %>%
+  mutate(region = c(1,1,1,1,1,1,2,2,2,2,2,3,3,3,3,3,3))
+
+# Quick plot by region
+# Quick plot of the data with rough lm()s added.
+ggplot(data_param_fire, aes(x = scale_perc_burned, 
+                            y = scale_mean_delta_b,
+                            group = factor(region),
+                            color = factor(region))) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", fill = NA) +
+  theme_bw()
+
+###### Model Fit #####
+
+# Function to compile necessary data
+stan_data_compile <- function(x){
+  
+  data <- list(
+    N = nrow(x), # number of observations
+    R = length(unique(x$region)), # number of regions
+    region = x$region[1:nrow(x)], # regions for each site
+    delta = x$scale_mean_delta_b[1:nrow(x)], # mean change in CQ slope
+    delta_sd = abs(x$scale_sd_delta_b[1:nrow(x)]), # sd change in CQ slope
+    B = x$scale_perc_burned[1:nrow(x)] # % watershed burned
+  )
+  
+  return(data)
+  
+}
+
+# Apply function to dataset
+data_stanr2.5 <- stan_data_compile(data_param_fire)
+
+# Fit model - should run in 1 minute
+stan_lm_runr2.5 <- stan(file = "models/STAN_lm_halfway_multilevel_template_R.stan",
+                      data = data_stanr2.5,
+                      chains = 3,
+                      iter = 5000,
+                      control = list(max_treedepth = 12))
+
+# Export for safekeeping.
+saveRDS(stan_lm_runr2.5, "data_stanfits/regression_lm_halfway_062624.rds")
+
+# Examine model convergence
+shinystan::launch_shinystan(stan_lm_runr2.5)
+# No divergent transitions.
+
+# Examine summaries of the estimates.
+stan_lm_data_r2.5 <- summary(stan_lm_runr2.5,
+                           pars = c("aregion[1]", "aregion[2]", "aregion[3]",
+                                    "b_Bregion[1]", "b_Bregion[2]", "b_Bregion[3]"),
+                           probs = c(0.025, 0.5, 0.975))$summary
+# And Rhat values all look good (Rhat < 1.05)
+
+# Plot parameter estimates
+color_scheme_set("teal")
+mcmc_areas(stan_lm_runr2.5,
+           pars = c("aregion[1]", "aregion[2]", "aregion[3]",
+                    "b_Bregion[1]", "b_Bregion[2]", "b_Bregion[3]"),
+           point_est = "median",
+           prob = 0.95) +
+  labs(title = "Posterior distributions",
+       subtitle = "with medians and 95% intervals") 
+# all different - woot!
+# all negative but none are significant on their own
 
 ##### Formula R3 - Multi-level LM #####
 

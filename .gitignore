@@ -51,3 +51,4 @@ data_working
 
 # Model fits
 *_template.rds
+*_template_R.rds
