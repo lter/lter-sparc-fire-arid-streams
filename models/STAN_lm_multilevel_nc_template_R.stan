@@ -16,15 +16,11 @@ data {
   int<lower=1> R; // total number of regions
   int<lower=1, upper=R> region [N]; // integers denoting regions
   // note, indexing needs to start with 1
-  //int Nobs [regions]; // number of observations within each region
   
   // data necessary to fit regression
   vector[N] delta; // observations - mean estimates of change in CQ slopes from posterior probability distributions
   vector[N] delta_sd; // variability of observations - sd estimates of change in CQ slopes from posterior probability distributions
   vector[N] B; // predictor - percent of the watershed burned (%)
-  //matrix[N, regions] delta; // observations - mean estimates of change in CQ slopes from posterior probability distributions
-  //matrix[N, regions] delta_sd; // variability of observations - sd estimates of change in CQ slopes from posterior probability distributions
-  ///matrix[N, regions] B; // predictor - percent of the watershed burned (%)
   
 }
 
@@ -34,7 +30,8 @@ data {
 
 // This formulation estimates all parameters at all regions
 // as part of one hierarachical model using hyperparameters
-// so as to better pool information across sites.
+// so as to better pool information across sites. This uses
+// a non-centered formulation (betasite * betasigma + beta).
 
 parameters {
   
@@ -67,17 +64,20 @@ model {
   for(j in 1:N){
   
   // Likelihood
-  delta[j] ~ normal(aregion[region[j]] + b_Bregion[region[j]]*B[j], delta_sd[j]);
+  delta[j] ~ normal((aregion[region[j]]*asigma + a) +
+  (b_Bregion[region[j]]*b_Bsigma + b_B)*B[j],
+  delta_sd[j]);
   // delta, B, and delta_sd are at site-level
   
-  // regional model priors 
-  // involving hyperparameters
-  aregion[region[j]] ~ normal(a, asigma); // intercept parameter prior - a is hyperparameter
-  b_Bregion[region[j]] ~ normal(b_B, b_Bsigma); // slope parameter prior - b_B is hyperparameter
+  // regional model priors
+  aregion[region[j]] ~ normal(0, 10); // intercept parameter prior
+  b_Bregion[region[j]] ~ normal(0, 10); // slope parameter prior
   
   // hyperparameter priors
   a ~ normal(0,10);
   b_B ~ normal(0,10);
+  // asigma ??
+  // b_Bsigma ??
   
   } // closes regions for loop
   
