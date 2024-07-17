@@ -331,9 +331,9 @@ DBI::dbExecute(
   conn      = pg,
   statement = "
   ALTER TABLE firearea.non_usgs_catchments
-    ALTER COLUMN geometry
-    TYPE geometry(geometry, 4326)
-    USING ST_SetSRID(geometry, 4326)
+  ALTER COLUMN geometry
+  TYPE geometry(geometry, 4326)
+  USING ST_SetSRID(geometry, 4326)
   ;
   "
 )
@@ -342,9 +342,9 @@ DBI::dbExecute(
   conn      = pg,
   statement = "
   ALTER TABLE firearea.non_usgs_pour_points
-    ALTER COLUMN geometry
-    TYPE geometry(geometry, 4326)
-    USING ST_SetSRID(geometry, 4326)
+  ALTER COLUMN geometry
+  TYPE geometry(geometry, 4326)
+  USING ST_SetSRID(geometry, 4326)
   ;
   "
 )
@@ -378,4 +378,407 @@ DBI::dbExecute(
   "
 )
 
+```
+
+# fix NEON site names ----------------------------------------------------------
+
+The names assigned to the NEON sites to this point were based on a combination of 'neon_' and the first two letters of the site name (e.g., Sycamore Creek ~ 'neon_sycr'). However, this is confusing because it diverges from the NEON name (neon_sycr ~ SYCA and neon_rebu ~ REDB). Here, we change the names associated with the NEON sites to the NEON site name designations (but lowercase).
+
+```{r}
+#| eval: TRUE
+
+DBI::dbWithTransaction(
+  conn = pg,
+  {
+    DBI::dbExecute(
+      conn      = pg,
+      statement = "
+      UPDATE firearea.non_usgs_catchments
+      SET usgs_site = 'redb'
+      WHERE usgs_site = 'neon_rebu'
+      ;
+      "
+    )
+
+    DBI::dbExecute(
+      conn      = pg,
+      statement = "
+      UPDATE firearea.non_usgs_catchments
+      SET usgs_site = 'syca'
+      WHERE usgs_site = 'neon_sycr'
+      ;
+      "
+    )
+
+    ## non_usgs_pour_points
+
+    DBI::dbExecute(
+      conn      = pg,
+      statement = "
+      UPDATE firearea.non_usgs_pour_points
+      SET usgs_site = 'redb'
+      WHERE usgs_site = 'neon_rebu'
+      ;
+      "
+    )
+
+    DBI::dbExecute(
+      conn      = pg,
+      statement = "
+      UPDATE firearea.non_usgs_pour_points
+      SET usgs_site = 'syca'
+      WHERE usgs_site = 'neon_sycr'
+      ;
+      "
+    )
+
+    ## ecoregion_catchments 
+
+    DBI::dbExecute(
+      conn      = pg,
+      statement = "
+      UPDATE firearea.ecoregion_catchments
+      SET usgs_site = 'redb'
+      WHERE usgs_site = 'neon_rebu'
+      ;
+      "
+    )
+
+    DBI::dbExecute(
+      conn      = pg,
+      statement = "
+      UPDATE firearea.ecoregion_catchments
+      SET usgs_site = 'syca'
+      WHERE usgs_site = 'neon_sycr'
+      ;
+      "
+    )
+  }
+)
+
+```
+
+# neon data --------------------------------------------------------------------
+
+## discharge
+
+```{r}
+#| eval: TRUE
+
+neon_discharge <- function(neon_site) {
+
+  q <- neonUtilities::loadByProduct(
+    dpID       = "DP4.00130.001",
+    # startdate = "2016-01",
+    # enddate   = "2022-03",
+    site       = c(neon_site),
+    package    = "basic",
+    check.size = FALSE
+  )
+
+  q <- q$csd_continuousDischarge
+
+  site_name <- tolower(neon_site)
+
+  q_upload <- q |> 
+    dplyr::mutate(date = lubridate::date(endDate)) |> 
+    dplyr::summarise(
+      mean = mean(
+        x     = maxpostDischarge,
+        na.rm = TRUE
+      ),
+      sd = sd(
+        x     = maxpostDischarge,
+        na.rm = TRUE
+      ),
+      missing = sum(is.na(maxpostDischarge)),
+      .by  = date
+    ) |> 
+    dplyr::mutate(usgs_site = site_name) |> 
+    dplyr::select(
+      usgs_site,
+      tidyselect::everything()
+    ) |> 
+    dplyr::filter(!is.na(mean))
+
+    DBI::dbWriteTable(
+      conn      = pg,
+      name      = c("firearea", "non_usgs_discharge"),
+      value     = q_upload,
+      overwrite = FALSE,
+      append    = TRUE,
+      row.names = FALSE
+    )
+
+}
+
+purrr::walk(
+  .x = c("REDB", "SYCA"),
+  .f = ~ neon_discharge(neon_site = .x)
+)
+
+DBI::dbExecute(
+  conn      = pg,
+  statement = "
+  COMMENT ON COLUMN firearea.non_usgs_discharge.mean IS 'liters per second' ;"
+)
+```
+
+## exo
+
+```{r}
+#| eval: TRUE
+
+neon_exo <- function(neon_site) {
+
+  exo <- neonUtilities::loadByProduct(
+    dpID       = "DP1.20288.001",
+    # startdate = "2016-01",
+    # enddate   = "2022-03",
+    site       = c(neon_site),
+    package    = "basic",
+    check.size = FALSE
+  )
+
+  exo_data <- exo$waq_instantaneous
+  # exo_vars <- exo$variables_20288
+
+  site_name <- tolower(neon_site)
+
+  exo_upload <- exo_data |> 
+    dplyr::mutate(date = lubridate::date(endDateTime)) |> 
+    dplyr::select(
+      date,
+      specificConductance,      # microsiemensPerCentimeter
+      dissolvedOxygen,          # milligramsPerLiter
+      localDissolvedOxygenSat,
+      pH,
+      chlorophyll,              # microgramsPerLiter
+      turbidity,                # formazinNephelometricUnit
+      fDOM                      # quinineSulfateUnit
+    ) |>
+    tidyr::pivot_longer(
+      cols      = dplyr::where(is.numeric),
+      names_to  = "analyte",
+      values_to = "concentration"
+    ) |>
+    dplyr::summarise(
+      mean = mean(
+        x     = concentration,
+        na.rm = TRUE
+      ),
+      sd = sd(
+        x     = concentration,
+        na.rm = TRUE
+      ),
+      missing = sum(is.na(concentration)),
+      .by  = c(date, analyte)
+    ) |> 
+    dplyr::mutate(
+      usgs_site = site_name,
+      unit      = dplyr::case_when(
+        analyte == "specificConductance"      ~ "microsiemensPerCentimeter",
+        analyte == "dissolvedOxygen"          ~ "milligramsPerLiter",
+        analyte == "localDissolvedOxygenSat"  ~ "percent",
+        analyte == "pH"                       ~ "pH" ,
+        analyte == "chlorophyll"              ~ "microgramsPerLiter",
+        analyte == "turbidity"                ~ "formazinNephelometricUnit",
+        analyte == "fDOM"                     ~ "quinineSulfateUnit"
+      ),
+      source = "NEON_exo"
+    ) |> 
+    dplyr::select(
+      usgs_site,
+      dplyr::everything()
+    ) |> 
+    dplyr::filter(!is.na(mean))
+
+    DBI::dbWriteTable(
+      conn      = pg,
+      name      = c("firearea", "non_usgs_water_chem"),
+      value     = exo_upload,
+      overwrite = FALSE,
+      append    = TRUE,
+      row.names = FALSE
+    )
+
+}
+
+purrr::walk(
+  .x = c("REDB", "SYCA"),
+  .f = ~ neon_exo(neon_site = .x)
+)
+
+```
+
+
+## nitrate
+
+```{r}
+#| eval: TRUE
+
+neon_nitrate <- function(neon_site) {
+
+  nitrate <- neonUtilities::loadByProduct(
+    dpID      = "DP1.20033.001",
+    # startdate = "2016-01",
+    # enddate   = "2022-03",
+    site      = c(neon_site),
+    package    = "basic",
+    check.size = FALSE
+  )
+
+  nitrate_data <- nitrate$NSW_15_minute
+  # nitrate_vars <- nitrate$variables_20033
+
+  site_name <- tolower(neon_site)
+
+  nitrate_upload <- nitrate_data |> 
+    dplyr::mutate(date = lubridate::date(endDateTime)) |> 
+    dplyr::select(
+      date,
+      surfWaterNitrateMean # micromolesPerLiter
+    ) |>
+    dplyr::summarise(
+      mean = mean(
+        x     = surfWaterNitrateMean,
+        na.rm = TRUE
+      ),
+      sd = sd(
+        x     = surfWaterNitrateMean,
+        na.rm = TRUE
+      ),
+      missing = sum(is.na(surfWaterNitrateMean)),
+      .by  = c(date)
+    ) |> 
+    dplyr::mutate(
+      usgs_site = site_name,
+      analyte   = "nitrate",
+      unit      = "micromolesPerLiter",
+      source    = "NEON_nitrate"
+    ) |> 
+    dplyr::select(
+      usgs_site,
+      date,
+      analyte,
+      dplyr::everything()
+    ) |> 
+    dplyr::filter(!is.na(mean))
+
+    DBI::dbWriteTable(
+      conn      = pg,
+      name      = c("firearea", "non_usgs_water_chem"),
+      value     = nitrate_upload,
+      overwrite = FALSE,
+      append    = TRUE,
+      row.names = FALSE
+    )
+
+}
+
+purrr::walk(
+  .x = c("REDB", "SYCA"),
+  .f = ~ neon_nitrate(neon_site = .x)
+)
+
+```
+
+## grabs
+
+```{r}
+#| eval: TRUE
+
+neon_grabs <- function(neon_site) {
+
+  grabs <- neonUtilities::loadByProduct(
+    dpID      = "DP1.20093.001",
+    # startdate = "2012-01",
+    # enddate   = "2022-02",
+    site      = c(neon_site),
+    package    = "basic",
+    check.size = FALSE
+  )
+
+  grabs_data  <- grabs$swc_externalLabDataByAnalyte
+  # grabs_field <- grabs$swc_fieldData
+  # grabs_vars  <- grabs$variables_20093
+  # grabs_cats  <- grabs$categoricalCodes_20093
+
+  site_name <- tolower(neon_site)
+
+  grabs_upload <- grabs_data |> 
+    dplyr::mutate(date = lubridate::date(collectDate)) |> 
+    dplyr::summarise(
+      mean = mean(
+        x     = analyteConcentration,
+        na.rm = TRUE
+      ),
+      sd = sd(
+        x     = analyteConcentration,
+        na.rm = TRUE
+      ),
+      missing = sum(is.na(analyteConcentration)),
+      .by  = c(date, analyte)
+    ) |> 
+    dplyr::mutate(
+      usgs_site = site_name,
+      unit      = NA_character_,
+      unit      = dplyr::case_when(
+        grepl("TDS",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("Fe",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("SO4",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("CO3",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("conductance", analyte, ignore.case = TRUE) ~ "microsiemensPerCentimeter",
+        grepl("TDP",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("TPN",         analyte, ignore.case = TRUE) ~ "microgramsPerLiter",
+        grepl("Cl",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("DIC",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("NO3+NO2",     analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("ANC",         analyte, ignore.case = TRUE) ~ "milliequivalentsPerLiter",
+        grepl("Ca",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("HCO3",        analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("Br",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("TSS",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("TDN",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("NH4N",        analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("Si",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("Mg",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("Na",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("TSS",         analyte, ignore.case = TRUE) ~ "microgram",
+        grepl("TP",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("TN",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("TOC",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("K",           analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("Mn",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("NO2",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("TPC",         analyte, ignore.case = TRUE) ~ "microgramsPerLiter",
+        grepl("DOC",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("F",           analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("Ortho",       analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("ph",          analyte, ignore.case = TRUE) ~ "pH",
+        TRUE ~ unit
+      ),
+      source = "NEON_grabs"
+    ) |> 
+    dplyr::select(
+      usgs_site,
+      dplyr::everything()
+    ) |> 
+    dplyr::filter(!is.na(mean))
+
+    DBI::dbWriteTable(
+      conn      = pg,
+      name      = c("firearea", "non_usgs_water_chem"),
+      value     = grabs_upload,
+      overwrite = FALSE,
+      append    = TRUE,
+      row.names = FALSE
+    )
+
+}
+
+purrr::walk(
+  .x = c("REDB", "SYCA"),
+  .f = ~ neon_grabs(neon_site = .x)
+)
 ```
