@@ -1451,7 +1451,8 @@ stan_lm_runr2.5 <- stan(file = "models/STAN_lm_halfway_multilevel_template_R.sta
                       control = list(max_treedepth = 12))
 
 # Export for safekeeping.
-saveRDS(stan_lm_runr2.5, "data_stanfits/regression_lm_halfway_062624.rds")
+# saveRDS(stan_lm_runr2.5, 
+#         "data_stanfits/regression_lm_halfway_062624.rds")
 
 # Examine model convergence
 shinystan::launch_shinystan(stan_lm_runr2.5)
@@ -1481,170 +1482,51 @@ mcmc_areas(stan_lm_runr2.5,
 ###### Data Prep ######
 
 # Again, starting from the data_param_fire dataset used above.
-data_param_fire <- data_param_fire %>%
-  # add regional/HUC column
-  mutate(region = case_when(usgs_site %in% c("USGS-07103700", "USGS-07105500", 
-                                             "USGS-07105800", "USGS-07106300", 
-                                             "USGS-07106500", "USGS-07109500") ~ 1,
-                            usgs_site %in% c("USGS-08313000", "USGS-08330000", 
-                                             "USGS-08354900", "USGS-08355490", 
-                                             "USGS-08358400") ~ 2,
-                            usgs_site %in% c("USGS-09095500", "USGS-09152500", 
-                                             "USGS-09163500", "USGS-09261000", 
-                                             "USGS-09367540", "USGS-09367580") ~ 3))
-
-# Split list by site
-datr3_l <- split(data_param_fire, data_param_fire$region)
-
-# Convert all to matrices for proper indexing.
-
-# -- Mean Delta --
-name1 <- "scale_mean_delta_b"
-subset_delta <- lapply(datr3_l, "[", name1)
-
-# Count the length of each line
-length_df1 <- function(x){
-  data <- length(x$scale_mean_delta_b) # need to go two layers in to calculate length
-  return(data)
-}
-
-# apply function to full list
-line_lengths1 <- lapply(subset_delta, length_df1)
-
-# and transpose into a dataframe
-line_lengths1 <- t(as.data.frame(line_lengths1))
-
-# Pad shorter lines with 0 below
-subset_delta[which(line_lengths1 != max(line_lengths1))] <- 
-  lapply(subset_delta[which(line_lengths1 != max(line_lengths1))], function(x){
-    
-    # create list of existing Q values
-    list1 <- x$scale_mean_delta_b
-    list1 <- as.data.frame(list1) %>%
-      rename("list1" = "V1")
-    
-    # create list of NAs to be added
-    list2 <- rep(0, times = max(line_lengths1)-
-                   length(x$scale_mean_delta_b))
-    list2 <- as.data.frame(list2) %>%
-      rename("list1" = "list2")
-    
-    # join the two together
-    rbind(list1, list2)
-  }
-  )
-
-# Use the list created above to create a matrix of delta values
-delta_mx <- matrix(NA, 6, 3)
-delta_mx <- matrix(unlist(subset_delta), nrow = 6, ncol = 3)
-
-# -- SD Delta --
-name2 <- "scale_sd_delta_b"
-subset_delta_sd <- lapply(datr3_l, "[", name2)
-
-# Count the length of each line
-length_df2 <- function(x){
-  data <- length(x$scale_sd_delta_b) # need to go two layers in to calculate length
-  return(data)
-}
-
-# apply function to full list
-line_lengths2 <- lapply(subset_delta_sd, length_df2)
-
-# and transpose into a dataframe
-line_lengths2 <- t(as.data.frame(line_lengths2))
-
-# Pad shorter lines with 0 below
-subset_delta_sd[which(line_lengths2 != max(line_lengths2))] <- 
-  lapply(subset_delta_sd[which(line_lengths2 != max(line_lengths2))], function(x){
-    
-    # create list of existing Q values
-    list3 <- x$scale_sd_delta_b
-    list3 <- as.data.frame(list3) %>%
-      rename("list3" = "V1")
-    
-    # create list of NAs to be added
-    list4 <- rep(0, times = max(line_lengths2)-
-                   length(x$scale_sd_delta_b))
-    list4 <- as.data.frame(list4) %>%
-      rename("list3" = "list4")
-    
-    # join the two together
-    rbind(list3, list4)
-  }
-  )
-
-# Use the list created above to create a matrix of delta values
-delta_sd_mx <- matrix(NA, 6, 3)
-delta_sd_mx <- matrix(unlist(subset_delta_sd), nrow = 6, ncol = 3)
-
-# -- B --
-name3 <- "scale_perc_burned"
-subset_perc_burned <- lapply(datr3_l, "[", name3)
-
-# Count the length of each line
-length_df3 <- function(x){
-  data <- length(x$scale_perc_burned) # need to go two layers in to calculate length
-  return(data)
-}
-
-# apply function to full list
-line_lengths3 <- lapply(subset_perc_burned, length_df3)
-
-# and transpose into a dataframe
-line_lengths3 <- t(as.data.frame(line_lengths3))
-
-# Pad shorter lines with 0 below
-subset_perc_burned[which(line_lengths3 != max(line_lengths3))] <- 
-  lapply(subset_perc_burned[which(line_lengths3 != max(line_lengths3))], function(x){
-    
-    # create list of existing Q values
-    list5 <- x$scale_perc_burned
-    list5 <- as.data.frame(list5) %>%
-      rename("list5" = "V1")
-    
-    # create list of NAs to be added
-    list6 <- rep(0, times = max(line_lengths3)-
-                   length(x$scale_perc_burned))
-    list6 <- as.data.frame(list6) %>%
-      rename("list5" = "list6")
-    
-    # join the two together
-    rbind(list5, list6)
-  }
-  )
-
-# Use the list created above to create a matrix of delta values
-B_mx <- matrix(NA, 6, 3)
-B_mx <- matrix(unlist(subset_perc_burned), nrow = 6, ncol = 3)
 
 ###### Model Fit ######
 
-# Compile data for hierarchical run
-data_stanr3 <- list(regions = ncol(B_mx), # number of regions
-                   N = nrow(B_mx), # max. number of obs.
-                   Nobs = line_lengths1[1:3], # actual number of obs. per region
-                   delta = delta_mx, # mean estimates of CQ slope data
-                   delta_sd = delta_sd_mx, # s.d. estimates of CQ slope data
-                   B = B_mx) # percent of the watershed burned
+# Function to compile necessary data
+stan_data_compile <- function(x){
+  
+  data <- list(
+    N = nrow(x), # number of observations
+    R = length(unique(x$region)), # number of regions
+    region = x$region[1:nrow(x)], # regions for each site
+    delta = x$scale_mean_delta_b[1:nrow(x)], # mean change in CQ slope
+    delta_sd = abs(x$scale_sd_delta_b[1:nrow(x)]), # sd change in CQ slope
+    B = x$scale_perc_burned[1:nrow(x)] # % watershed burned
+  )
+  
+  return(data)
+  
+}
 
-# Fit model - 
+# Apply function to dataset
+data_stanr3 <- stan_data_compile(data_param_fire)
+
+# Fit model - should run in 5 minutes
 stan_lm_runr3 <- stan(file = "models/STAN_lm_multilevel_template_R.stan",
-                     data = data_stanr3,
-                     chains = 3,
-                     iter = 5000,
-                     control = list(max_treedepth = 12))
+                        data = data_stanr3,
+                        chains = 3,
+                        iter = 5000,
+                        control = list(max_treedepth = 12))
+
+# Eek! LOTS of divergent transitions.
 
 # Export for safekeeping.
-saveRDS(stan_lm_runr3, "data_stanfits/regression_hier_fit_060724.rds")
-
-# eek lots of divergent transitions.
+# saveRDS(stan_lm_runr3,
+#         "data_stanfits/regression_lm_multilevel_071724.rds")
 
 # Examine summaries of the estimates.
 stan_lm_datar3 <- summary(stan_lm_runr3,
-                         pars = c("a", "b_B","sigma", 
-                                  "aregion", "b_Bregion"),
+                         pars = c("a", "asigma",
+                                  "b_B","b_Bsigma", 
+                                  "aregion[1]", "b_Bregion[1]",
+                                  "aregion[2]", "b_Bregion[2]",
+                                  "aregion[3]", "b_Bregion[3]"),
                          probs = c(0.025, 0.5, 0.975))$summary
+
+# barf
 
 # Quick plot again to see if it's likely that slopes are really that different.
 ggplot(data_param_fire, aes(x = scale_perc_burned, 
@@ -1655,5 +1537,80 @@ ggplot(data_param_fire, aes(x = scale_perc_burned,
   geom_smooth(method = "lm") +
   theme_bw()
 # Hmmm, maybe it is.
+
+# So, even though the slopes are looking about right,
+# the model convergence looks terrible, so trying another
+# formulation of the hyperparameters.
+
+##### Formula R3.5 - Multi-level LM, new formulation #####
+
+# This uses a non-centered approach for estimating the
+# hyperparameters since the centered approach converged poorly.
+
+###### Data Prep ######
+
+# Again, starting from the data_param_fire dataset used above.
+
+###### Model Fit ######
+
+# Function to compile necessary data
+stan_data_compile <- function(x){
+  
+  data <- list(
+    N = nrow(x), # number of observations
+    R = length(unique(x$region)), # number of regions
+    region = x$region[1:nrow(x)], # regions for each site
+    delta = x$scale_mean_delta_b[1:nrow(x)], # mean change in CQ slope
+    delta_sd = abs(x$scale_sd_delta_b[1:nrow(x)]), # sd change in CQ slope
+    B = x$scale_perc_burned[1:nrow(x)] # % watershed burned
+  )
+  
+  return(data)
+  
+}
+
+# Apply function to dataset
+data_stanr3.5 <- stan_data_compile(data_param_fire)
+
+# Fit model - should run in 5 minutes
+stan_lm_runr3.5 <- stan(file = "models/STAN_lm_multilevel_nc_template_R.stan",
+                      data = data_stanr3.5,
+                      chains = 3,
+                      iter = 5000,
+                      control = list(max_treedepth = 12))
+
+# Yay! Ok MUCH better - 284 divergent transitions.
+
+# Export for safekeeping.
+# saveRDS(stan_lm_runr3.5,
+#         "data_stanfits/regression_lm_multilevel_nc_071724.rds")
+
+# Examine summaries of the estimates.
+stan_lm_datar3.5 <- summary(stan_lm_runr3.5,
+                          pars = c("a", "asigma",
+                                   "b_B","b_Bsigma", 
+                                   "aregion[1]", "b_Bregion[1]",
+                                   "aregion[2]", "b_Bregion[2]",
+                                   "aregion[3]", "b_Bregion[3]"),
+                          probs = c(0.025, 0.5, 0.975))$summary
+
+# And Rhats look good! :)
+
+# Plot parameter estimates
+color_scheme_set("teal")
+mcmc_areas(stan_lm_runr3.5,
+           pars = c("a", "aregion[1]", 
+                    "aregion[2]", "aregion[3]",
+                    "b_B", "b_Bregion[1]", 
+                    "b_Bregion[2]", "b_Bregion[3]"),
+           point_est = "median",
+           prob = 0.95) +
+  labs(title = "Posterior distributions",
+       subtitle = "with medians and 95% intervals") 
+
+# Ok, so fire size doesn't appear to have a huge effect
+# on changes in CQ slope post-fire. But that's a finding!
+# Also, this is only including 17 sites, so take from that
+# what you will.
 
 # End of script.

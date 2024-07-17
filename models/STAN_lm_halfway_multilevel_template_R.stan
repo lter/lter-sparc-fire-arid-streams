@@ -15,6 +15,7 @@ data {
   int<lower=0> N; // number of observations
   int<lower=1> R; // total number of regions
   int<lower=1, upper=R> region [N]; // integers denoting regions
+  // note, indexing needs to start with 1
   
   // data necessary to fit regression
   vector[N] delta; // observations - mean estimates of change in CQ slopes from posterior probability distributions
@@ -51,7 +52,7 @@ transformed parameters{
 model {
   
   // Establish loop framework
-  // For each observation...
+  // For each observation j...
   for(j in 1:N){
   
   // Likelihood
@@ -61,8 +62,6 @@ model {
   // regional model priors 
   aregion ~ normal(0, 10); // no hyperparameters
   b_Bregion ~ normal(0, 10); // no hyperparameters
-  
-  //} // closes observations loop
   
   } // closes regions for loop
   
