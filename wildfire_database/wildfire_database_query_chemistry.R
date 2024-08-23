@@ -78,6 +78,58 @@ WHERE
 ;
 "
 
-usgs_chemistry <- DBI::dbGetQuery(pg, base_query)
+usgs_chemistry <- DBI::dbGetQuery(
+  conn      = pg,
+  statement = base_query
+)
 
-saveRDS(usgs_chemistry, "/home/shares/lter-sparc-fire-arid/usgs_chemistry.rds")
+saveRDS(
+  object = usgs_chemistry,
+  file   = "/home/shares/lter-sparc-fire-arid/usgs_chemistry.rds"
+)
+
+# nitrate ----------------------------------------------------------------------
+
+# Build a dataset of usgs and non-usgs nitrate data
+
+non_usgs_nitrate <- DBI::dbGetQuery(
+  conn      = pg,
+  statement = "
+  SELECT *
+  FROM firearea.non_usgs_water_chem
+  WHERE
+    analyte ~~* '%nitrate%' OR
+    analyte ~~* '%no3%'
+  ;
+  "
+)
+
+nitrate_dataset <- usgs_chemistry |> 
+  dplyr::filter(usgspcode_std %in% c("00618", "00631")) |> 
+  dplyr::select(
+    usgs_site,
+    date    = ActivityStartDate,
+    analyte = CharacteristicName,
+    value_std
+  ) |> 
+  dplyr::bind_rows(
+    non_usgs_nitrate |> 
+      dplyr::mutate(
+        value_std = dplyr::case_when(
+          grepl("micromoles", unit, ignore.case = TRUE) ~ mean * (14 / 1000),
+          TRUE ~ mean
+        )
+      ) |> 
+      dplyr::select(
+        usgs_site,
+        date,
+        analyte,
+        value_std
+      )
+  )
+
+saveRDS(
+  object = nitrate_dataset,
+  # file   = "/home/shares/lter-sparc-fire-arid/nitrate_chemistry.rds"
+  file   = "/tmp/nitrate_chemistry.rds"
+)
