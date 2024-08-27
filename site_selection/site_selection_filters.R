@@ -8,7 +8,7 @@
 
 # (1) Match fire data with chemistry data to determine which sites
 # experienced a fire.
-# (2) Select the largest fire in each watershed for which we have 3
+# (2) Select the largest fire in each watershed for which we have 4
 # years of pre- and post-fire data.
 # (3) Match with discharge data to ensure these data span a minimum
 # of the 25th to 75th percentiles of discharge.
@@ -23,6 +23,7 @@ library(lubridate)
 
 # Load necessary datasets.
 chem_dat <- readRDS("data/usgs_chemistry.rds")
+no3_dat <- readRDS("data/nitrate_chemistry.rds")
 Q_dat <- readRDS("data/discharge_daily.rds")
 fire_dat <- readxl::read_excel("data/dd_area_stats.xlsx") 
 
@@ -240,30 +241,68 @@ no3_dat_filtered <- no3_fire_qquants_dat %>%
 # use only the largest, in an attempt to harvest more data?
 
 # Ok, now for the more complicated workflow.
-# First, make the chemistry dataset nitrate only.
-no3_dat <- chem_dat %>%
-  filter(CharacteristicName %in% c("Nitrate", 
-                                   "Inorganic nitrogen (nitrate and nitrite)"))
+# First, make the chemistry dataset with only one
+# measurement per date.
+
+# NOTE - FIX LATER. Wrote to Stevan to see what the 
+# multiple nitrate values are, so I'm averaging them for
+# now.
+no3_uq <- no3_dat %>%
+  group_by(usgs_site, date, analyte) %>%
+  summarize(mean_value_std = mean(value_std, na.rm = TRUE)) %>%
+  # gah these names are also a mess, so standardizing those
+  ungroup() %>%
+  mutate(analyte_std = case_when(analyte %in% c("Inorganic nitrogen (nitrate and nitrite)",
+                                                "NO3+NO2 - N") ~ "NO3 + NO2",
+                                 analyte %in% c("Nitrate", "nitrate") ~ "NO3",
+                                 TRUE ~ NA)) %>%
+  select(-analyte) %>%
+  pivot_wider(names_from = analyte_std, values_from = mean_value_std) %>%
+  # and finally select only a single value at each site
+  # need to create indices for logical choosing of values
+  mutate(no3_no2_ind = case_when(is.na(`NO3 + NO2`) ~ "NO",
+                                 TRUE ~ "YES"),
+         no3_ind = case_when(is.na(`NO3`) ~ "NO",
+                                   TRUE ~ "YES")) %>%
+  mutate(all_ind = case_when(no3_no2_ind == "YES" & no3_ind == "YES" ~ 1,
+                             no3_no2_ind == "NO" ~ 2,
+                             no3_ind == "NO" ~ 3,
+                             TRUE ~ NA)) %>%
+  # and then make the decision of which value to keep
+  # erring on the side of the combined metric since this
+  # is the most frequently available
+  mutate(mean_value_std_unique = case_when(all_ind %in% c(1,3) ~ `NO3 + NO2`,
+                                           all_ind == 2 ~ `NO3`,
+                                           TRUE ~ NA),
+         analyte_unique = case_when(all_ind %in% c(1,3) ~ "NO3_NO2",
+                                    all_ind == 2 ~ "NO3",
+                                    TRUE ~ NA)) %>%
+  select(usgs_site, date, analyte_unique, mean_value_std_unique)
+
+# Great! Ok so how many sites does that leave us with in total?
+length(unique(no3_uq$usgs_site)) # 299
 
 # Trying out on a single site before making iterative.
 
 # Filter fires at a given site.
 f <- fire_dat %>%
-  filter(usgs_site == "USGS-06758500")
+  filter(usgs_site == "USGS-06713500") # 3 possible
 
 # Filter chemistry data at a given site.
-no3 <- no3_dat %>%
-  filter(usgs_site == "USGS-06758500")
+no3 <- no3_uq %>%
+  filter(usgs_site == "USGS-06713500") # 382 observations
 
 # Join the chemistry and fire data.
+# This matches each chemistry record to all possible
+# fires, so you'll get multiple resulting rows per record.
 no3_f <- full_join(no3, f)
 
 # Filter by data available within the proper window.
 no3_tf <- no3_f %>%
   mutate(ignition_plus4 = ignition_date %m+% years(4)) %>%
   mutate(ignition_minus4 = ignition_date %m-% years(4)) %>%
-  mutate(window = case_when(ymd(ActivityStartDate) > ymd(ignition_minus4) &
-                            ymd(ActivityStartDate) < ymd(ignition_plus4) ~ "YES",
+  mutate(window = case_when(ymd(date) > ymd(ignition_minus4) &
+                            ymd(date) < ymd(ignition_plus4) ~ "YES",
                             TRUE ~ "NO"))
 
 summary0 <- no3_tf %>%
@@ -280,12 +319,10 @@ fires_wdata <- unique(summary0_filtered$event_id)
 
 no3_tf_pp <- no3_tf %>%
   filter(event_id %in% fires_wdata) %>%
-  mutate(ignition_plus4 = ignition_date %m+% years(4)) %>%
-  mutate(ignition_minus4 = ignition_date %m-% years(4)) %>%
-  mutate(prepost = factor(case_when(ymd(ActivityStartDate) > ymd(ignition_minus4) &
-                                  ymd(ActivityStartDate) <= ymd(ignition_date) ~ "pre",
-                             ymd(ActivityStartDate) > ymd(ignition_date) &
-                                  ymd(ActivityStartDate) <= ymd(ignition_plus4) ~ "post",
+  mutate(prepost = factor(case_when(ymd(date) > ymd(ignition_minus4) &
+                                  ymd(date) <= ymd(ignition_date) ~ "pre",
+                             ymd(date) > ymd(ignition_date) &
+                                  ymd(date) <= ymd(ignition_plus4) ~ "post",
                                 TRUE ~ NA),
                           levels = c("pre", "post", NA)))
 
@@ -317,9 +354,11 @@ if (length(summary1_filtered$event_id) == 0){
 no3_tf_pp <- no3_tf_pp %>%
   filter(event_id %in% fires)
 
+##### Discharge Filter #####
+
 # Filter discharge data at a given site.
 q <- Q_dat %>%
-  filter(usgs_site == "USGS-06758500") %>%
+  filter(usgs_site == "USGS-06713500") %>%
   # keeping only "accepted" measurements
   filter(Flow_cd %in% c("A", "A e"))
 
@@ -328,7 +367,7 @@ q_75 <- as.numeric(quantile(q$Flow, probs = 0.75, na.rm = TRUE))
 
 # Join discharge data on to calculate what intervals are represented.
 no3_f_q <- left_join(no3_tf_pp, q,
-                     by = c("ActivityStartDate" = "Date")) %>%
+                     by = c("date" = "Date")) %>%
   mutate(quartile = case_when(Flow < q_25 ~ "below25",
                               Flow >= q_25 & Flow <= q_75 ~ "25_75",
                               Flow > q_75 ~ "above75"))
@@ -376,28 +415,44 @@ if (length(summary2_filtered$event_id) == 0) {
   }
 
 no3_tf_q <- no3_f_q %>%
-  filter(event_id == the_fire)
+  filter(event_id == the_fire) %>%
+  filter(window == "YES")
+
+# Quick plot to see how this maps.
+ggplot(no3_tf_q, aes(x = log10(Flow), y = log10(mean_value_std_unique),
+                     color = prepost, group = prepost)) +
+  geom_point(alpha = 0.8) +
+  geom_smooth(method = "lm") +
+  scale_color_manual(values = c("grey50", "black")) +
+  labs(x = "log(Discharge)", y = "log(NO3 Concentration)") +
+  theme_bw()
 
 ##### Function #####
+
 # Ok, now to make this a function that I'll apply across the sites.
 # Make lists to iterate over.
-no3_f <- left_join(no3_dat, fire_dat)
-no3_f_list <- split(no3_f, no3_f$usgs_site) # 307 sites with both NO3 & fire data
-sites307 <- unique(no3_f$usgs_site)
+no3_f <- inner_join(no3_uq, fire_dat)
+
+no3_f_list <- split(no3_f, no3_f$usgs_site) # 144 sites w both NO3 & fire data
+
+sites144 <- unique(no3_f$usgs_site)
+
+# Filter for appropriate discharge data
 q_filtered <- Q_dat %>%
-  filter(usgs_site %in% sites307)
+  filter(usgs_site %in% sites144)
+
 q_list <- split(q_filtered, q_filtered$usgs_site)
 
 fireDischargeFilter <- function(x, q) {
 
   # Filter by data available within the proper window/timeframe.
   x_tf <- x %>%
-    mutate(ignition_plus4 = ignition_date %m+% years(4)) %>%
-    mutate(ignition_minus4 = ignition_date %m-% years(4)) %>%
-    mutate(prepost = factor(case_when(ymd(ActivityStartDate) > ymd(ignition_minus4) &
-                               ymd(ActivityStartDate) <= ymd(ignition_date) ~ "pre",
-                               ymd(ActivityStartDate) > ymd(ignition_date) &
-                               ymd(ActivityStartDate) <= ymd(ignition_plus4) ~ "post",
+    mutate(ignition_plus5 = ignition_date %m+% years(5)) %>%
+    mutate(ignition_minus5 = ignition_date %m-% years(5)) %>%
+    mutate(prepost = factor(case_when(ymd(date) > ymd(ignition_minus5) &
+                               ymd(date) <= ymd(ignition_date) ~ "pre",
+                               ymd(date) > ymd(ignition_date) &
+                               ymd(date) <= ymd(ignition_plus5) ~ "post",
                              TRUE ~ NA),
                             levels = c("pre", "post", "NA"))) %>%
     filter(prepost %in% c("pre", "post", "NA"))
@@ -440,7 +495,7 @@ fireDischargeFilter <- function(x, q) {
 
   # Join discharge data on to calculate what intervals are represented.
   x_tf10_q <- left_join(x_tf10, q,
-                      by = c("ActivityStartDate" = "Date")) %>%
+                      by = c("date" = "Date")) %>%
               mutate(quartile = factor(case_when(Flow < q_25 ~ "below25",
                                                  Flow >= q_25 & Flow <= q_75 ~ "25_75",
                                                  Flow > q_75 ~ "above75"),
@@ -490,7 +545,8 @@ fireDischargeFilter <- function(x, q) {
       the_fire <- unique(summary2_filtered$event_id)
 
       x_df <- x_tf10_q %>%
-        filter(event_id == the_fire)
+        filter(event_id == the_fire) %>%
+        filter(prepost %in% c("pre", "post"))
 
       return(x_df)
       
@@ -503,41 +559,119 @@ fireDischargeFilter <- function(x, q) {
 # And now to apply across all sites.
 no3_dat_filtered <- mapply(fireDischargeFilter,
                            x = no3_f_list,
-                           q = q_list)
+                           q = q_list) # PHEW!!
 
 no3_dat_metcriteria <- purrr::keep(no3_dat_filtered, ~ unique(.x$event_id) != 0)
-# PHEW!!
 
 # Export data.
-#saveRDS(no3_dat_metcriteria, "data_working/usgs_no3_filtered_lax_080924.rds")
+# saveRDS(no3_dat_metcriteria, "data_working/usgs_no3_filtered_lax_082324.rds")
 
 ##### Plots #####
 
 # Let's take a look at what these data look like.
 
-plotfn <- function(df) {
-  
-  fig <- ggplot(df) +
-    geom_point(aes(x = ActivityStartDate,
-                   y = value_std,
+no3_df_metcriteria <- do.call(rbind.data.frame, no3_dat_metcriteria)
+
+(fig_ts <- ggplot(no3_df_metcriteria) +
+    geom_point(aes(x = date,
+                   y = mean_value_std_unique,
                    color = prepost)) +
-    scale_color_manual(values = c("#59A3F8", "#F28705")) +
+    scale_color_manual(values = c("grey50", "black")) +
     labs(x = "Date", y = "NO3 mg/L-N",
-         color = "Relative to fire",
-         title = print(df$usgs_site.x[1])) +
-    theme_bw()
+         color = "Relative to fire") +
+    facet_wrap(.~usgs_site.x, scales = "free") +
+    theme_bw())
+
+# ggsave(plot = fig_ts,
+#        filename = "figures/no3_16site_timeseries_082324.jpg",
+#        width = 25,
+#        height = 15,
+#        units = "cm")
   
-  fig
+(fig_lm <- ggplot(no3_df_metcriteria, 
+                  aes(x = log10(Flow), 
+                      y = log10(mean_value_std_unique),
+              color = prepost, group = prepost)) +
+  geom_point(alpha = 0.8) +
+  geom_smooth(method = "lm") +
+  scale_color_manual(values = c("grey50", "black")) +
+  labs(x = "log(Discharge)", y = "log(NO3 Concentration)") +
+    facet_wrap(.~usgs_site.x, scales = "free") +
+  theme_bw())
+
+# ggsave(plot = fig_lm,
+#        filename = "figures/no3_16site_CQlms_082324.jpg",
+#        width = 25,
+#        height = 15,
+#        units = "cm")
+
+##### Sensitivity Analysis #####
+
+# Since we see a HUUUUUGE drop in sites that meet all the criteria,
+# I'm going to modify the function above to see how many sites we 
+# get at each of the filtering steps.
+
+# Already, we know that we have:
+length(unique(no3_uq$usgs_site)) # 299 sites with NO3 data
+length(unique(no3_f$usgs_site)) # 155 sites w/o fire (n = 144 remaining)
+
+filter_step1 <- function(x, q) {
   
+  # Filter by data available within the proper window/timeframe.
+  x_tf <- x %>%
+    mutate(ignition_plus4 = ignition_date %m+% years(4)) %>%
+    mutate(ignition_minus4 = ignition_date %m-% years(4)) %>%
+    mutate(prepost = factor(case_when(ymd(date) > ymd(ignition_minus4) &
+                                        ymd(date) <= ymd(ignition_date) ~ "pre",
+                                      ymd(date) > ymd(ignition_date) &
+                                        ymd(date) <= ymd(ignition_plus4) ~ "post",
+                                      TRUE ~ NA),
+                            levels = c("pre", "post", "NA"))) %>%
+    filter(prepost %in% c("pre", "post", "NA"))
+  
+  summary1 <- x_tf %>%
+    count(event_id, prepost, .drop = FALSE) %>%
+    ungroup() %>%
+    pivot_wider(names_from = prepost, values_from = n)
+  
+  # Filter for fires with enough (n = 10) data during both
+  # pre and post-fire periods.
+  summary1_filtered <- summary1 %>%
+    mutate(enough = case_when(post >= 10 & pre >= 10 ~ "Yes",
+                              TRUE ~ "No")) %>%
+    filter(enough == "Yes")
+  
+  # First point at which there might be an empty dataframe,
+  # so I need to account for that.
+  if (length(summary1_filtered$event_id) == 0) {
+    
+    df <- tibble(`event_id` = 0)
+    
+    return(df)
+    
+  } else {
+    
+    fires <- unique(summary1_filtered$event_id)
+    
+    # ENSURES A MINIMUM OF TEN OBSERVATIONS PRE AND POST FIRE!!!
+    x_tf10 <- x_tf %>%
+      filter(event_id %in% fires)
+    
+    return (x_tf10)
+  }
+    
 }
 
-lapply(no3_dat_metcriteria, plotfn)
+no3_dat_step1filter <- mapply(filter_step1,
+                           x = no3_f_list,
+                           q = q_list)
 
-# Alright, most look just fine, but this merits doing for each 
-# of the analytes just in case. Most appear fairly balanced between
-# numbers of pre-post samples. Only a few sites had large gaps, and
-# a few had a noticeably shorter pre- or post- time period.
-# Otherwise, the most noticeable thing is some sites have WAY more
-# data, which isn't much we can do about.
+no3_dat_metstep1 <- purrr::keep(no3_dat_step1filter, 
+                                ~ .x$event_id[1] != "0")
+
+length(unique(no3_dat_metstep1$usgs_site)) # 120 sites w/o data (n = 24 remaining)
+
+# And another 8 sites w/o discharge span (n = 16 remaining)
+
 
 # End of script.
