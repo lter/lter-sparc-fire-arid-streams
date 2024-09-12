@@ -191,6 +191,9 @@ JOIN post_fire_cte ON (
   pre_fire_cte.usgs_site = post_fire_cte.usgs_site
   AND pre_fire_cte.date = post_fire_cte.date
 )
+-- WHERE 
+--   pre_fire_cte.pre != 'empty'
+--   OR post_fire_cte.post != 'empty'
 ;
 
 ```
@@ -340,6 +343,9 @@ nitrate.date
 Create a temporary table of standardized (forms, units) that
 reflects data from both the USGS and non-USGS data sources.
 
+We standardize NEON data (micromoles) and Hanan Bell (`mg NO3/L`) to mg `NO3-N
+/ L`.
+
 ```{sql}
 #| eval: TRUE
 
@@ -367,10 +373,15 @@ SELECT
   date,
   analyte,
   CASE
-    WHEN unit = 'micromoles' THEN mean * (14.0 / 1000) -- no3_d
+    WHEN unit ~~* 'micromoles%' THEN mean * (14.0 / 1000.0)
+    WHEN usgs_site ~~* '%bell%' THEN mean * (14.0 / 62.0)
     ELSE mean
   END value_std,
-  unit AS units_std
+  CASE
+    WHEN unit ~~* 'micromoles%' THEN 'mg/L as N'
+    WHEN usgs_site ~~* '%bell%' THEN 'mg/L as N'
+    ELSE unit
+  END units_std
 FROM firearea.non_usgs_water_chem
 WHERE
   analyte ~~* '%nitrate%' OR
@@ -393,6 +404,7 @@ The `chem_ranges` CTE uses the template detailed in `chemistry with ranges`.
 
 DROP TABLE IF EXISTS nitrate_summary ;
 
+CREATE TEMPORARY TABLE nitrate_summary AS 
 WITH chem_ranges AS (
   SELECT
     nitrate.usgs_site,
@@ -468,6 +480,31 @@ LEFT JOIN (
 adjacent_fire.usgs_site = pre_fire.usgs_site
 AND adjacent_fire.event = pre_fire.pre
 )
+;
+
+```
+
+## nitrate: summary and dd_area_stats
+
+Combine summary statistics with dd_area_stats for a more comprehensive
+summary.
+
+```{sql}
+#| eval: TRUE
+
+\COPY (
+SELECT
+  dd_area_stats.*,
+  nitrate_summary.days_since_prior_fire,
+  nitrate_summary.num_pre_fire,
+  nitrate_summary.num_post_fire
+FROM nitrate_summary
+LEFT JOIN
+dd_area_stats ON (
+  dd_area_stats.usgs_site = nitrate_summary.usgs_site
+  AND dd_area_stats.event_id = nitrate_summary.event
+)
+) TO '/tmp/nitrate_dd_area.csv' WITH DELIMITER ',' CSV HEADER
 ;
 
 ```
@@ -604,6 +641,8 @@ AND adjacent_fire.event = pre_fire.pre
 ;
 
 ```
+
+## ammonium: summary and dd_area_stats
 
 Combine summary statistics with dd_area_stats for a more comprehensive
 summary.
