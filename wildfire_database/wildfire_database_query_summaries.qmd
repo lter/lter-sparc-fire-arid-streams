@@ -4,7 +4,17 @@ author: "S. Earl"
 format: gfm
 ---
 
-# standardize USGS water chemistry
+# overview
+
+Queries for transforming (as needed) and extracting wildfire data.
+
+Queries generate either a view, temporary table, or export. Views should be
+reconstructed as needed based on database updates; of course, temporary tables
+must be constructed prior to each new export. One additional query is partial,
+which is a template for a CTE in subsequent queries.
+
+
+# view: USGS water chemistry
 
 Generate a view of a standardized form of the USGS water-chemistry data that
 will provide a starting point for generating summaries of particular analytes.
@@ -84,7 +94,7 @@ WHERE
 
 ```
 
-# combined USGS & other discharge
+# view: combined discharge
 
 A view of discharge that reflects the combined records of data from USGS and
 otherwise sites.
@@ -116,7 +126,7 @@ WHERE
 
 ```
 
-# intervals between fires
+# view: ranges (intervals between fires)
 
 A view of the interval (`daterange`) between sites * fires. This view allows us
 to identify the timing of a separate event (water chemistry sample, discharge
@@ -131,6 +141,7 @@ if it were to fall on the day of the fire has not been tested.
 
 ```{sql}
 #| eval: TRUE
+#| label: ranges
 
 DROP VIEW IF EXISTS firearea.ranges ;
 
@@ -140,21 +151,35 @@ pre_fire_cte AS (
   SELECT 
     pre_fire.usgs_site,
     pre_fire.date,
-    pre_fire.event,
+    UNNEST(pre_fire.event) AS event,
     pre_fire.pre
   FROM (
     SELECT
-      fires_catchments.usgs_site,
-      fires_catchments.ig_date AS date,
-      fires_catchments.event_id AS event,
+      pre_array.usgs_site,
+      pre_array.ig_date AS date,
+      pre_array.event_id AS event,
       DATERANGE(
-      LAG(fires_catchments.ig_date, 1) OVER (PARTITION BY usgs_site ORDER BY fires_catchments.ig_date),
-      fires_catchments.ig_date
+        LAG(pre_array.ig_date, 1) OVER (
+          PARTITION BY pre_array.usgs_site
+          ORDER BY pre_array.ig_date
+        ),
+        pre_array.ig_date
       ) AS pre
-    FROM firearea.fires_catchments
+    FROM (
+      SELECT
+        usgs_site,
+        ig_date,
+        ARRAY_AGG(event_id) AS event_id
+      FROM firearea.fires_catchments 
+      GROUP BY
+        usgs_site,
+        ig_date
+      ORDER BY
+        ig_date
+    ) AS pre_array
     ORDER BY
-    usgs_site,
-    date
+      pre_array.usgs_site,
+      pre_array.ig_date
   ) AS pre_fire
   WHERE pre_fire.pre != 'empty'
 ),
@@ -162,21 +187,35 @@ post_fire_cte AS (
   SELECT 
     post_fire.usgs_site,
     post_fire.date,
-    post_fire.event,
+    UNNEST(post_fire.event) AS event,
     post_fire.post
   FROM (
     SELECT
-      fires_catchments.usgs_site,
-      fires_catchments.ig_date AS date,
-      fires_catchments.event_id AS event,
+      post_array.usgs_site,
+      post_array.ig_date AS date,
+      post_array.event_id AS event,
       DATERANGE(
-      fires_catchments.ig_date,
-      LEAD(fires_catchments.ig_date, 1) OVER (PARTITION BY usgs_site ORDER BY fires_catchments.ig_date)
+        post_array.ig_date,
+        LEAD(post_array.ig_date, 1) OVER (
+          PARTITION BY post_array.usgs_site
+          ORDER BY post_array.ig_date
+        )
       ) AS post
-    FROM firearea.fires_catchments
+    FROM (
+      SELECT
+        usgs_site,
+        ig_date,
+        ARRAY_AGG(event_id) AS event_id
+      FROM firearea.fires_catchments 
+      GROUP BY
+        usgs_site,
+        ig_date
+      ORDER BY
+        ig_date
+    ) AS post_array
     ORDER BY
-    usgs_site,
-    date
+      post_array.usgs_site,
+      post_array.ig_date
   ) AS post_fire
   WHERE post_fire.post != 'empty'
 )
@@ -189,26 +228,59 @@ SELECT
 FROM pre_fire_cte
 JOIN post_fire_cte ON (
   pre_fire_cte.usgs_site = post_fire_cte.usgs_site
-  AND pre_fire_cte.date = post_fire_cte.date
+  AND pre_fire_cte.date  = post_fire_cte.date
+  AND pre_fire_cte.event = post_fire_cte.event
 )
--- WHERE 
---   pre_fire_cte.pre != 'empty'
---   OR post_fire_cte.post != 'empty'
 ;
 
 ```
 
-# discharge and areal statistics
+# view: combined catchments
+
+```{sql}
+#| eval: TRUE
+#| label: combined_catchments
+
+SELECT
+  usgs_site,
+  -- area_m2,
+  -- ST_Area(geometry, TRUE) AS area_m2
+  geometry
+FROM firearea.catchments
+UNION 
+SELECT
+  usgs_site,
+  -- area_m2,
+  -- ST_Area(geometry, TRUE) AS area_m2
+  geometry
+FROM firearea.non_usgs_catchments
+;
+
+```
+
+# temp: discharge and areal statistics
 
 A temporary table that calculates statistics around discharge, and catchment
 and fire areas.
 
 ```{sql}
 #| eval: TRUE
+#| label: dd_area_stats
 
 DROP TABLE IF EXISTS dd_area_stats ;
 
 CREATE TEMPORARY TABLE dd_area_stats AS 
+WITH combined_catchments AS (
+SELECT
+  usgs_site,
+  geometry
+FROM firearea.catchments
+UNION 
+SELECT
+  usgs_site,
+  geometry
+FROM firearea.non_usgs_catchments
+)
 SELECT
   dd_stats.*,
   area_stats.fire_area,
@@ -254,22 +326,22 @@ JOIN
   SELECT
     areas.usgs_site,
     areas.event_id,
-    round((burnbndac / 247.11)::numeric, 2) AS fire_area,
+    ROUND((burnbndac / 247.11)::numeric, 2) AS fire_area,
     areas.catch_area,
     areas.fire_catch_area,
-    round(((areas.fire_catch_area / areas.catch_area) * 100)::numeric, 2) AS per_cent_burned
+    ROUND(((areas.fire_catch_area / areas.catch_area) * 100)::numeric, 2) AS per_cent_burned
   FROM
   (
     SELECT
       fires_catchments.usgs_site,
       fires_catchments.event_id,
       fires_catchments.ig_date,
-      round((st_area(fires_catchments.geometry::geography) / 1000000)::numeric, 2) AS fire_catch_area,
-      round((st_area(catchments.geometry::geography) / 1000000)::numeric, 2) AS catch_area
+      ROUND((ST_Area(fires_catchments.geometry, TRUE) / 1000000)::numeric, 2) AS fire_catch_area,
+      ROUND((ST_Area(combined_catchments.geometry, TRUE) / 1000000)::numeric, 2) AS catch_area
     FROM
     firearea.fires_catchments
     JOIN
-    firearea.catchments ON (catchments.usgs_site = fires_catchments.usgs_site)
+    combined_catchments ON (combined_catchments.usgs_site = fires_catchments.usgs_site)
   ) AS areas
   JOIN
   firearea.mtbs_fire_perimeters ON (mtbs_fire_perimeters.event_id = areas.event_id)
@@ -278,18 +350,18 @@ area_stats.usgs_site = dd_stats.usgs_site
 AND area_stats.event_id = dd_stats.event_id
 )
 WHERE
-dd_stats.days_q_pre_fire >= 0 AND dd_stats.days_q_post_fire >= 0 AND -- any duration
-dd_stats.usgs_site IN (
-  SELECT usgs_site FROM firearea.ecoregion_catchments
-)
+  dd_stats.days_q_pre_fire >= 0 AND dd_stats.days_q_post_fire >= 0 AND -- any duration
+  dd_stats.usgs_site IN (
+    SELECT usgs_site FROM firearea.ecoregion_catchments
+  )
 ORDER BY
-dd_stats.usgs_site,
-dd_stats.event_id
+  dd_stats.usgs_site,
+  dd_stats.event_id
 ;
 
 ```
 
-# chemistry with ranges (intervals)
+# partial: chemistry with ranges
 
 Designate water-chemistry measurements relative to fires (pre, post). This is a
 template, the example here being for standardized nitrate data, that forms the
@@ -308,12 +380,12 @@ SELECT
   ranges_post.post
 FROM nitrate
 JOIN firearea.discharge ON (
-discharge."Date" = nitrate.date
-AND discharge.usgs_site = nitrate.usgs_site
+  discharge."Date" = nitrate.date
+  AND discharge.usgs_site = nitrate.usgs_site
 )
 LEFT JOIN firearea.ranges ON (
-nitrate.usgs_site = ranges.usgs_site
-AND daterange(nitrate.date, nitrate.date, '[]') && ranges.pre
+  nitrate.usgs_site = ranges.usgs_site
+  AND daterange(nitrate.date, nitrate.date, '[]') && ranges.pre
 )
 LEFT JOIN (
   SELECT
@@ -322,32 +394,33 @@ LEFT JOIN (
     ranges.event AS post
   FROM nitrate
   LEFT JOIN firearea.ranges ON (
-  nitrate.usgs_site = ranges.usgs_site
-  AND daterange(nitrate.date, nitrate.date, '[]') && ranges.post
+    nitrate.usgs_site = ranges.usgs_site
+    AND daterange(nitrate.date, nitrate.date, '[]') && ranges.post
   )
 ) AS ranges_post ON (
-ranges_post.usgs_site = nitrate.usgs_site
-AND ranges_post.date = nitrate.date
+  ranges_post.usgs_site = nitrate.usgs_site
+  AND ranges_post.date = nitrate.date
 )
 ORDER BY
-nitrate.usgs_site,
-nitrate.date
+  nitrate.usgs_site,
+  nitrate.date
 ;
 
 ```
 
 # nitrate
 
-## combined USGS and other nitrate
+## temp: combined nitrate
 
-Create a temporary table of standardized (forms, units) that
-reflects data from both the USGS and non-USGS data sources.
+Create a temporary table of standardized (forms, units) that reflects data
+from both the USGS and non-USGS data sources.
 
 We standardize NEON data (micromoles) and Hanan Bell (`mg NO3/L`) to mg `NO3-N
 / L`.
 
 ```{sql}
 #| eval: TRUE
+#| label: nitrate
 
 DROP TABLE IF EXISTS nitrate ;
 
@@ -390,7 +463,7 @@ WHERE
 
 ```
 
-## nitrate with summary statistics
+## temp: nitrate with summary statistics
 
 Generate a temporary table of summary statistics surrounding nitrate data
 availability (number of samples pre, post fire; time (days) since previous
@@ -401,6 +474,7 @@ The `chem_ranges` CTE uses the template detailed in `chemistry with ranges`.
 
 ```{sql}
 #| eval: TRUE
+#| label: nitrate_summary
 
 DROP TABLE IF EXISTS nitrate_summary ;
 
@@ -414,12 +488,13 @@ WITH chem_ranges AS (
     ranges_post.post
   FROM nitrate
   JOIN firearea.discharge ON (
-  discharge."Date" = nitrate.date
-  AND discharge.usgs_site = nitrate.usgs_site
+    discharge."Date" = nitrate.date
+    AND discharge.usgs_site = nitrate.usgs_site
   )
   LEFT JOIN firearea.ranges ON (
-  nitrate.usgs_site = ranges.usgs_site
-  AND daterange(nitrate.date, nitrate.date, '[]') && ranges.pre
+    nitrate.usgs_site = ranges.usgs_site
+    -- AND daterange(nitrate.date, nitrate.date, '[]') && ranges.pre
+    AND ranges.pre @> nitrate.date
   )
   LEFT JOIN (
     SELECT
@@ -428,16 +503,17 @@ WITH chem_ranges AS (
       ranges.event AS post
     FROM nitrate
     LEFT JOIN firearea.ranges ON (
-    nitrate.usgs_site = ranges.usgs_site
-    AND daterange(nitrate.date, nitrate.date, '[]') && ranges.post
+      nitrate.usgs_site = ranges.usgs_site
+      -- AND daterange(nitrate.date, nitrate.date, '[]') && ranges.post
+      AND ranges.post @> nitrate.date
     )
   ) AS ranges_post ON (
-  ranges_post.usgs_site = nitrate.usgs_site
-  AND ranges_post.date = nitrate.date
+    ranges_post.usgs_site = nitrate.usgs_site
+    AND ranges_post.date = nitrate.date
   )
   ORDER BY
-  nitrate.usgs_site,
-  nitrate.date
+    nitrate.usgs_site,
+    nitrate.date
 )
 SELECT
   pre_fire.usgs_site,
@@ -453,8 +529,8 @@ FROM (
     count(chem_ranges.pre) AS num_pre_fire
   FROM chem_ranges
   GROUP BY
-  chem_ranges.usgs_site,
-  chem_ranges.pre
+    chem_ranges.usgs_site,
+    chem_ranges.pre
 ) AS pre_fire
 JOIN (
   SELECT
@@ -463,11 +539,11 @@ JOIN (
     count(chem_ranges.post) AS num_post_fire
   FROM chem_ranges
   GROUP BY
-  chem_ranges.usgs_site,
-  chem_ranges.post
+    chem_ranges.usgs_site,
+    chem_ranges.post
 ) AS post_fire ON (
-post_fire.usgs_site = pre_fire.usgs_site
-AND post_fire.post = pre_fire.pre
+    post_fire.usgs_site = pre_fire.usgs_site
+    AND post_fire.post  = pre_fire.pre
 )
 LEFT JOIN (
   SELECT
@@ -477,20 +553,60 @@ LEFT JOIN (
     UPPER(ranges.pre) - LOWER(ranges.pre) AS days_since_prior_fire
   FROM firearea.ranges
 ) AS adjacent_fire ON (
-adjacent_fire.usgs_site = pre_fire.usgs_site
-AND adjacent_fire.event = pre_fire.pre
+    adjacent_fire.usgs_site = pre_fire.usgs_site
+    AND adjacent_fire.event = pre_fire.pre
 )
 ;
 
 ```
 
-## nitrate: summary and dd_area_stats
+## export: nitrate q events
+
+Combine raw nitrate with Q and fire events.
+
+```{sql}
+#| eval: TRUE
+#| label: nitrate_export
+
+\COPY (
+SELECT
+  discharge.*,
+  nitrate.*,
+  fires.events,
+  fires.ig_date
+FROM firearea.discharge
+LEFT JOIN nitrate ON (
+  nitrate.usgs_site = discharge.usgs_site
+  AND nitrate.date  = discharge."Date"
+)
+LEFT JOIN 
+(
+  SELECT
+    usgs_site,
+    ig_date,
+    ARRAY_AGG(event_id) AS events
+  FROM firearea.fires_catchments 
+  GROUP BY
+    usgs_site,
+    ig_date
+  ORDER BY ig_date
+) AS fires ON (
+    fires.usgs_site   = discharge.usgs_site
+    AND fires.ig_date = discharge."Date"
+)
+) TO '/tmp/nitrate_q.csv' with DELIMITER ',' csv header
+;
+
+```
+
+## export: nitrate summary and dd_area_stats
 
 Combine summary statistics with dd_area_stats for a more comprehensive
 summary.
 
 ```{sql}
 #| eval: TRUE
+#| label: nitrate_summary_dd_area
 
 \COPY (
 SELECT
@@ -499,9 +615,9 @@ SELECT
   nitrate_summary.num_pre_fire,
   nitrate_summary.num_post_fire
 FROM nitrate_summary
-LEFT JOIN
+RIGHT JOIN
 dd_area_stats ON (
-  dd_area_stats.usgs_site = nitrate_summary.usgs_site
+  dd_area_stats.usgs_site    = nitrate_summary.usgs_site
   AND dd_area_stats.event_id = nitrate_summary.event
 )
 ) TO '/tmp/nitrate_dd_area.csv' WITH DELIMITER ',' CSV HEADER
@@ -511,13 +627,14 @@ dd_area_stats ON (
 
 # ammonium
 
-## combined USGS and other ammonium
+## temp: combined ammonium
 
 Create a temporary table of standardized (forms, units) that
 reflects data from both the USGS and non-USGS data sources.
 
 ```{sql}
 #| eval: TRUE
+#| label: ammonium
 
 DROP TABLE IF EXISTS ammonium ;
 
@@ -547,9 +664,9 @@ WHERE analyte ~~* '%nh4%'
 ```
 
 
-## ammonium with summary statistics
+## temp: ammonium with summary statistics
 
-Generate a temporary table of summary statistics surrounding nitrate data
+Generate a temporary table of summary statistics surrounding ammonium data
 availability (number of samples pre, post fire; time (days) since previous
 fire; etc.).
 
@@ -570,12 +687,13 @@ WITH chem_ranges AS (
     ranges_post.post
   FROM ammonium
   JOIN firearea.discharge ON (
-  discharge."Date" = ammonium.date
-  AND discharge.usgs_site = ammonium.usgs_site
+    discharge."Date" = ammonium.date
+    AND discharge.usgs_site = ammonium.usgs_site
   )
   LEFT JOIN firearea.ranges ON (
-  ammonium.usgs_site = ranges.usgs_site
-  AND daterange(ammonium.date, ammonium.date, '[]') && ranges.pre
+    ammonium.usgs_site = ranges.usgs_site
+    AND ranges.pre @> ammonium.date
+    -- AND daterange(ammonium.date, ammonium.date, '[]') && ranges.pre
   )
   LEFT JOIN (
     SELECT
@@ -584,16 +702,17 @@ WITH chem_ranges AS (
       ranges.event AS post
     FROM ammonium
     LEFT JOIN firearea.ranges ON (
-    ammonium.usgs_site = ranges.usgs_site
-    AND daterange(ammonium.date, ammonium.date, '[]') && ranges.post
+      ammonium.usgs_site = ranges.usgs_site
+      AND ranges.post @> ammonium.date
+      -- AND daterange(ammonium.date, ammonium.date, '[]') && ranges.post
     )
   ) AS ranges_post ON (
-  ranges_post.usgs_site = ammonium.usgs_site
-  AND ranges_post.date = ammonium.date
+      ranges_post.usgs_site = ammonium.usgs_site
+      AND ranges_post.date  = ammonium.date
   )
   ORDER BY
-  ammonium.usgs_site,
-  ammonium.date
+    ammonium.usgs_site,
+    ammonium.date
 )
 SELECT
   pre_fire.usgs_site,
@@ -610,8 +729,8 @@ FROM (
     count(chem_ranges.pre) AS num_pre_fire
   FROM chem_ranges
   GROUP BY
-  chem_ranges.usgs_site,
-  chem_ranges.pre
+    chem_ranges.usgs_site,
+    chem_ranges.pre
 ) AS pre_fire
 JOIN (
   SELECT
@@ -620,11 +739,11 @@ JOIN (
     count(chem_ranges.post) AS num_post_fire
   FROM chem_ranges
   GROUP BY
-  chem_ranges.usgs_site,
-  chem_ranges.post
+    chem_ranges.usgs_site,
+    chem_ranges.post
 ) AS post_fire ON (
-post_fire.usgs_site = pre_fire.usgs_site
-AND post_fire.post = pre_fire.pre
+    post_fire.usgs_site = pre_fire.usgs_site
+    AND post_fire.post  = pre_fire.pre
 )
 LEFT JOIN (
   SELECT
@@ -635,14 +754,54 @@ LEFT JOIN (
     UPPER(ranges.post) - LOWER(ranges.post) AS days_until_next_fire
   FROM firearea.ranges
 ) AS adjacent_fire ON (
-adjacent_fire.usgs_site = pre_fire.usgs_site
-AND adjacent_fire.event = pre_fire.pre
+    adjacent_fire.usgs_site = pre_fire.usgs_site
+    AND adjacent_fire.event = pre_fire.pre
 )
 ;
 
 ```
 
-## ammonium: summary and dd_area_stats
+## export: ammonium q events
+
+Combine raw ammonium with Q and fire events.
+
+```{sql}
+#| eval: TRUE
+#| label: ammonium_export
+
+\COPY (
+SELECT
+  discharge.*,
+  ammonium.*,
+  fires.events,
+  fires.ig_date
+FROM firearea.discharge
+LEFT JOIN ammonium ON (
+  ammonium.usgs_site = discharge.usgs_site
+  AND ammonium.date  = discharge."Date"
+)
+LEFT JOIN 
+(
+  SELECT
+    usgs_site,
+    ig_date,
+    ARRAY_AGG(event_id) AS events
+  FROM firearea.fires_catchments 
+  GROUP BY
+    usgs_site,
+    ig_date
+  ORDER BY ig_date
+) AS fires ON (
+    fires.usgs_site   = discharge.usgs_site
+    AND fires.ig_date = discharge."Date"
+)
+) TO '/tmp/ammonium_q.csv' with DELIMITER ',' csv header
+;
+
+```
+
+
+## export: ammonium summary and dd_area_stats
 
 Combine summary statistics with dd_area_stats for a more comprehensive
 summary.
@@ -652,14 +811,218 @@ summary.
 
 \COPY (
 SELECT
-  ammonium_summary.*,
-  dd_area_stats.*
+  dd_area_stats.*,
+  ammonium_summary.days_since_prior_fire,
+  ammonium_summary.num_pre_fire,
+  ammonium_summary.num_post_fire
 FROM ammonium_summary
-LEFT JOIN
+RIGHT JOIN
 dd_area_stats ON (
-dd_area_stats.usgs_site = ammonium_summary.usgs_site
-AND dd_area_stats.event_id = ammonium_summary.event)
+  dd_area_stats.usgs_site    = ammonium_summary.usgs_site
+  AND dd_area_stats.event_id = ammonium_summary.event
+)
 ) TO '/tmp/ammonium_dd_area.csv' WITH DELIMITER ',' CSV HEADER
+;
+
+```
+
+
+# specific conductance
+
+## temp: combined specific conductance
+
+Create a temporary table of standardized (forms, units) that reflects data
+from both the USGS and non-USGS data sources.
+
+```{sql}
+#| eval: TRUE
+#| label: specific_conductance
+
+DROP TABLE IF EXISTS specific_conductance ;
+
+CREATE TEMPORARY TABLE specific_conductance AS 
+SELECT
+  usgs_site,
+  "ActivityStartDate" AS date,
+  'specific_conductance' as analyte,
+  AVG (value_std) AS value_std,
+  'uS/cm @25C' AS units_std
+FROM firearea.usgs_water_chem_std
+WHERE
+  "USGSPCode" IN ('00095')
+GROUP BY
+  usgs_site,
+  date
+UNION
+SELECT
+  usgs_site,
+  date,
+  analyte,
+  mean AS value_std,
+  unit AS units_std
+FROM firearea.non_usgs_water_chem
+WHERE
+  analyte ~~* '%specificConductance%'
+;
+
+```
+
+## temp: specific conductance with summary statistics
+
+Generate a temporary table of summary statistics surrounding specific
+conductance data availability (number of samples pre, post fire; time (days)
+since previous fire; etc.).
+
+The `chem_ranges` CTE uses the template detailed in `chemistry with ranges`.
+
+```{sql}
+#| eval: TRUE
+
+DROP TABLE IF EXISTS specific_cond_summary ;
+
+CREATE TEMPORARY TABLE specific_cond_summary AS 
+WITH chem_ranges AS (
+  SELECT
+    specific_conductance.usgs_site,
+    specific_conductance.date,
+    specific_conductance.value_std,
+    ranges.event AS pre,
+    ranges_post.post
+  FROM specific_conductance
+  JOIN firearea.discharge ON (
+    discharge."Date"        = specific_conductance.date
+    AND discharge.usgs_site = specific_conductance.usgs_site
+  )
+  LEFT JOIN firearea.ranges ON (
+    specific_conductance.usgs_site = ranges.usgs_site
+    AND ranges.pre @> specific_conductance.date
+  )
+  LEFT JOIN (
+    SELECT
+      specific_conductance.usgs_site,
+      specific_conductance.date,
+      ranges.event AS post
+    FROM specific_conductance
+    LEFT JOIN firearea.ranges ON (
+      specific_conductance.usgs_site = ranges.usgs_site
+      AND ranges.post @> specific_conductance.date
+    )
+  ) AS ranges_post ON (
+      ranges_post.usgs_site = specific_conductance.usgs_site
+      AND ranges_post.date  = specific_conductance.date
+  )
+  ORDER BY
+    specific_conductance.usgs_site,
+    specific_conductance.date
+)
+SELECT
+  pre_fire.usgs_site,
+  pre_fire.pre AS event,
+  adjacent_fire.date,
+  adjacent_fire.days_since_prior_fire,
+  adjacent_fire.days_until_next_fire,
+  pre_fire.num_pre_fire,
+  post_fire.num_post_fire
+FROM (
+  SELECT
+    chem_ranges.usgs_site,
+    chem_ranges.pre,
+    count(chem_ranges.pre) AS num_pre_fire
+  FROM chem_ranges
+  GROUP BY
+    chem_ranges.usgs_site,
+    chem_ranges.pre
+) AS pre_fire
+JOIN (
+  SELECT
+    chem_ranges.usgs_site,
+    chem_ranges.post,
+    count(chem_ranges.post) AS num_post_fire
+  FROM chem_ranges
+  GROUP BY
+    chem_ranges.usgs_site,
+    chem_ranges.post
+) AS post_fire ON (
+    post_fire.usgs_site = pre_fire.usgs_site
+    AND post_fire.post  = pre_fire.pre
+)
+LEFT JOIN (
+  SELECT
+    usgs_site,
+    date,
+    event,
+    UPPER(ranges.pre) - LOWER(ranges.pre) AS days_since_prior_fire,
+    UPPER(ranges.post) - LOWER(ranges.post) AS days_until_next_fire
+  FROM firearea.ranges
+) AS adjacent_fire ON (
+    adjacent_fire.usgs_site = pre_fire.usgs_site
+    AND adjacent_fire.event = pre_fire.pre
+)
+;
+
+```
+
+## export: specific conductance q events
+
+Combine raw specific conductance with Q and fire events.
+
+```{sql}
+#| eval: TRUE
+#| label: specific_conductance_export
+
+\COPY (
+SELECT
+  discharge.*,
+  specific_conductance.*,
+  fires.events,
+  fires.ig_date
+FROM firearea.discharge
+LEFT JOIN specific_conductance ON (
+  specific_conductance.usgs_site = discharge.usgs_site
+  AND specific_conductance.date  = discharge."Date"
+)
+LEFT JOIN 
+(
+  SELECT
+    usgs_site,
+    ig_date,
+    ARRAY_AGG(event_id) AS events
+  FROM firearea.fires_catchments 
+  GROUP BY
+    usgs_site,
+    ig_date
+  ORDER BY ig_date
+) AS fires ON (
+    fires.usgs_site   = discharge.usgs_site
+    AND fires.ig_date = discharge."Date"
+)
+) TO '/tmp/specific_conductance_q.csv' with DELIMITER ',' csv header
+;
+
+```
+
+
+## export: specific conductance summary and dd_area_stats
+
+Combine summary statistics with dd_area_stats for a more comprehensive
+summary.
+
+```{sql}
+#| eval: TRUE
+
+\COPY (
+SELECT
+  dd_area_stats.*,
+  specific_cond_summary.days_since_prior_fire,
+  specific_cond_summary.num_pre_fire,
+  specific_cond_summary.num_post_fire
+FROM specific_cond_summary
+RIGHT JOIN
+dd_area_stats ON (
+  dd_area_stats.usgs_site    = specific_cond_summary.usgs_site
+  AND dd_area_stats.event_id = specific_cond_summary.event
+)
+) TO '/tmp/specific_conductance_dd_area.csv' WITH DELIMITER ',' CSV HEADER
 ;
 
 ```
