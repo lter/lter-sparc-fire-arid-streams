@@ -235,7 +235,7 @@ JOIN post_fire_cte ON (
 
 ```
 
-# view: combined catchments
+# partial: combined catchments
 
 ```{sql}
 #| eval: TRUE
@@ -857,12 +857,15 @@ UNION
 SELECT
   usgs_site,
   date,
-  analyte,
-  mean AS value_std,
-  unit AS units_std
+  'specific_conductance' as analyte,
+  AVG (mean) AS value_std,
+  'uS/cm @25C' AS units_std
 FROM firearea.non_usgs_water_chem
 WHERE
   analyte ~~* '%specificConductance%'
+GROUP BY
+  usgs_site,
+  date
 ;
 
 ```
