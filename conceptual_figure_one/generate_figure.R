@@ -33,7 +33,7 @@ geodata::worldclim_global(
   path = "/tmp/"
 )
 
-global_map <- terra::rast("/tmp/wc2.1_10m/wc2.1_10m_bio_12.tif")
+global_map <- terra::rast("/tmp/climate/wc2.1_10m/wc2.1_10m_bio_12.tif")
 
 global_map_df <- terra::as.data.frame(
   x  = global_map,
@@ -155,6 +155,9 @@ western_ecos <- ecoregions[sf::st_intersects(x = ecoregions, y = western_states,
 western_ecos_outline <- sf::st_union(western_ecos) |>
   sf::st_transform(crs = 4326)
 
+global_map_df <- global_map_df[global_map_df$y > -60.08, ] # remove antarctica
+global_map_df <- global_map_df[global_map_df$mm < 10000, ] # filter lone 5-digit value
+
 qn <- quantile(
   x     = global_map_df$mm,
   probs = c(0.0, 0.99),
@@ -183,7 +186,7 @@ qn01 <- scales::rescale(x = c(qn, range(global_map_df$mm)))
       expand     = FALSE
       # label_axes = "-NE-" # y-axis on the right TRBL
       ) +
-    ggplot2::scale_fill_gradientn (
+    ggplot2::scale_fill_gradientn(
       colours = colorRampPalette(
         colors = c(
           # red (5)
@@ -202,14 +205,19 @@ qn01 <- scales::rescale(x = c(qn, range(global_map_df$mm)))
           "#07b24a",
           "#00a64e",
           # blue (4)
-          "#928bc1",
-          "#7370b3",
-          "#625eaa",
-          "#2b3092"
+          "#C6DBEF",
+          "#9ECAE1",
+          "#6BAED6",
+          "#4292C6",
+          "#2171B5",
+          "#08519C",
+          "#08306B"
           ),
-        bias = 1.3
+        # bias = 1.3
         )(20),
-      values = c(0, seq(qn01[1], qn01[2], length.out = 18), 1)
+      # transform = "log1p"
+      # values = c(0, seq(qn01[1], qn01[2], length.out = 18), 1)
+      values = c(seq(qn01[1], qn01[2], length.out = 18), 0.6, 0.8, 0.9, 1)
       ) +
     # ggplot2::theme_minimal() +
     ggplot2::theme(
@@ -217,7 +225,7 @@ qn01 <- scales::rescale(x = c(qn, range(global_map_df$mm)))
       panel.grid.major = ggplot2::element_blank(),
       panel.grid.minor = ggplot2::element_blank(),
       panel.background = ggplot2::element_blank(),
-      plot.margin      = ggplot2::unit(c(0, 0, 0, 0), "cm"), # TRBL
+      plot.margin      = ggplot2::unit(c(0, 0, 0, 1), "cm"), # TRBL
       legend.text      = ggplot2::element_text(size = font_size)
       # legend.position  = "none"
       ) +
@@ -233,18 +241,16 @@ qn01 <- scales::rescale(x = c(qn, range(global_map_df$mm)))
 
 ## horizontal
 
-(
-  ecos_map <- cowplot::plot_grid(
-    western_ecos_plot,
-    NULL,
-    ppt,
-    nrow       = 1,
-    ncol       = 3,
-    rel_widths = c(+1.2, -0.1, +1.0)
-    # rel_heights = c(1, 4)
-  )
-)
-
+# (
+#   ecos_map <- cowplot::plot_grid(
+#     western_ecos_plot,
+#     NULL,
+#     ppt,
+#     nrow       = 1,
+#     ncol       = 3,
+#     rel_widths = c(+1.2, -0.1, +1.0)
+#   )
+# )
 
 ## vertical
 
@@ -254,7 +260,7 @@ qn01 <- scales::rescale(x = c(qn, range(global_map_df$mm)))
     western_ecos_plot,
     nrow       = 2,
     ncol       = 1,
-    labels     = c("A", "B"),
+    labels     = "AUTO",
     rel_widths = c(+4.2, +1.0)
   )
 )
