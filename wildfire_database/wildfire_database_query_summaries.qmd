@@ -94,7 +94,7 @@ WHERE
 
 ```
 
-# view: combined discharge
+# table: combined discharge
 
 A view of discharge that reflects the combined records of data from USGS and
 otherwise sites.
@@ -102,9 +102,9 @@ otherwise sites.
 ```{sql}
 #| eval: TRUE
 
-DROP VIEW IF EXISTS firearea.discharge ;
+DROP TABLE IF EXISTS firearea.discharge ;
 
-CREATE VIEW firearea.discharge AS
+CREATE TABLE firearea.discharge AS
 SELECT
   discharge_daily.usgs_site,
   discharge_daily."Date",
@@ -113,6 +113,10 @@ SELECT
 FROM firearea.discharge_daily
 WHERE
   discharge_daily."Flow" >= 0
+  AND discharge_daily.usgs_site IN (
+    SELECT usgs_site
+    FROM firearea.ecoregion_catchments
+  )
 UNION
 SELECT
   non_usgs_discharge.usgs_site,
@@ -123,6 +127,47 @@ FROM firearea.non_usgs_discharge
 WHERE
   non_usgs_discharge.mean >= 0
 ;
+
+-- Step 1: add quartile column
+ALTER TABLE firearea.discharge
+  ADD COLUMN quartile INTEGER ;
+
+-- Step 2: Calculate percentiles
+WITH percentiles AS (
+    SELECT
+        usgs_site,
+        percentile_disc(0.25) WITHIN GROUP (ORDER BY "Flow") AS p25,
+        percentile_disc(0.50) WITHIN GROUP (ORDER BY "Flow") AS p50,
+        percentile_disc(0.75) WITHIN GROUP (ORDER BY "Flow") AS p75
+    FROM
+        firearea.discharge
+    GROUP BY
+        usgs_site
+),
+-- Step 3: Assign quartiles
+quartiles AS (
+    SELECT
+        d.usgs_site,
+        d."Flow",
+        CASE
+            WHEN d."Flow" <= p.p25 THEN 1
+            WHEN d."Flow" <= p.p50 THEN 2
+            WHEN d."Flow" <= p.p75 THEN 3
+            ELSE 4
+        END AS quartile
+    FROM
+        firearea.discharge d
+    JOIN
+        percentiles p ON d.usgs_site = p.usgs_site
+)
+-- Step 4: Update the table
+UPDATE firearea.discharge
+SET quartile = q.quartile
+FROM quartiles q
+WHERE
+    firearea.discharge.usgs_site = q.usgs_site
+    AND firearea.discharge."Flow" = q."Flow"
+  ;
 
 ```
 
