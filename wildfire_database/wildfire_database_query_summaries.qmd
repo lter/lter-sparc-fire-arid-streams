@@ -114,7 +114,7 @@ FROM firearea.discharge_daily
 WHERE
   discharge_daily."Flow" >= 0
   AND discharge_daily.usgs_site IN (
-    SELECT usgs_site
+    SELECT DISTINCT(usgs_site)
     FROM firearea.ecoregion_catchments
   )
 UNION
@@ -173,6 +173,8 @@ WHERE
 
 # view: ranges (intervals between fires)
 
+## individual fires
+
 A view of the interval (`daterange`) between sites * fires. This view allows us
 to identify the timing of a separate event (water chemistry sample, discharge
 value, etc.) relative to a fire within the catchment. Intervals reflect the
@@ -185,7 +187,7 @@ That is, for example, how a water-chemistry sample is categorized (pre, post)
 if it were to fall on the day of the fire has not been tested.
 
 ```{sql}
-#| eval: TRUE
+#| eval: FALSE
 #| label: ranges
 
 DROP VIEW IF EXISTS firearea.ranges ;
@@ -276,6 +278,173 @@ JOIN post_fire_cte ON (
   AND pre_fire_cte.date  = post_fire_cte.date
   AND pre_fire_cte.event = post_fire_cte.event
 )
+;
+
+```
+
+## summer fires
+
+Whereas the [## individual fires] ranges calculates range statistics based on
+all site and all fires, [## summer fires] addresses some pre-processing and
+calculates range statistics separately on summer and non-summer fires.
+Pre-processing includes filtering fires smaller than a certain percent of the
+catchment burned (0.00). Summer fires are defined as fires occurring DOY 110
+through 250. For summer fires, the interval between the previous fire and
+latest fire are from the earliest fire in the summer period and latest fire in
+the summer period.
+
+A view of the interval (`daterange`) between sites * fires. This view allows us
+to identify the timing of a separate event (water chemistry sample, discharge
+value, etc.) relative to a fire within the catchment. Intervals reflect the
+temporal period between a fire and the most recent fire (pre) and the next
+occurring fire (post) within that catchment.
+
+A note about quality: the construction of this table, and if and how it affects
+subsequent queries in terms of inclusivity has not been evaluated thoroughly.
+That is, for example, how a water-chemistry sample is categorized (pre, post)
+if it were to fall on the day of the fire has not been tested.
+
+```{sql}
+#| eval: TRUE
+#| label: ranges_summer
+
+DROP VIEW IF EXISTS firearea.ranges ;
+
+CREATE VIEW firearea.ranges AS 
+-- merges usgs and non-usgs catchments
+WITH combined_catchments AS (
+SELECT
+  usgs_site,
+  geometry
+FROM firearea.catchments
+WHERE
+usgs_site IN (
+    SELECT DISTINCT(usgs_site)
+    FROM firearea.ecoregion_catchments
+)
+UNION 
+SELECT
+  usgs_site,
+  geometry
+FROM firearea.non_usgs_catchments
+),
+-- calculates areal stats and filters small fires
+fires_filtered AS (
+  SELECT
+    areas_stats.*
+  FROM (
+  SELECT
+    areas.usgs_site,
+    areas.event_id,
+    mtbs_fire_perimeters.ig_date,
+    ROUND((mtbs_fire_perimeters.burnbndac / 247.11)::numeric, 2) AS fire_area,
+    areas.catch_area,
+    areas.fire_catch_area,
+    ROUND(((areas.fire_catch_area / areas.catch_area) * 100)::numeric, 2) AS per_cent_burned
+  FROM
+  (
+    SELECT
+      fires_catchments.usgs_site,
+      fires_catchments.event_id,
+      fires_catchments.ig_date,
+      ROUND((ST_Area(fires_catchments.geometry, TRUE) / 1000000)::numeric, 2) AS fire_catch_area,
+      ROUND((ST_Area(combined_catchments.geometry, TRUE) / 1000000)::numeric, 2) AS catch_area
+    FROM
+    firearea.fires_catchments
+    JOIN
+    combined_catchments ON (combined_catchments.usgs_site = fires_catchments.usgs_site)
+  ) AS areas
+  JOIN
+  firearea.mtbs_fire_perimeters ON (mtbs_fire_perimeters.event_id = areas.event_id)
+  ) AS areas_stats
+-- filtering by > 0.00 drops the count from 12782 to 11207
+WHERE areas_stats.per_cent_burned > 0.00
+),
+-- aggregates event_ids when there is more than one fire in a day at a site
+aggregated_events AS (
+SELECT
+    usgs_site,
+    ig_date,
+    ARRAY_AGG(event_id) AS event_id
+FROM
+    fires_filtered 
+GROUP BY
+    usgs_site,
+    ig_date
+ORDER BY
+    ig_date
+),
+-- aggregates events and calculates date ranges of summer fires
+-- non-summer fires are unioned to summer fires
+grouped_fires AS (
+SELECT 
+    usgs_site, 
+    EXTRACT(YEAR FROM ig_date) AS year,
+    MIN(ig_date) AS start_date,
+    MAX(ig_date) AS end_date,
+    ARRAY_AGG(DISTINCT event_ids) AS events
+FROM 
+    aggregated_events,
+    unnest(event_id) AS event_ids
+WHERE
+    EXTRACT(DOY FROM ig_date) BETWEEN 110 AND 250
+GROUP BY 
+    aggregated_events.usgs_site,
+    year
+UNION
+SELECT
+  usgs_site,
+  EXTRACT(YEAR FROM ig_date) AS year,
+  ig_date AS start_date,
+  ig_date AS end_date,
+  ARRAY[event_id] AS events
+FROM 
+    aggregated_events
+WHERE 
+    EXTRACT(DOY FROM ig_date) < 110
+    OR EXTRACT(DOY FROM ig_date) > 250
+),
+-- identifies date since last and date until next fire
+grouped_fires_ranges AS (
+SELECT
+    grouped_fires.usgs_site,
+    grouped_fires.year,
+    start_date,
+    end_date,
+    LAG(grouped_fires.end_date, 1) OVER (
+        PARTITION BY grouped_fires.usgs_site
+        ORDER BY grouped_fires.end_date
+    ) AS previous_end_date,
+    LEAD(grouped_fires.start_date, 1) OVER (
+        PARTITION BY grouped_fires.usgs_site
+        ORDER BY grouped_fires.start_date
+    ) AS next_start_date,
+    events
+FROM grouped_fires
+ORDER BY
+    grouped_fires.usgs_site,
+    grouped_fires.start_date
+)
+-- calculates days since last and days until next fire
+select
+    usgs_site,
+    year,
+    start_date,
+    end_date,
+    previous_end_date,
+    next_start_date,
+    CASE
+        WHEN previous_end_date IS NOT NULL
+        THEN start_date - previous_end_date
+        ELSE NULL
+    END AS days_since,
+    CASE
+        WHEN next_start_date IS NOT NULL
+        THEN next_start_date - end_date
+        ELSE NULL
+    END AS days_until,
+    events
+from grouped_fires_ranges
 ;
 
 ```
@@ -455,21 +624,21 @@ ORDER BY
 
 # nitrate
 
-## temp: combined nitrate
+## view: combined nitrate
 
-Create a temporary table of standardized (forms, units) that reflects data
-from both the USGS and non-USGS data sources.
+Create a view of standardized (forms, units) nitrate that reflects data from
+both the USGS and non-USGS data sources.
 
 We standardize NEON data (micromoles) and Hanan Bell (`mg NO3/L`) to mg `NO3-N
 / L`.
 
 ```{sql}
 #| eval: TRUE
-#| label: nitrate
+#| label: nitrate_view
 
-DROP TABLE IF EXISTS nitrate ;
+DROP VIEW IF EXISTS firearea.nitrate ;
 
-CREATE TEMPORARY TABLE nitrate AS 
+CREATE VIEW firearea.nitrate AS 
 SELECT
   usgs_site,
   "ActivityStartDate" AS date,
