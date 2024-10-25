@@ -358,51 +358,43 @@ fires_filtered AS (
   firearea.mtbs_fire_perimeters ON (mtbs_fire_perimeters.event_id = areas.event_id)
   ) AS areas_stats
 -- filtering by > 0.00 drops the count from 12782 to 11207
-WHERE areas_stats.per_cent_burned > 0.00
+-- WHERE areas_stats.per_cent_burned > 0.00
 ),
--- aggregates event_ids when there is more than one fire in a day at a site
-aggregated_events AS (
-SELECT
-    usgs_site,
-    ig_date,
-    ARRAY_AGG(event_id) AS event_id
-FROM
-    fires_filtered 
-GROUP BY
-    usgs_site,
-    ig_date
-ORDER BY
-    ig_date
-),
--- aggregates events and calculates date ranges of summer fires
--- non-summer fires are unioned to summer fires
+-- aggregates events and cumulative burned area for all summer fires and
+-- non-summer fires with more than one event per day per catchment;
+-- summer fires are unioned to non-summer fires
 grouped_fires AS (
 SELECT 
     usgs_site, 
     EXTRACT(YEAR FROM ig_date) AS year,
     MIN(ig_date) AS start_date,
     MAX(ig_date) AS end_date,
-    ARRAY_AGG(DISTINCT event_ids) AS events
+    ARRAY_AGG(DISTINCT event_id) AS events,
+    SUM(fire_catch_area) AS cum_fire_area
 FROM 
-    aggregated_events,
-    unnest(event_id) AS event_ids
+    fires_filtered
 WHERE
     EXTRACT(DOY FROM ig_date) BETWEEN 110 AND 250
 GROUP BY 
-    aggregated_events.usgs_site,
+    fires_filtered.usgs_site,
     year
 UNION
+-- account for occurrences of multiple fires per day at a site
 SELECT
   usgs_site,
   EXTRACT(YEAR FROM ig_date) AS year,
   ig_date AS start_date,
   ig_date AS end_date,
-  ARRAY[event_id] AS events
+  ARRAY_AGG(DISTINCT event_id) AS events,
+  SUM(fire_catch_area) AS cum_fire_area 
 FROM 
-    aggregated_events
+    fires_filtered
 WHERE 
     EXTRACT(DOY FROM ig_date) < 110
     OR EXTRACT(DOY FROM ig_date) > 250
+GROUP BY
+    usgs_site,
+    ig_date
 ),
 -- identifies date since last and date until next fire
 grouped_fires_ranges AS (
@@ -419,14 +411,16 @@ SELECT
         PARTITION BY grouped_fires.usgs_site
         ORDER BY grouped_fires.start_date
     ) AS next_start_date,
-    events
+    events,
+    cum_fire_area
 FROM grouped_fires
 ORDER BY
     grouped_fires.usgs_site,
     grouped_fires.start_date
-)
+),
 -- calculates days since last and days until next fire
-select
+grouped_fires_days AS (
+SELECT
     usgs_site,
     year,
     start_date,
@@ -443,8 +437,34 @@ select
         THEN next_start_date - end_date
         ELSE NULL
     END AS days_until,
-    events
-from grouped_fires_ranges
+    events,
+    cum_fire_area
+FROM grouped_fires_ranges
+)
+-- calculates cumulative burned area as a percentage of catchment area
+SELECT
+  grouped_fires_days.usgs_site,
+  grouped_fires_days.year,
+  grouped_fires_days.start_date,
+  grouped_fires_days.end_date,
+  grouped_fires_days.previous_end_date,
+  grouped_fires_days.next_start_date,
+  grouped_fires_days.days_since,
+  grouped_fires_days.days_until,
+  grouped_fires_days.events,
+  grouped_fires_days.cum_fire_area,
+  areas.catch_area,
+  ROUND(((grouped_fires_days.cum_fire_area / areas.catch_area) * 100)::numeric, 2) AS cum_per_cent_burned
+FROM
+  grouped_fires_days
+JOIN
+(
+  SELECT
+    combined_catchments.usgs_site,
+    ROUND((ST_Area(combined_catchments.geometry, TRUE) / 1000000)::numeric, 2) AS catch_area
+  FROM
+  combined_catchments
+) AS areas ON (areas.usgs_site = grouped_fires_days.usgs_site)
 ;
 
 ```
