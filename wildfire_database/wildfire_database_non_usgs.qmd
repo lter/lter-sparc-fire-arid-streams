@@ -1049,3 +1049,244 @@ DBI::dbWithTransaction(
 )
 
 ```
+
+# SBC discharge and chemistry
+
+## sbc: discharge
+
+```{r}
+#| eval: TRUE
+#| label: sbc-discharge
+
+packages <- EDIutils::search_data_packages(query = "defType=edismax&q=subject:%22discharge%22&fq=-scope:ecotrends&fq=-scope:lter-landsat*&fq=scope:(knb-lter-sbc)&fl=id,packageid,title,author,organization,pubdate,coordinates&debug=false")
+
+harvest_discharge <- function(title, packageid) {
+
+  entity <- EDIutils::read_data_entity_names(packageid)
+
+  if (nrow(entity) > 1) {
+    stop("more than one data entity for", packageid)
+  }
+
+  raw  <- EDIutils::read_data_entity(packageid, entity$entityId)
+  data <- readr::read_csv(
+    file = raw,
+    na   = c("-999") # number not a string so this does not work
+  )
+
+  expected_colnames <- c(
+    "timestamp_local",
+    "timestamp_utc",
+    "discharge_lps",
+    "water_temperature_celsius"
+  )
+
+  if (!all(expected_colnames %in% colnames(data))) {
+    colnames(data) <- expected_colnames
+  }
+
+  data <- data |>
+    dplyr::filter(
+      !is.na(discharge_lps),
+      discharge_lps != -999,
+      !grepl(
+        pattern     = "nan",
+        x           = timestamp_utc,
+        ignore.case = TRUE
+      )
+    ) |>
+    dplyr::mutate(desc = title)
+
+  return(data)
+
+}
+
+# need to address that two data packages have a different dttm format
+time_fmt_a <- packages[grepl("on02|sm01", packages$title, ignore.case = TRUE), ]
+time_fmt_b <- packages[!grepl("on02|sm01", packages$title, ignore.case = TRUE), ]
+
+combine_sites <- function(site_list) {
+
+  bound_data <- split(
+    x = site_list,
+    f = site_list$packageid
+  ) |>
+    {
+      \(df) purrr::map(
+        .x = df,
+        .f = ~ harvest_discharge(
+          .x$title,
+          .x$packageid
+        )
+      )
+    }() |>
+    dplyr::bind_rows()
+
+  return(bound_data)
+
+}
+
+type_a_bound <- combine_sites(time_fmt_a)
+type_b_bound <- combine_sites(time_fmt_b)
+
+sbc_q <- dplyr::bind_rows(
+  type_a_bound |>
+    dplyr::mutate(
+      timestamp_local = as.character(
+        as.POSIXct(
+          x      = timestamp_local,
+          format = "%Y-%m-%dT%H:%M",
+          tz     = "US/Pacific"
+        )
+      ),
+      timestamp_utc = as.character(
+        as.POSIXct(
+          x      = timestamp_utc,
+          format = "%Y-%m-%dT%H:%M",
+          tz     = "UTC"
+        )
+      )
+    ),
+  type_b_bound |>
+    dplyr::mutate(
+      timestamp_local = as.character(timestamp_local),
+      timestamp_utc   = as.character(timestamp_utc)
+    )
+) |>
+  dplyr::mutate(
+    usgs_site = dplyr::case_when(
+      grepl("mc00", desc, ignore.case = TRUE) ~ "sbc_lter_mis",
+      grepl("rg01", desc, ignore.case = TRUE) ~ "sbc_lter_ref",
+      grepl("mc06", desc, ignore.case = TRUE) ~ "sbc_lter_noo",
+      grepl("on02", desc, ignore.case = TRUE) ~ "sbc_lter_ono",
+      grepl("ab00", desc, ignore.case = TRUE) ~ "sbc_lter_bur",
+      grepl("bc02", desc, ignore.case = TRUE) ~ "sbc_lter_bel",
+      grepl("gv01", desc, ignore.case = TRUE) ~ "sbc_lter_gav",
+      grepl("ho00", desc, ignore.case = TRUE) ~ "sbc_lter_hon",
+      grepl("rs02", desc, ignore.case = TRUE) ~ "sbc_lter_rat",
+      grepl("sp02", desc, ignore.case = TRUE) ~ "sbc_lter_ped",
+      grepl("te03", desc, ignore.case = TRUE) ~ "sbc_lter_tec", # double check
+      grepl("at07", desc, ignore.case = TRUE) ~ "sbc_lter_ata",
+      grepl("dv01", desc, ignore.case = TRUE) ~ "sbc_lter_dev",
+      # -- these sites are not in firearea --
+      # grepl("fk00", desc, ignore.case = TRUE) ~ "sbc_lter_",
+      # grepl("sm04", desc, ignore.case = TRUE) ~ "sbc_lter_",
+      # grepl("cp00", desc, ignore.case = TRUE) ~ "sbc_lter_",
+      # grepl("rn01", desc, ignore.case = TRUE) ~ "sbc_lter_",
+      # grepl("sm01", desc, ignore.case = TRUE) ~ "sbc_lter_",
+    )
+  ) |>
+  dplyr::filter(!is.na(usgs_site))
+
+# check timestamps
+# one <- harvest_discharge("one", packages[1,  ]$packageid) #MC00 package:3009 group:B
+# two <- harvest_discharge("two", packages[2,  ]$packageid) #RG01 package:3011 group:B
+# fiv <- harvest_discharge("fiv", packages[5,  ]$packageid) #ON02 package:3010 group:A
+# etn <- harvest_discharge("etn", packages[18, ]$packageid) #SM01 package:3014 group:A
+
+sbc_q_mean <- readr::read_csv("sbc_q.csv") |>
+  dplyr::mutate(date = as.Date(timestamp_local)) |>
+  dplyr::summarise(
+    mean = mean(
+      x     = discharge_lps,
+      na.rm = TRUE
+    ),
+    sd = sd(
+      x     = discharge_lps,
+      na.rm = TRUE
+    ),
+    count = sum(!is.na(discharge_lps)),
+    .by = c(
+      usgs_site,
+      date
+    )
+  )
+```
+
+
+## sbc: chemistry
+
+```{r}
+#| eval: TRUE
+#| label: sbc-chemistry
+
+chem_package_id  <- "knb-lter-sbc.6.17"
+chem_entity      <- EDIutils::read_data_entity_names(chem_package_id)
+raw_registered   <- EDIutils::read_data_entity(chem_package_id, chem_entity$entityId[[1]])
+raw_unregistered <- EDIutils::read_data_entity(chem_package_id, chem_entity$entityId[[2]])
+registered       <- readr::read_csv(file = raw_registered)
+unregistered     <- readr::read_csv(file = raw_unregistered)
+
+sbc_chem <- dplyr::bind_rows(
+  registered |>
+    dplyr::mutate(source = "registered"),
+  unregistered |>
+    dplyr::mutate(source = "non_registered")
+) |>
+  dplyr::left_join(
+    y = sbc_q |>
+      dplyr::distinct(
+        usgs_site,
+        desc
+      ) |>
+      dplyr::mutate(
+        site_code = dplyr::case_when(
+          grepl("mc00", desc, ignore.case = TRUE) ~ "MC00",
+          grepl("rg01", desc, ignore.case = TRUE) ~ "RG01",
+          grepl("mc06", desc, ignore.case = TRUE) ~ "MC06",
+          grepl("on02", desc, ignore.case = TRUE) ~ "ON02",
+          grepl("ab00", desc, ignore.case = TRUE) ~ "AB00",
+          grepl("bc02", desc, ignore.case = TRUE) ~ "BC02",
+          grepl("gv01", desc, ignore.case = TRUE) ~ "GV01",
+          grepl("ho00", desc, ignore.case = TRUE) ~ "HO00",
+          grepl("rs02", desc, ignore.case = TRUE) ~ "RS02",
+          grepl("sp02", desc, ignore.case = TRUE) ~ "SP02",
+          grepl("te03", desc, ignore.case = TRUE) ~ "TE03", # double check
+          grepl("at07", desc, ignore.case = TRUE) ~ "AT07",
+          grepl("dv01", desc, ignore.case = TRUE) ~ "DV01",
+        )
+      ),
+    by = c("site_code" = "site_code")
+  ) |>
+  dplyr::filter(!is.na(usgs_site)) |>
+  dplyr::mutate(date = as.Date(timestamp_local))
+
+sbc_chem_mean <- sbc_chem |>
+  tidyr::pivot_longer(
+    cols = c(
+      tidyselect::contains("uM"),
+      tidyselect::contains("tss"),
+      tidyselect::contains("spec")
+    ),
+    names_to = "analyte",
+    values_to = "concentration"
+  ) |>
+  dplyr::filter(
+    !is.na(concentration),
+    concentration != -999
+  ) |>
+  dplyr::summarise(
+    mean = mean(
+      x     = concentration,
+      na.rm = TRUE
+    ),
+    sd = sd(
+      x     = concentration,
+      na.rm = TRUE
+    ),
+    count = sum(!is.na(concentration)),
+    .by = c(
+      usgs_site,
+      date,
+      analyte
+    )
+  ) |>
+  dplyr::mutate(
+    unit = dplyr::case_when(
+      grepl("uM", analyte, ignore.case = TRUE) ~ "uM",
+      grepl("cond", analyte, ignore.case = TRUE) ~ "microsiemensPerCentimeter",
+      grepl("tss", analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+      TRUE ~ NA_character_
+    )
+  )
+```
