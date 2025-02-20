@@ -1052,6 +1052,9 @@ DBI::dbWithTransaction(
 
 # SBC discharge and chemistry
 
+Omit Devereaux and San Onofre per Heili:
+https://github.com/lter/lter-sparc-fire-arid-streams/issues/27
+
 ## sbc: discharge
 
 ```{r}
@@ -1184,7 +1187,15 @@ sbc_q <- dplyr::bind_rows(
 # fiv <- harvest_discharge("fiv", packages[5,  ]$packageid) #ON02 package:3010 group:A
 # etn <- harvest_discharge("etn", packages[18, ]$packageid) #SM01 package:3014 group:A
 
-sbc_q_mean <- readr::read_csv("sbc_q.csv") |>
+# sbc_q_mean <- readr::read_csv("sbc_q.csv") |>
+sbc_q_mean <- sbc_q |>
+  dplyr::filter(
+    !grepl(
+      pattern     = "ono|dev",
+      x           = usgs_site,
+      ignore.case = TRUE
+    )
+    ) |>
   dplyr::mutate(date = as.Date(timestamp_local)) |>
   dplyr::summarise(
     mean = mean(
@@ -1223,7 +1234,7 @@ sbc_chem <- dplyr::bind_rows(
   unregistered |>
     dplyr::mutate(source = "non_registered")
 ) |>
-  dplyr::left_join(
+  dplyr::inner_join(
     y = sbc_q |>
       dplyr::distinct(
         usgs_site,
@@ -1252,6 +1263,13 @@ sbc_chem <- dplyr::bind_rows(
   dplyr::mutate(date = as.Date(timestamp_local))
 
 sbc_chem_mean <- sbc_chem |>
+  dplyr::filter(
+    !grepl(
+      pattern     = "ono|dev",
+      x           = usgs_site,
+      ignore.case = TRUE
+    )
+    ) |>
   tidyr::pivot_longer(
     cols = c(
       tidyselect::contains("uM"),
