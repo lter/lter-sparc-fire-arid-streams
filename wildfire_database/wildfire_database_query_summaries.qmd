@@ -306,11 +306,11 @@ if it were to fall on the day of the fire has not been tested.
 
 ```{sql}
 #| eval: TRUE
-#| label: ranges_summer
+#| label: ranges_agg
 
-DROP VIEW IF EXISTS firearea.ranges ;
+DROP VIEW IF EXISTS firearea.ranges_agg CASCADE ;
 
-CREATE VIEW firearea.ranges AS 
+CREATE VIEW firearea.ranges_agg AS 
 -- merges usgs and non-usgs catchments
 WITH combined_catchments AS (
 SELECT
@@ -333,29 +333,29 @@ fires_filtered AS (
   SELECT
     areas_stats.*
   FROM (
-  SELECT
-    areas.usgs_site,
-    areas.event_id,
-    mtbs_fire_perimeters.ig_date,
-    ROUND((mtbs_fire_perimeters.burnbndac / 247.11)::numeric, 2) AS fire_area,
-    areas.catch_area,
-    areas.fire_catch_area,
-    ROUND(((areas.fire_catch_area / areas.catch_area) * 100)::numeric, 2) AS per_cent_burned
-  FROM
-  (
     SELECT
-      fires_catchments.usgs_site,
-      fires_catchments.event_id,
-      fires_catchments.ig_date,
-      ROUND((ST_Area(fires_catchments.geometry, TRUE) / 1000000)::numeric, 2) AS fire_catch_area,
-      ROUND((ST_Area(combined_catchments.geometry, TRUE) / 1000000)::numeric, 2) AS catch_area
+      areas.usgs_site,
+      areas.event_id,
+      mtbs_fire_perimeters.ig_date,
+      ROUND((mtbs_fire_perimeters.burnbndac / 247.11)::numeric, 2) AS fire_area,
+      areas.catch_area,
+      areas.fire_catch_area,
+      ROUND(((areas.fire_catch_area / areas.catch_area) * 100)::numeric, 2) AS per_cent_burned
     FROM
-    firearea.fires_catchments
+    (
+      SELECT
+        fires_catchments.usgs_site,
+        fires_catchments.event_id,
+        fires_catchments.ig_date,
+        ROUND((ST_Area(fires_catchments.geometry, TRUE) / 1000000)::numeric, 2) AS fire_catch_area,
+        ROUND((ST_Area(combined_catchments.geometry, TRUE) / 1000000)::numeric, 2) AS catch_area
+      FROM
+        firearea.fires_catchments
+      JOIN
+        combined_catchments ON (combined_catchments.usgs_site = fires_catchments.usgs_site)
+    ) AS areas
     JOIN
-    combined_catchments ON (combined_catchments.usgs_site = fires_catchments.usgs_site)
-  ) AS areas
-  JOIN
-  firearea.mtbs_fire_perimeters ON (mtbs_fire_perimeters.event_id = areas.event_id)
+      firearea.mtbs_fire_perimeters ON (mtbs_fire_perimeters.event_id = areas.event_id)
   ) AS areas_stats
 -- filtering by > 0.00 drops the count from 12782 to 11207
 -- WHERE areas_stats.per_cent_burned > 0.00
@@ -364,63 +364,63 @@ fires_filtered AS (
 -- non-summer fires with more than one event per day per catchment;
 -- summer fires are unioned to non-summer fires
 grouped_fires AS (
-SELECT 
+  SELECT 
     usgs_site, 
     EXTRACT(YEAR FROM ig_date) AS year,
     MIN(ig_date) AS start_date,
     MAX(ig_date) AS end_date,
     ARRAY_AGG(DISTINCT event_id) AS events,
     SUM(fire_catch_area) AS cum_fire_area
-FROM 
+  FROM 
     fires_filtered
-WHERE
+  WHERE
     EXTRACT(DOY FROM ig_date) BETWEEN 110 AND 250
-GROUP BY 
+  GROUP BY 
     fires_filtered.usgs_site,
     year
-UNION
--- account for occurrences of multiple fires per day at a site
-SELECT
-  usgs_site,
-  EXTRACT(YEAR FROM ig_date) AS year,
-  ig_date AS start_date,
-  ig_date AS end_date,
-  ARRAY_AGG(DISTINCT event_id) AS events,
-  SUM(fire_catch_area) AS cum_fire_area 
-FROM 
+  UNION
+  -- account for occurrences of multiple fires per day at a site
+  SELECT
+    usgs_site,
+    EXTRACT(YEAR FROM ig_date) AS year,
+    ig_date AS start_date,
+    ig_date AS end_date,
+    ARRAY_AGG(DISTINCT event_id) AS events,
+    SUM(fire_catch_area) AS cum_fire_area 
+  FROM 
     fires_filtered
-WHERE 
+  WHERE 
     EXTRACT(DOY FROM ig_date) < 110
     OR EXTRACT(DOY FROM ig_date) > 250
-GROUP BY
+  GROUP BY
     usgs_site,
     ig_date
 ),
 -- identifies date since last and date until next fire
 grouped_fires_ranges AS (
-SELECT
+  SELECT
     grouped_fires.usgs_site,
     grouped_fires.year,
     start_date,
     end_date,
     LAG(grouped_fires.end_date, 1) OVER (
-        PARTITION BY grouped_fires.usgs_site
-        ORDER BY grouped_fires.end_date
+      PARTITION BY grouped_fires.usgs_site
+      ORDER BY grouped_fires.end_date
     ) AS previous_end_date,
     LEAD(grouped_fires.start_date, 1) OVER (
-        PARTITION BY grouped_fires.usgs_site
-        ORDER BY grouped_fires.start_date
+      PARTITION BY grouped_fires.usgs_site
+      ORDER BY grouped_fires.start_date
     ) AS next_start_date,
     events,
     cum_fire_area
-FROM grouped_fires
-ORDER BY
+  FROM grouped_fires
+  ORDER BY
     grouped_fires.usgs_site,
     grouped_fires.start_date
 ),
 -- calculates days since last and days until next fire
 grouped_fires_days AS (
-SELECT
+  SELECT
     usgs_site,
     year,
     start_date,
@@ -439,7 +439,7 @@ SELECT
     END AS days_until,
     events,
     cum_fire_area
-FROM grouped_fires_ranges
+  FROM grouped_fires_ranges
 )
 -- calculates cumulative burned area as a percentage of catchment area
 SELECT
@@ -454,14 +454,18 @@ SELECT
   grouped_fires_days.events,
   grouped_fires_days.cum_fire_area,
   areas.catch_area,
-  ROUND(((grouped_fires_days.cum_fire_area / areas.catch_area) * 100)::numeric, 2) AS cum_per_cent_burned
+  ROUND(((grouped_fires_days.cum_fire_area / areas.catch_area) * 100)::numeric, 2) AS cum_per_cent_burned,
+  areas.latitude,
+  areas.longitude
 FROM
   grouped_fires_days
 JOIN
 (
   SELECT
     combined_catchments.usgs_site,
-    ROUND((ST_Area(combined_catchments.geometry, TRUE) / 1000000)::numeric, 2) AS catch_area
+    ROUND((ST_Area(combined_catchments.geometry, TRUE) / 1000000)::numeric, 2) AS catch_area,
+    ST_Y(ST_Centroid(ST_Transform(geometry, 4326))) AS latitude,
+    ST_X(ST_Centroid(ST_Transform(geometry, 4326))) AS longitude
   FROM
   combined_catchments
 ) AS areas ON (areas.usgs_site = grouped_fires_days.usgs_site)
@@ -470,6 +474,9 @@ JOIN
 ```
 
 # partial: combined catchments
+
+`partial` indicates a block of code that is a component of a larger block but
+highlighted also as a separate chunk for adapting to other contexts.
 
 ```{sql}
 #| eval: TRUE
@@ -501,9 +508,9 @@ and fire areas.
 #| eval: TRUE
 #| label: dd_area_stats
 
-DROP TABLE IF EXISTS dd_area_stats ;
+DROP VIEW IF EXISTS firearea.dd_area_stats ;
 
-CREATE TEMPORARY TABLE dd_area_stats AS 
+CREATE VIEW firearea.dd_area_stats AS 
 WITH combined_catchments AS (
 SELECT
   usgs_site,
@@ -647,14 +654,13 @@ ORDER BY
 ## view: combined nitrate
 
 Create a view of standardized (forms, units) nitrate that reflects data from
-both the USGS and non-USGS data sources.
+from both the USGS and non-USGS data sources.
 
-We standardize NEON data (micromoles) and Hanan Bell (`mg NO3/L`) to mg `NO3-N
-/ L`.
+Convert NEON and SBC data (micromoles) to `mg NO3-N / L`.
 
 ```{sql}
 #| eval: TRUE
-#| label: nitrate_view
+#| label: nitrate-values
 
 DROP VIEW IF EXISTS firearea.nitrate ;
 
@@ -681,38 +687,53 @@ SELECT
   analyte,
   CASE
     WHEN unit ~~* 'micromoles%' THEN mean * (14.0 / 1000.0)
-    WHEN usgs_site ~~* '%bell%' THEN mean * (14.0 / 62.0)
+    WHEN unit ~~* '%uM%' THEN mean * (14.0 / 1000.0) 
     ELSE mean
   END value_std,
   CASE
     WHEN unit ~~* 'micromoles%' THEN 'mg/L as N'
-    WHEN usgs_site ~~* '%bell%' THEN 'mg/L as N'
+    WHEN unit ~~* '%uM%' THEN 'mg/L as N' 
     ELSE unit
   END units_std
 FROM firearea.non_usgs_water_chem
 WHERE
+(
   analyte ~~* '%nitrate%' OR
   analyte ~~* '%no3%'
+) AND
+  usgs_site !~~* '%bell%'
 ;
 
 ```
 
-## temp: nitrate with summary statistics
+## view: nitrate with summary statistics
 
-Generate a temporary table of summary statistics surrounding nitrate data
+Generate a view of summary statistics surrounding nitrate data
 availability (number of samples pre, post fire; time (days) since previous
 fire; etc.).
 
 The `chem_ranges` CTE uses the template detailed in `chemistry with ranges`.
 
+The `num_pre_fire` and `num_post_fire` reflect the number of nitrate
+observations in the period between the fire of interest and the previous and
+next fires, respectively; not to be confused with the number of observations
+at any point prior to and after the fire of interest, respectively.
+
+The number of nitrate observations reflects observations for which there is
+also a discharge measurement.
+
+This query is likely not to be employed as the project has decided to use
+aggregated fires in the fire season (this query addressed only unaggregated
+data) but I think there are some errors here so it should be evaluated before
+a possible future use.
 
 ```{sql}
-#| eval: TRUE
-#| label: nitrate_summary
+#| eval: FALSE
+#| label: nitrate-ranges
 
-DROP TABLE IF EXISTS nitrate_summary ;
+DROP VIEW IF EXISTS firearea.nitrate_ranges ;
 
-CREATE TEMPORARY TABLE nitrate_summary AS 
+CREATE VIEW firearea.nitrate_ranges AS 
 WITH chem_ranges AS (
   SELECT
     nitrate.usgs_site,
@@ -720,7 +741,7 @@ WITH chem_ranges AS (
     nitrate.value_std,
     ranges.event AS pre,
     ranges_post.post
-  FROM nitrate
+  FROM firearea.nitrate
   JOIN firearea.discharge ON (
     discharge."Date" = nitrate.date
     AND discharge.usgs_site = nitrate.usgs_site
@@ -735,7 +756,7 @@ WITH chem_ranges AS (
       nitrate.usgs_site,
       nitrate.date,
       ranges.event AS post
-    FROM nitrate
+    FROM firearea.nitrate 
     LEFT JOIN firearea.ranges ON (
       nitrate.usgs_site = ranges.usgs_site
       -- AND daterange(nitrate.date, nitrate.date, '[]') && ranges.post
@@ -794,52 +815,119 @@ LEFT JOIN (
 
 ```
 
-## export: nitrate q events
+Generate a view of summary statistics surrounding nitrate data
+availability (number of samples pre, post fire).
 
-Combine raw nitrate with Q and fire events.
+The `num_pre_fire` and `num_post_fire` reflect the number of nitrate
+observations in the period prior to and after fire or aggregated fires of
+interest; not to be confused with the number of observations between a fire or
+aggregated fires and interest and the next fire as is the case for
+view::nitrate_ranges.
+
+The number of nitrate observations reflects observations for which there is
+also a discharge measurement.
 
 ```{sql}
 #| eval: TRUE
-#| label: nitrate_export
+#| label: nitrate-counts
 
-\COPY (
-SELECT
-  discharge.*,
-  nitrate.*,
-  fires.events,
-  fires.ig_date
-FROM firearea.discharge
-LEFT JOIN nitrate ON (
-  nitrate.usgs_site = discharge.usgs_site
-  AND nitrate.date  = discharge."Date"
-)
-LEFT JOIN 
-(
+DROP VIEW IF EXISTS firearea.nitrate_counts ;
+
+CREATE VIEW firearea.nitrate_counts AS 
+WITH nitrate_discharge AS (
   SELECT
-    usgs_site,
-    ig_date,
-    ARRAY_AGG(event_id) AS events
-  FROM firearea.fires_catchments 
-  GROUP BY
-    usgs_site,
-    ig_date
-  ORDER BY ig_date
-) AS fires ON (
-    fires.usgs_site   = discharge.usgs_site
-    AND fires.ig_date = discharge."Date"
+    nitrate.usgs_site,
+    nitrate.date
+  FROM firearea.nitrate
+  JOIN firearea.discharge ON (
+    discharge."Date" = nitrate.date
+    AND discharge.usgs_site = nitrate.usgs_site
+  )
 )
-) TO '/tmp/nitrate_q.csv' with DELIMITER ',' csv header
+SELECT
+  nitrate_discharge.usgs_site,
+  ranges_agg.events,
+  ranges_agg.start_date,
+  ranges_agg.end_date,
+  SUM(CASE WHEN nitrate_discharge.date < ranges_agg.start_date THEN 1 ELSE 0 END) AS count_before_start,
+  SUM(CASE WHEN nitrate_discharge.date > ranges_agg.end_date THEN 1 ELSE 0 END) AS count_after_end
+FROM firearea.ranges_agg
+JOIN nitrate_discharge ON (ranges_agg.usgs_site = nitrate_discharge.usgs_site)
+GROUP BY
+  nitrate_discharge.usgs_site,
+  ranges_agg.start_date,
+  ranges_agg.end_date,
+  ranges_agg.events
 ;
 
 ```
 
-## export: nitrate summary and dd_area_stats
+## export: nitrate summary
+
+```{sql}
+#| eval: TRUE
+#| label: export-nitrate-summary
+
+\COPY (
+SELECT
+  ranges_agg.*,
+  nitrate_counts.count_before_start,
+  nitrate_counts.count_after_end
+FROM firearea.ranges_agg 
+JOIN firearea.nitrate_counts ON 
+  ranges_agg.usgs_site = nitrate_counts.usgs_site AND
+  (
+    ARRAY(SELECT UNNEST(ranges_agg.events) ORDER BY 1) = 
+    ARRAY(SELECT UNNEST(nitrate_counts.events) ORDER BY 1)
+  )
+) TO '/tmp/nitrate_summary.csv' WITH CSV HEADER
+;
+
+```
+
+## export: nitrate concentrations
+
+```{sql}
+#| eval: TRUE
+#| label: export-nitrate-concentrations
+
+\COPY (
+SELECT *
+FROM firearea.nitrate
+WHERE usgs_site IN (
+  SELECT DISTINCT usgs_site
+  FROM firearea.nitrate_counts
+)
+) TO '/tmp/nitrate.csv' WITH CSV HEADER
+;
+
+```
+
+## export: discharge at nitrate data sites
+
+```{sql}
+#| eval: TRUE
+#| label: export-nitrate-Q
+
+\COPY (
+SELECT *
+FROM firearea.discharge
+WHERE usgs_site IN (
+  SELECT DISTINCT usgs_site
+  FROM firearea.nitrate_counts
+)
+) TO '/tmp/nitrate_q.csv' WITH CSV HEADER
+;
+
+```
+
+## export: nitrate summary and dd_area_stats (archive)
 
 Combine summary statistics with dd_area_stats for a more comprehensive
 summary.
 
 ```{sql}
-#| eval: TRUE
+#| eval: FALSE
 #| label: nitrate_summary_dd_area
 
 \COPY (
@@ -848,9 +936,9 @@ SELECT
   nitrate_summary.days_since_prior_fire,
   nitrate_summary.num_pre_fire,
   nitrate_summary.num_post_fire
-FROM nitrate_summary
+FROM firearea.nitrate_summary
 RIGHT JOIN
-dd_area_stats ON (
+firearea.dd_area_stats ON (
   dd_area_stats.usgs_site    = nitrate_summary.usgs_site
   AND dd_area_stats.event_id = nitrate_summary.event
 )

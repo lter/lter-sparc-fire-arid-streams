@@ -1212,6 +1212,39 @@ sbc_q_mean <- sbc_q |>
       date
     )
   )
+
+sbc_q_upload <- sbc_q_mean |> 
+  glue::glue_data_sql("
+    INSERT INTO firearea.non_usgs_discharge (
+      usgs_site,
+      date,
+      mean,
+      sd
+    )
+    values
+    (
+      { usgs_site },
+      { date },
+      { mean },
+      { sd }
+    )
+    ;
+    ",
+    .con = DBI::ANSI()
+  )
+
+DBI::dbWithTransaction(
+  conn = pg,
+  {
+    purrr::walk(
+      .x = sbc_q_upload,
+      .f = ~ DBI::dbExecute(
+        statement = .x,
+        conn      = pg
+      )
+    )
+  }
+)
 ```
 
 
@@ -1307,4 +1340,44 @@ sbc_chem_mean <- sbc_chem |>
       TRUE ~ NA_character_
     )
   )
+
+sbc_chem_upload <- sbc_chem_mean |> 
+  glue::glue_data_sql("
+    INSERT INTO firearea.non_usgs_water_chem (
+      usgs_site,
+      date,
+      analyte,
+      mean,
+      sd,
+      unit,
+      source
+    )
+    values
+    (
+      { usgs_site },
+      { date },
+      { analyte },
+      { mean },
+      { sd },
+      { unit },
+      'EDI'
+    )
+    ;
+    ",
+    .con = DBI::ANSI()
+  )
+
+DBI::dbWithTransaction(
+  conn = pg,
+  {
+    purrr::walk(
+      .x = sbc_chem_upload,
+      .f = ~ DBI::dbExecute(
+        statement = .x,
+        conn      = pg
+      )
+    )
+  }
+)
+
 ```
