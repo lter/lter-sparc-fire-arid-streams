@@ -132,6 +132,12 @@ WHERE
 ALTER TABLE firearea.discharge
   ADD COLUMN quartile INTEGER ;
 
+CREATE OR REPLACE PROCEDURE firearea.update_discharge_quartiles()
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    BEGIN;
+
 -- Step 2: Calculate percentiles
 WITH percentiles AS (
     SELECT
@@ -168,6 +174,15 @@ WHERE
     firearea.discharge.usgs_site = q.usgs_site
     AND firearea.discharge."Flow" = q."Flow"
   ;
+
+    COMMIT;
+EXCEPTION
+    WHEN OTHERS THEN
+        ROLLBACK;
+        RAISE NOTICE 'Transaction failed. Changes have been rolled back.';
+END $$;
+
+CALL firearea.update_discharge_quartiles();
 
 ```
 
