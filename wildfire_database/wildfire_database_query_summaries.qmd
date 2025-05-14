@@ -961,6 +961,343 @@ firearea.dd_area_stats ON (
 
 ```
 
+## extract: fire-impacted concentration–discharge (c–q) data extraction
+
+This SQL query extracts paired nitrate and discharge observations from USGS
+monitoring sites, structured to analyze how fire affects
+concentration–discharge (C–Q) relationships. Specifically, it:
+
+- **Joins** standardized nitrate data (`firearea.nitrate`), daily discharge
+(`firearea.discharge_daily`), and fire metadata (`firearea.ranges_agg`).
+- **Labels each observation** as `"before"` or `"after"` the fire window
+defined by `start_date` and `end_date` for each `usgs_site` and `year`.
+- **Filters the results** to include only those site-year-fire windows with:
+  - ≥ 10 valid nitrate-discharge records **before** the fire window, and
+  - ≥ 10 valid records **after** the fire window.
+- **Includes** the following key columns for regression analysis in R:
+  - `usgs_site`, `year`, `start_date`, `end_date`
+  - `cum_per_cent_burned` – cumulative % of catchment burned
+  - `segment` – either `"before"` or `"after"` the fire window
+  - `date`, `value_std`, and `"Flow"` – log-transformed response and predictor
+  - `before_count` and `after_count` – for QA/QC or additional stratification
+
+This filtering ensures the resulting dataset is suitable for log–log regression
+models and statistical comparison of slope and intercept values across pre- and
+post-fire conditions and varying fire severities.
+
+output:
+
+| Column                   | Description                             |
+| ------------------------ | --------------------------------------- |
+| `usgs_site`              | USGS site ID                            |
+| `year`                   | Fire year from `ranges_agg`             |
+| `start_date`, `end_date` | Fire window dates                       |
+| `cum_per_cent_burned`    | Percent of catchment burned             |
+| `segment`                | `'before'` or `'after'` fire window     |
+| `date`                   | Observation date                        |
+| `value_std`              | Nitrate concentration (standardized)    |
+| `"Flow"`                 | Daily discharge value                   |
+| `before_count`           | Count of data points before fire window |
+| `after_count`            | Count of data points after fire window  |
+
+
+```{sql}
+#| eval: FALSE
+#| label: nitrate_summary_dd_area
+
+\COPY (
+SELECT
+  main.usgs_site,
+  main.year,
+  main.start_date,
+  main.end_date,
+  main.cum_per_cent_burned,
+  main.segment,
+  main.date,
+  main.value_std,
+  main."Flow",
+  counts.before_count,
+  counts.after_count
+FROM (
+  SELECT
+    firearea.nitrate.usgs_site,
+    firearea.ranges_agg.year,
+    firearea.ranges_agg.start_date,
+    firearea.ranges_agg.end_date,
+    firearea.ranges_agg.cum_per_cent_burned,
+    CASE
+      WHEN firearea.nitrate.date < firearea.ranges_agg.start_date THEN 'before'
+      WHEN firearea.nitrate.date > firearea.ranges_agg.end_date THEN 'after'
+    END AS segment,
+    firearea.nitrate.date,
+    firearea.nitrate.value_std,
+    firearea.discharge_daily."Flow"
+  FROM firearea.nitrate
+  JOIN firearea.discharge_daily
+    ON firearea.nitrate.usgs_site = firearea.discharge_daily.usgs_site
+    AND firearea.nitrate.date = firearea.discharge_daily."Date"
+  JOIN firearea.ranges_agg
+    ON firearea.nitrate.usgs_site = firearea.ranges_agg.usgs_site
+  WHERE firearea.nitrate.value_std IS NOT NULL
+    AND firearea.discharge_daily."Flow" IS NOT NULL
+    AND (
+      firearea.nitrate.date < firearea.ranges_agg.start_date
+      OR firearea.nitrate.date > firearea.ranges_agg.end_date
+    )
+) AS main
+JOIN (
+  SELECT
+    firearea.nitrate.usgs_site,
+    firearea.ranges_agg.year,
+    firearea.ranges_agg.start_date,
+    firearea.ranges_agg.end_date,
+    firearea.ranges_agg.cum_per_cent_burned,
+    COUNT(CASE WHEN firearea.nitrate.date < firearea.ranges_agg.start_date THEN 1 END) AS before_count,
+    COUNT(CASE WHEN firearea.nitrate.date > firearea.ranges_agg.end_date THEN 1 END) AS after_count
+  FROM firearea.nitrate
+  JOIN firearea.discharge_daily
+    ON firearea.nitrate.usgs_site = firearea.discharge_daily.usgs_site
+    AND firearea.nitrate.date = firearea.discharge_daily."Date"
+  JOIN firearea.ranges_agg
+    ON firearea.nitrate.usgs_site = firearea.ranges_agg.usgs_site
+  WHERE firearea.nitrate.value_std IS NOT NULL
+    AND firearea.discharge_daily."Flow" IS NOT NULL
+  GROUP BY
+    firearea.nitrate.usgs_site,
+    firearea.ranges_agg.year,
+    firearea.ranges_agg.start_date,
+    firearea.ranges_agg.end_date,
+    firearea.ranges_agg.cum_per_cent_burned
+  HAVING
+    COUNT(CASE WHEN firearea.nitrate.date < firearea.ranges_agg.start_date THEN 1 END) >= 10
+    AND
+    COUNT(CASE WHEN firearea.nitrate.date > firearea.ranges_agg.end_date THEN 1 END) >= 10
+) AS counts
+  ON main.usgs_site = counts.usgs_site
+  AND main.year = counts.year
+  AND main.start_date = counts.start_date
+  AND main.end_date = counts.end_date
+  AND main.cum_per_cent_burned = counts.cum_per_cent_burned
+) TO '/tmp/nitrate_discharge_data.csv' WITH CSV HEADER
+;
+
+```
+
+## analyze: regression analysis: log–log c–q relationships
+
+R script fits a log–log linear regression model to assess the relationship
+between standardized nitrate concentration (`value_std`) and daily discharge
+(`Flow`), stratified by site, year, fire window, and segment (before/after
+fire). The model has the form:
+
+`log(value_std) = slope * log(Flow) + log(intercept)`
+
+key features:
+
+- Uses only observations where `Flow > 0` and `value_std > 0`.
+- Fits a model separately for each group: `usgs_site`, `year`, `start_date`,
+`end_date`, `segment`.
+- Extracts model coefficients using `broom::tidy()`, including:
+  - `log(Flow)` slope
+  - log-scale intercept (also transformed to natural scale)
+  - standard errors and p-values
+- Returns a wide-format table suitable for further statistical or visual
+analysis.
+
+output:
+
+| Column                   | Description                                                                |
+| ------------------------ | -------------------------------------------------------------------------- |
+| `usgs_site`              | USGS site ID                                                               |
+| `year`                   | The year associated with the date range from `ranges_agg`                  |
+| `start_date`, `end_date` | Fire event window for that site and year                                   |
+| `segment`                | Whether this regression used data `before` or `after` the fire window      |
+| `log(Flow)_estimate`     | **Slope** of the regression — shows how much `value_std` changes with flow |
+| `log(Flow)_std.error`    | Standard error of the slope estimate                                       |
+| `log(Flow)_p.value`      | p-value testing if slope is significantly different from 0                 |
+| `(Intercept)_estimate`   | **Log of the intercept** from the regression                               |
+| `(Intercept)_std.error`  | Standard error of the log-intercept                                        |
+| `(Intercept)_p.value`    | p-value testing if the intercept differs from 0                            |
+| `intercept_estimate`     | **Exponentiated intercept**, i.e., actual intercept on original scale      |
+
+```{r}
+#| eval: TRUE
+#| label: nitrate_cq 
+
+data <- readr::read_csv("/tmp/nitrate_discharge_data.csv")
+
+# -- originally addressed here but moved to SQL --
+# Only keep valid groups with ≥ 10 observations in each segment
+# valid_groups <- data |>
+#   dplyr::distinct(usgs_site, year, start_date, end_date,
+#                   before_count, after_count, cum_per_cent_burned) |>
+#   dplyr::filter(before_count >= 10, after_count >= 10)
+
+# filter dataset to valid groups
+# data_filtered <- data |>
+#   dplyr::inner_join(valid_groups, by = c("usgs_site", "year", "start_date", "end_date"))
+
+# Fit grouped log-log regressions
+
+regression_results <- data |>
+  dplyr::filter(Flow > 0, value_std > 0) |>
+  dplyr::group_by(usgs_site, year, start_date, end_date,
+                  segment, cum_per_cent_burned) |>
+  dplyr::group_modify(\(.x, .y) {
+    if (nrow(.x) < 2) {
+      return(tibble::tibble(
+        term      = character(),
+        estimate  = numeric(),
+        std.error = numeric(),
+        statistic = numeric(),
+        p.value   = numeric()
+      ))
+    }
+
+    stats::lm(log(value_std) ~ log(Flow), data = .x) |>
+      broom::tidy()
+  }) |>
+  dplyr::ungroup()
+
+# Pivot slope/intercept and attach burn % to each result
+regression_wide <- regression_results |>
+  dplyr::filter(term %in% c("(Intercept)", "log(Flow)")) |>
+  dplyr::select(usgs_site, year, start_date, end_date, segment,
+                cum_per_cent_burned, term, estimate, std.error, p.value) |>
+  tidyr::pivot_wider(
+    names_from  = term,
+    values_from = c(estimate, std.error, p.value),
+    names_glue  = "{term}_{.value}"
+  ) |>
+  dplyr::mutate(
+    intercept_estimate = exp(`(Intercept)_estimate`)
+  )
+
+```
+
+## check: record inclusion criteria
+
+To ensure statistical reliability, records are included in the regression
+analysis only if both of the following are true for each unique group
+(`usgs_site`, `year`, `start_date`, `end_date`):
+
+- There are at least **10 valid nitrate–discharge observations before** the
+fire window.
+- There are at least **10 valid observations after** the fire window.
+
+This filtering is enforced at the SQL query level, so no additional filtering
+is required in R. The SQL query also returns `before_count` and `after_count`
+for transparency and diagnostics.
+
+output: 
+
+| Column                  | Description                                    |
+|-------------------------|------------------------------------------------|
+| `usgs_site`             | Site ID                                        |
+| `year`                  | Year of fire window                            |
+| `start_date` / `end_date` | Fire window boundary                        |
+| `cum_per_cent_burned`   | % catchment burned                             |
+| `before_count`          | Number of valid observations before fire       |
+| `after_count`           | Number of valid observations after fire        |
+| `inclusion_status`      | `"included"` or `"excluded"` for your analysis |
+
+```{sql}
+#| eval: TRUE
+#| label: nitrate_records
+
+SELECT
+  firearea.nitrate.usgs_site,
+  ranges_agg.year,
+  ranges_agg.start_date,
+  ranges_agg.end_date,
+  ranges_agg.cum_per_cent_burned,
+  COUNT(CASE WHEN firearea.nitrate.date < ranges_agg.start_date THEN 1 END) AS before_count,
+  COUNT(CASE WHEN firearea.nitrate.date > ranges_agg.end_date THEN 1 END) AS after_count,
+  CASE
+    WHEN COUNT(CASE WHEN firearea.nitrate.date < ranges_agg.start_date THEN 1 END) >= 10
+     AND COUNT(CASE WHEN firearea.nitrate.date > ranges_agg.end_date THEN 1 END) >= 10
+    THEN 'included'
+    ELSE 'excluded'
+  END AS inclusion_status
+FROM firearea.nitrate
+JOIN firearea.discharge_daily
+  ON firearea.nitrate.usgs_site = firearea.discharge_daily.usgs_site
+  AND firearea.nitrate.date = firearea.discharge_daily."Date"
+JOIN firearea.ranges_agg
+  ON firearea.nitrate.usgs_site = ranges_agg.usgs_site
+WHERE firearea.nitrate.value_std IS NOT NULL
+  AND firearea.discharge_daily."Flow" IS NOT NULL
+GROUP BY
+  firearea.nitrate.usgs_site,
+  ranges_agg.year,
+  ranges_agg.start_date,
+  ranges_agg.end_date,
+  ranges_agg.cum_per_cent_burned
+ORDER BY inclusion_status DESC, before_count ASC, after_count ASC
+;
+
+```
+
+## plotting: c–q relationships
+
+The `ggplot2` package is used to visualize how the slope of the log–log C–Q
+relationship changes in response to fire severity:
+
+1. **Paired Scatterplot:**
+   - Compares `before` vs. `after` slopes for each site-year.
+   - Points above the 1:1 line indicate slope increased post-fire.
+   - A regression line shows overall trend.
+
+2. **Boxplot or Density Plot:**
+   - Compares the distribution of slopes between `before` and `after` groups.
+   - Visualizes enrichment or dilution tendencies post-fire.
+
+3. **Slope vs. Burn Severity Plot:**
+   - Plots `log(Flow)` slope as a function of `cum_per_cent_burned`.
+   - Uses `segment` as a color/facet for interpreting pre/post-fire differences.
+   - Optionally fits a linear model or smooth to assess trend strength.
+
+```{sql}
+#| eval: TRUE
+#| label: nitrate_cq_plots
+
+# paired slope comparison plot
+ggplot2::ggplot(slope_plot_data, ggplot2::aes(x = before, y = after)) +
+  ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray") +
+  ggplot2::geom_point() +
+  ggplot2::geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  ggplot2::labs(
+    x = "Slope (Before Fire)",
+    y = "Slope (After Fire)",
+    title = "Change in log-log slope of Concentration ~ Discharge",
+    subtitle = "Each point = one site-year; dashed line = no change"
+  ) +
+  ggplot2::theme_minimal()
+
+# combine segments
+ggplot2::ggplot(regression_wide, ggplot2::aes(x = segment, y = `log(Flow)_estimate`)) +
+  ggplot2::geom_boxplot(fill = "lightblue") +
+  ggplot2::labs(
+    x = "Segment",
+    y = "Slope (log-log)",
+    title = "Distribution of Slopes Before vs. After Fire"
+  ) +
+  ggplot2::theme_minimal()
+
+ggplot2::ggplot(
+  regression_wide,
+  ggplot2::aes(x = cum_per_cent_burned, y = `log(Flow)_estimate`, color = segment)) +
+  ggplot2::geom_point(alpha = 0.7) +
+  ggplot2::geom_smooth(method = "lm", se = TRUE) +
+  ggplot2::labs(
+    x = "% Catchment Burned",
+    y = "C–Q Slope (log-log)",
+    title = "Effect of Fire Size on Discharge–Concentration Slope"
+  ) +
+  ggplot2::theme_minimal()
+
+```
+
 # ammonium
 
 ## temp: combined ammonium
