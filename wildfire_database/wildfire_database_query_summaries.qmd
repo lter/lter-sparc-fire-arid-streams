@@ -1339,6 +1339,17 @@ output:
 | `before_count`        | Number of valid nitrate–discharge observations in the 3 years before fire   |
 | `after_count`         | Number of valid nitrate–discharge observations in the 3 years after fire    |
 
+A modification of this query omits the lines:
+
+  COUNT(CASE WHEN nitrate.date >= (ranges_agg.start_date - INTERVAL '3 years') AND nitrate.date < ranges_agg.start_date THEN 1 END) >= 10
+  AND COUNT(CASE WHEN nitrate.date > ranges_agg.end_date AND nitrate.date <= (ranges_agg.end_date + INTERVAL '3 years') THEN 1 END) >= 10
+
+Omitting those lines, removes the constraint:
+
+  - At least 10 valid nitrate–discharge observations in both the 3-year pre- and
+  post-fire windows.
+
+The query result is saved as: `nitrate_discharge_data_filtered_less_strict.csv`
 
 ```{sql}
 #| eval: FALSE
