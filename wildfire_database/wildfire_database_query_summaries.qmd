@@ -663,6 +663,44 @@ ORDER BY
 
 ```
 
+# ecoregions (file)
+
+Join (spatially) usgs_site to firearea.ecoregions table. Note that these
+geometries are as 4326. Chaning to a projected CRS (e.g., 5070) does generate
+differet (and probably more accurate) results but the differences are trivial.
+
+```{sql}
+#| eval: TRUE
+#| label: ecoregions
+
+\COPY (
+SELECT
+  ecoregion_catchments.usgs_site,
+  ecoregions.ogc_fid,
+  ecoregions.na_l3code,
+  ecoregions.na_l3name,
+  ecoregions.na_l2code,
+  ecoregions.na_l2name,
+  ecoregions.na_l1code,
+  ecoregions.na_l1name,
+  ecoregions.na_l3key,
+  ecoregions.na_l2key,
+  ecoregions.na_l1key,
+  ecoregions.shape_leng,
+  ecoregions.shape_area,
+  ecoregions.ai_mode,
+  ecoregions.ai_mean,
+  ecoregions.ai_median,
+  ecoregions.ai_mean_narm,
+  100.0 * ST_Area(ST_Intersection(ecoregion_catchments.geometry, ecoregions.wkb_geometry)) / NULLIF(ST_Area(ecoregion_catchments.geometry), 0) AS percent_overlap
+FROM firearea.ecoregion_catchments
+JOIN firearea.ecoregions
+  ON ST_Intersects(ecoregion_catchments.geometry, ecoregions.wkb_geometry)
+) to '/tmp/study_sites_ecoregions.csv' WITH CSV HEADER
+;
+
+```
+
 # nitrate
 
 ## view: combined nitrate
@@ -1437,6 +1475,135 @@ WHERE nitrate.value_std IS NOT NULL
 
 ```
 
+## extract: fire-impacted c–q data extraction (quartiles focus)
+
+synopsis:
+
+This query (`nitrate_q_upper_quartiles`) extracts paired nitrate and discharge
+observations from USGS and non-USGS monitoring sites, focusing on the periods
+before and after fire. It applies **strict filtering** to ensure robust
+statistical analysis:
+
+- **Joins**: Combines standardized nitrate data (`firearea.nitrate`), combined
+discharge data (`firearea.discharge`), and fire event metadata
+(`firearea.ranges_agg`).
+- **Time Windows**: Selects observations within 3 years before each fire
+window's `start_date` and 3 years after each `end_date`.
+- **Segment Labeling**: Labels each observation as `'before'` or `'after'` the
+fire window.
+- **Strict Inclusion Criteria**: For each site/fire window, requires:
+  - nitrate–discharge observations in both the 3-year pre- and post-fire
+  windows
+  - nitrate–discharge observations must include flow quartiles 2, 3, and 4 in
+  both windows
+- **Output**: Returns all qualifying observations, along with counts and
+quartile information, suitable for robust C–Q (concentration–discharge)
+statistical analysis.
+- omits `cum_per_cent_burned` column featured in nitrate c-q queries documented
+above
+
+output:
+
+| Column                | Description                                                                 |
+|-----------------------|-----------------------------------------------------------------------------|
+| `usgs_site`           | USGS site ID                                                                |
+| `year`                | Fire year from `ranges_agg`                                                 |
+| `start_date`          | Fire window start date                                                      |
+| `end_date`            | Fire window end date                                                        |
+| `segment`             | `'before'` or `'after'` fire window, indicating observation timing          |
+| `date`                | Observation date                                                            |
+| `value_std`           | Standardized nitrate concentration                                          |
+| `"Flow"`              | Daily discharge value                                                       |
+| `quartile`            | Discharge quartile (1–4) for the observation                                |
+| `before_count`        | Number of valid nitrate–discharge observations in the 3 years before fire   |
+| `after_count`         | Number of valid nitrate–discharge observations in the 3 years after fire    |
+
+The query result is saved as: `nitrate_discharge_data_filtered_quartiles_234.csv`
+
+```{sql}
+#| eval: FALSE
+#| label: nitrate_q_upper_quartiles
+
+\COPY (
+SELECT
+  nitrate.usgs_site,
+  ranges_agg.year,
+  ranges_agg.start_date,
+  ranges_agg.end_date,
+  CASE
+    WHEN nitrate.date < ranges_agg.start_date THEN 'before'
+    WHEN nitrate.date > ranges_agg.end_date THEN 'after'
+  END AS segment,
+  nitrate.date,
+  nitrate.value_std,
+  discharge."Flow",
+  discharge.quartile,
+  counts.before_count,
+  counts.after_count
+FROM firearea.nitrate
+JOIN firearea.discharge
+  ON nitrate.usgs_site = discharge.usgs_site
+  AND nitrate.date = discharge."Date"
+JOIN firearea.ranges_agg
+  ON nitrate.usgs_site = ranges_agg.usgs_site
+  AND (
+    (nitrate.date >= (ranges_agg.start_date - INTERVAL '3 years') AND nitrate.date < ranges_agg.start_date)
+    OR
+    (nitrate.date > ranges_agg.end_date AND nitrate.date <= (ranges_agg.end_date + INTERVAL '3 years'))
+  )
+JOIN (
+  SELECT
+    nitrate.usgs_site,
+    ranges_agg.year,
+    ranges_agg.start_date,
+    ranges_agg.end_date,
+    COUNT(CASE WHEN nitrate.date >= (ranges_agg.start_date - INTERVAL '3 years') AND nitrate.date < ranges_agg.start_date THEN 1 END) AS before_count,
+    COUNT(CASE WHEN nitrate.date > ranges_agg.end_date AND nitrate.date <= (ranges_agg.end_date + INTERVAL '3 years') THEN 1 END) AS after_count
+  FROM firearea.nitrate
+  JOIN firearea.discharge
+    ON nitrate.usgs_site = discharge.usgs_site
+    AND nitrate.date = discharge."Date"
+  JOIN firearea.ranges_agg
+    ON nitrate.usgs_site = ranges_agg.usgs_site
+  WHERE nitrate.value_std IS NOT NULL
+    AND discharge."Flow" IS NOT NULL
+    AND discharge.quartile IS NOT NULL
+  GROUP BY
+    nitrate.usgs_site,
+    ranges_agg.year,
+    ranges_agg.start_date,
+    ranges_agg.end_date
+  HAVING
+    -- quartile 2, 3, and 4 must be present in before window
+    SUM(CASE WHEN nitrate.date >= (ranges_agg.start_date - INTERVAL '3 years') AND nitrate.date < ranges_agg.start_date AND discharge.quartile = 2 THEN 1 ELSE 0 END) > 0
+    AND
+    SUM(CASE WHEN nitrate.date >= (ranges_agg.start_date - INTERVAL '3 years') AND nitrate.date < ranges_agg.start_date AND discharge.quartile = 3 THEN 1 ELSE 0 END) > 0
+    AND
+    SUM(CASE WHEN nitrate.date >= (ranges_agg.start_date - INTERVAL '3 years') AND nitrate.date < ranges_agg.start_date AND discharge.quartile = 4 THEN 1 ELSE 0 END) > 0
+    -- quartile 2, 3, and 4 must be present in after window
+    AND
+    SUM(CASE WHEN nitrate.date > ranges_agg.end_date AND nitrate.date <= (ranges_agg.end_date + INTERVAL '3 years') AND discharge.quartile = 2 THEN 1 ELSE 0 END) > 0
+    AND
+    SUM(CASE WHEN nitrate.date > ranges_agg.end_date AND nitrate.date <= (ranges_agg.end_date + INTERVAL '3 years') AND discharge.quartile = 3 THEN 1 ELSE 0 END) > 0
+    AND
+    SUM(CASE WHEN nitrate.date > ranges_agg.end_date AND nitrate.date <= (ranges_agg.end_date + INTERVAL '3 years') AND discharge.quartile = 4 THEN 1 ELSE 0 END) > 0
+) AS counts
+  ON nitrate.usgs_site = counts.usgs_site
+  AND ranges_agg.year = counts.year
+  AND ranges_agg.start_date = counts.start_date
+  AND ranges_agg.end_date = counts.end_date
+WHERE nitrate.value_std IS NOT NULL
+  AND discharge."Flow" IS NOT NULL
+  AND discharge.quartile IS NOT NULL
+  AND (
+    (nitrate.date >= (ranges_agg.start_date - INTERVAL '3 years') AND nitrate.date < ranges_agg.start_date)
+    OR
+    (nitrate.date > ranges_agg.end_date AND nitrate.date <= (ranges_agg.end_date + INTERVAL '3 years'))
+  )
+) TO '/tmp/nitrate_discharge_data_filtered_quartiles_234.csv' WITH CSV HEADER
+;
+
+```
 
 # ammonium
 
