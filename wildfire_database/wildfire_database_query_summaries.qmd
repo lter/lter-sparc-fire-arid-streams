@@ -556,6 +556,7 @@ WITH fire_with_data AS (
   SELECT
     firearea.nitrate.usgs_site,
     firearea.ranges_agg.year,
+    firearea.ranges_agg.events,
     firearea.ranges_agg.start_date,
     firearea.ranges_agg.end_date,
     firearea.ranges_agg.cum_fire_area,
@@ -587,6 +588,7 @@ WITH fire_with_data AS (
   GROUP BY
     firearea.nitrate.usgs_site,
     firearea.ranges_agg.year,
+    firearea.ranges_agg.events,
     firearea.ranges_agg.start_date,
     firearea.ranges_agg.end_date,
     firearea.ranges_agg.cum_fire_area
