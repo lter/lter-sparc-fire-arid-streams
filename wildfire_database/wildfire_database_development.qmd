@@ -448,60 +448,29 @@ DBI::dbExecute(
 
 # flowlines --------------------------------------------------------------------
 
-Flowlines are not yet added to the database. Owing to the amount of information, a better approach may be to identify and store flowlines only for catchments that will be included in the analyses.
+Flowlines are generated only for catchments that make it into the analyses set.
+Here we document only creating the table, populating the table is a separate
+workflow. Note that this table does not have a primary key.
 
-As with catchment delineations, the workflow here is tailored specifically to developing the wilfire database and, as such, draws on firearea::write_usgs_flowlines to identify the flowlines for a/each USGS site and load it in to the wildfire.firearea.flowlines table.
-
-```{r}
+```{sql}
 #| eval: FALSE
 
-stream_sites_candidates <- DBI::dbGetQuery(
-  conn      = pg,
-  statement = "
-  SELECT
-    DISTINCT(usgs_site)
-  FROM
-    firearea.catchments
-  ;
-  "
-)
+CREATE TABLE firearea.flowlines (
+  nhdplus_comid text,
+  geometry public.geometry,
+  usgs_site text
+);
 
-stream_sites_candidates$usgs_site <- gsub("USGS-", "", stream_sites_candidates$usgs_site)
-```
+ALTER TABLE ONLY firearea.flowlines
+ADD CONSTRAINT flowlines_usgs_site_nhdplus_comid_unique UNIQUE (usgs_site, nhdplus_comid)
+;
 
-```{r}
-#| eval: FALSE
 
-wufl_possibly <- purrr::possibly(
-  .f        = firearea::write_usgs_flowlines,
-  otherwise = NULL
-)
-
-purrr::walk(stream_sites_candidates[["usgs_site"]], ~ wufl_possibly(usgs_site = .x))
-```
-
-Upon initial creation, modify fields and generate an index. Note that this particular table does not have a primary key.
-
-```{r}
-#| eval: FALSE
-
-dbExecute(pg,
-  "CREATE UNIQUE INDEX flowlines_ndhplus_comid_usgs_site ON firearea.flowlines (nhdplus_comid, usgs_site) ;"
-)
-
-DBI::dbExecute(
-  conn      = pg,
-  statement = "CREATE INDEX flowlines_geometry_idx ON firearea.flowlines USING GIST (geometry) ;"
-)
-
-DBI::dbExecute(
-  conn      = pg,
-  statement = "
-  ALTER TABLE firearea.flowlines
+ALTER TABLE firearea.flowlines
   ALTER COLUMN geometry
   TYPE geometry(geometry, 4326)
   USING ST_SetSRID(geometry, 4326)
-  ;
-  "
+;
+
 )
 ```
