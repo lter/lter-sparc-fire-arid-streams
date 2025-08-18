@@ -247,7 +247,8 @@ postgres_to_geojson <- function(
 #'
 simple_plot <- function(
   chem_site,
-  interactive = TRUE
+  interactive = TRUE,
+  winnow_largest_fire = FALSE
   ) {
 
   catchment <- sf::st_read(
@@ -271,14 +272,30 @@ simple_plot <- function(
     )
   }
 
-  fires_catchment <- sf::st_read(
-    dsn = pg,
-    query = glue::glue_sql(
-      "SELECT * FROM firearea.fires_catchments WHERE usgs_site ~~* { paste0('%', chem_site, '%') } ;",
-      .con = DBI::ANSI()
-    ),
-    geometry_column = "geometry"
-  )
+  if (!winnow_largest_fire) {
+    fires_catchment <- sf::st_read(
+      dsn = pg,
+      query = glue::glue_sql(
+        "SELECT * FROM firearea.fires_catchments WHERE usgs_site ~~* { paste0('%', chem_site, '%') } ;",
+        .con = DBI::ANSI()
+      ),
+      geometry_column = "geometry"
+    )
+  } else {
+    fires_catchment <- sf::st_read(
+      dsn = pg,
+      query = glue::glue_sql(
+        "SELECT firearea.fires_catchments.*
+         FROM firearea.fires_catchments
+         JOIN firearea.largest_nitrate_valid_fire_per_site
+           ON firearea.fires_catchments.usgs_site = firearea.largest_nitrate_valid_fire_per_site.usgs_site
+         WHERE firearea.fires_catchments.usgs_site ~~* {paste0('%', chem_site, '%')}
+           AND firearea.fires_catchments.event_id = ANY(firearea.largest_nitrate_valid_fire_per_site.events);",
+        .con = DBI::ANSI()
+      ),
+      geometry_column = "geometry"
+    )
+  }
 
   flowlines <- sf::st_read(
     dsn = pg,
