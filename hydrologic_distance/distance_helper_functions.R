@@ -195,6 +195,12 @@ postgres_to_geojson <- function(
 #'   map (\code{TRUE}, default) or export data as GeoJSON files (\code{FALSE}).
 #'   When \code{TRUE}, returns a mapview object; when \code{FALSE}, writes 
 #'   GeoJSON files to /tmp/ directory.
+#' @param winnow_largest_fire A logical value indicating whether to filter 
+#'   fire intersections to only those from the largest valid fire per site 
+#'   (\code{FALSE}, default). When \code{TRUE}, restricts fire-catchment 
+#'   intersections to event IDs contained in the 
+#'   \code{firearea.largest_nitrate_valid_fire_per_site} view for the specified 
+#'   site. This filtering applies to both interactive and non-interactive modes.
 #'
 #' @return When \code{interactive = TRUE}, returns a mapview object showing 
 #'   layered spatial data, or \code{invisible(NULL)} if no data is found. 
@@ -207,7 +213,10 @@ postgres_to_geojson <- function(
 #'   \itemize{
 #'     \item Catchments: Searches \code{firearea.catchments} first, then 
 #'           \code{firearea.non_usgs_catchments} if no matches found
-#'     \item Fire intersections: From \code{firearea.fires_catchments}
+#'     \item Fire intersections: From \code{firearea.fires_catchments}. When 
+#'           \code{winnow_largest_fire = TRUE}, restricts results to fire events 
+#'           matching the largest valid fire per site from 
+#'           \code{firearea.largest_nitrate_valid_fire_per_site}.
 #'     \item Flowlines: From \code{firearea.flowlines}
 #'     \item Pour points: Searches \code{firearea.pour_points} first, then 
 #'           \code{firearea.non_usgs_pour_points} if no matches found
@@ -238,6 +247,7 @@ postgres_to_geojson <- function(
 #' \dontrun{
 #' simple_plot("sbc_lter_rat")
 #' simple_plot("08406500", interactive = FALSE)
+#' simple_plot("08406500", winnow_largest_fire = TRUE)
 #' }
 #'
 #' @family spatial visualization functions
