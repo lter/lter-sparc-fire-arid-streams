@@ -267,17 +267,11 @@ technical notes:
   performance.
 - Refresh as needed to reflect updates to nitrate, discharge, or fire data.
 
-maintenance:
-
-To refresh the view after upstream data updates:
-
-```sql
-REFRESH MATERIALIZED VIEW firearea.largest_nitrate_valid_fire_per_site;
-```
-
 ```{sql}
 #| eval: TRUE
 #| label: largest_nitrate_summer_fire
+
+REFRESH MATERIALIZED VIEW firearea.largest_nitrate_valid_fire_per_site ;
 
 CREATE MATERIALIZED VIEW firearea.largest_nitrate_valid_fire_per_site AS
 WITH fire_with_data AS (
@@ -333,8 +327,8 @@ FROM fire_with_data
 ORDER BY usgs_site, cum_fire_area DESC
 ;
 
-CREATE INDEX idx_nitrate_fire_usgs_site ON firearea.largest_nitrate_valid_fire_per_site(usgs_site);
-CREATE INDEX idx_nitrate_fire_start_date ON firearea.largest_nitrate_valid_fire_per_site(start_date);
+CREATE INDEX idx_nitrate_fire_usgs_site ON firearea.largest_nitrate_valid_fire_per_site(usgs_site) ;
+CREATE INDEX idx_nitrate_fire_start_date ON firearea.largest_nitrate_valid_fire_per_site(start_date) ;
 
 ```
 
