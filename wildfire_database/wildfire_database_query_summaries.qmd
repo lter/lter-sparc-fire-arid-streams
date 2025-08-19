@@ -322,9 +322,12 @@ if it were to fall on the day of the fire has not been tested.
 #| eval: TRUE
 #| label: ranges_agg
 
-DROP VIEW IF EXISTS firearea.ranges_agg CASCADE ;
+-- REFRESH MATERIALIZED VIEW firearea.ranges_agg;
 
-CREATE VIEW firearea.ranges_agg AS 
+DROP VIEW IF EXISTS firearea.ranges_agg CASCADE ;
+DROP MATERIALIZED VIEW IF EXISTS firearea.ranges_agg CASCADE ;
+
+CREATE MATERIALIZED VIEW firearea.ranges_agg AS 
 -- merges usgs and non-usgs catchments
 WITH combined_catchments AS (
 SELECT
@@ -455,7 +458,8 @@ grouped_fires_days AS (
     cum_fire_area
   FROM grouped_fires_ranges
 )
--- calculates cumulative burned area as a percentage of catchment area
+-- calculates cumulative burned area (and percent) per tuple
+-- calculates cumulative burned area (and percent) by site through end_date
 SELECT
   grouped_fires_days.usgs_site,
   grouped_fires_days.year,
@@ -469,10 +473,21 @@ SELECT
   grouped_fires_days.cum_fire_area,
   areas.catch_area,
   ROUND(((grouped_fires_days.cum_fire_area / areas.catch_area) * 100)::numeric, 2) AS cum_per_cent_burned,
+  SUM(grouped_fires_days.cum_fire_area) OVER (
+    PARTITION BY grouped_fires_days.usgs_site 
+    ORDER BY grouped_fires_days.end_date 
+    ROWS UNBOUNDED PRECEDING
+  ) AS all_fire_area,
+  ROUND((SUM(grouped_fires_days.cum_fire_area) OVER (
+    PARTITION BY grouped_fires_days.usgs_site 
+    ORDER BY grouped_fires_days.end_date 
+    ROWS UNBOUNDED PRECEDING
+  ) / areas.catch_area * 100)::numeric, 2) AS all_per_cent_burned,
   areas.latitude,
   areas.longitude
 FROM
   grouped_fires_days
+-- adds catchment centroid
 JOIN
 (
   SELECT
@@ -484,6 +499,10 @@ JOIN
   combined_catchments
 ) AS areas ON (areas.usgs_site = grouped_fires_days.usgs_site)
 ;
+
+-- add indexes for better performance
+CREATE INDEX idx_ranges_agg_usgs_site ON firearea.ranges_agg (usgs_site);
+CREATE INDEX idx_ranges_agg_dates ON firearea.ranges_agg (start_date, end_date);
 
 ```
 
