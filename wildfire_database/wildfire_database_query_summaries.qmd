@@ -317,6 +317,28 @@ subsequent queries in terms of inclusivity has not been evaluated thoroughly.
 That is, for example, how a water-chemistry sample is categorized (pre, post)
 if it were to fall on the day of the fire has not been tested.
 
+output columns:
+
+| Column              | Description                                              |
+|---------------------|----------------------------------------------------------|
+| usgs_site           | Catchment/site identifier                                |
+| year                | Fire year                                                |
+| start_date          | Start date of fire period                                |
+| end_date            | End date of fire period                                  |
+| previous_end_date   | End date of previous fire period                         |
+| next_start_date     | Start date of next fire period                           |
+| days_since          | Days since previous fire                                 |
+| days_until          | Days until next fire                                     |
+| events              | Array of event IDs in this fire period                   |
+| cum_fire_area       | Cumulative burned area (km²) for the fire period         |
+| catch_area          | Catchment area (km²)                                     |
+| cum_per_cent_burned | Cumulative percent of catchment burned                   |
+| all_fire_area       | Total burned area (km²) in catchment through end_date    |
+| all_per_cent_burned | Percent of total catchment burned through end_date       |
+| latitude            | Catchment centroid latitude                              |
+| longitude           | Catchment centroid longitude                             |
+
+
 ```{sql}
 #| eval: FALSE
 #| label: ranges_agg

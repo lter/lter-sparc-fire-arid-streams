@@ -324,7 +324,30 @@ CREATE INDEX idx_nitrate_fire_usgs_site ON firearea.largest_nitrate_valid_fire_p
 CREATE INDEX idx_nitrate_fire_start_date ON firearea.largest_nitrate_valid_fire_per_site(start_date) ;
 ```
 
-## export: summary all sites
+## export: summary all nitrate sites
+
+output columns:
+
+| Column              | Description                                           |
+|---------------------|-------------------------------------------------------|
+| usgs_site           | Catchment/site identifier                             |
+| year                | Fire year                                             |
+| start_date          | Start date of fire period                             |
+| end_date            | End date of fire period                               |
+| previous_end_date   | End date of previous fire period                      |
+| next_start_date     | Start date of next fire period                        |
+| days_since          | Days since previous fire                              |
+| days_until          | Days until next fire                                  |
+| events              | Array of event IDs in this fire period                |
+| cum_fire_area       | Cumulative burned area (km²) for the fire period      |
+| catch_area          | Catchment area (km²)                                  |
+| cum_per_cent_burned | Cumulative percent of catchment burned                |
+| all_fire_area       | Total burned area (km²) in catchment through end_date |
+| all_per_cent_burned | Percent of total catchment burned through end_date    |
+| latitude            | Catchment centroid latitude                           |
+| longitude           | Catchment centroid longitude                          |
+| count_before_start  | Number of nitrate observations before fire window     |
+| count_after_end     | Number of nitrate observations after fire window      |
 
 ``` sql
 \COPY (
@@ -346,7 +369,7 @@ ORDER BY
 ;
 ```
 
-## export: summary nitrate sites
+## export: summary largest fire nitrate sites
 
 purpose:
 
@@ -382,19 +405,26 @@ input tables:
 - `firearea.largest_nitrate_valid_fire_per_site`: Materialized view of
   sites with validated nitrate+discharge data coverage.
 
-output columns
+output columns:
 
-| column name                | description                           |
-|----------------------------|---------------------------------------|
-| `usgs_site`                | Watershed site identifier             |
-| `year`                     | Fire grouping year                    |
-| `start_date`, `end_date`   | Boundaries of the fire group window   |
-| `events`                   | Array of associated fire `event_id`s  |
-| `cum_fire_area`            | Cumulative burned area (km²)          |
-| `cum_per_cent_burned`      | % of watershed burned                 |
-| `catch_area`               | Catchment area (km²)                  |
-| `latitude`, `longitude`    | Centroid coordinates of the watershed |
-| `days_since`, `days_until` | Temporal spacing between fire windows |
+| Column              | Description                                           |
+|---------------------|-------------------------------------------------------|
+| usgs_site           | Catchment/site identifier                             |
+| year                | Fire year                                             |
+| start_date          | Start date of fire period                             |
+| end_date            | End date of fire period                               |
+| previous_end_date   | End date of previous fire period                      |
+| next_start_date     | Start date of next fire period                        |
+| days_since          | Days since previous fire                              |
+| days_until          | Days until next fire                                  |
+| events              | Array of event IDs in this fire period                |
+| cum_fire_area       | Cumulative burned area (km²) for the fire period      |
+| catch_area          | Catchment area (km²)                                  |
+| cum_per_cent_burned | Cumulative percent of catchment burned                |
+| all_fire_area       | Total burned area (km²) in catchment through end_date |
+| all_per_cent_burned | Percent of total catchment burned through end_date    |
+| latitude            | Catchment centroid latitude                           |
+| longitude           | Catchment centroid longitude                          |
 
 ``` sql
 \COPY (
