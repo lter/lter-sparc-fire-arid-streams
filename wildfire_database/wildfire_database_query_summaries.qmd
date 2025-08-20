@@ -4,7 +4,7 @@ author: "S. Earl"
 format: gfm
 ---
 
-# overview
+## overview
 
 Queries for transforming (as needed) and extracting wildfire data.
 
@@ -14,7 +14,7 @@ must be constructed prior to each new export. One additional query is partial,
 which is a template for a CTE in subsequent queries.
 
 
-# view: USGS water chemistry
+## view: usgs_water_chem_std (std chem)
 
 Generate a view of a standardized form of the USGS water-chemistry data that
 will provide a starting point for generating summaries of particular analytes.
@@ -94,7 +94,8 @@ WHERE
 
 ```
 
-# table: combined discharge
+
+## table: discharge (aggregated discharge)
 
 A view of discharge that reflects the combined records of data from USGS and
 otherwise sites.
@@ -185,9 +186,8 @@ CALL firearea.update_discharge_quartiles();
 
 ```
 
-# view: ranges (intervals between fires)
 
-## individual fires
+## view: ranges (individual fires)
 
 A view of the interval (`daterange`) between sites * fires. This view allows us
 to identify the timing of a separate event (water chemistry sample, discharge
@@ -296,7 +296,7 @@ JOIN post_fire_cte ON (
 
 ```
 
-## summer fires
+## m.view ranges (ranges_agg (aggregated fires))
 
 Whereas the [## individual fires] ranges calculates range statistics based on
 all site and all fires, [## summer fires] addresses some pre-processing and
@@ -507,36 +507,9 @@ CREATE INDEX idx_ranges_agg_dates ON firearea.ranges_agg (start_date, end_date);
 ```
 
 
-# partial: combined catchments
+## view: dd_area_stats (discharge & areal stats)
 
-`partial` indicates a block of code that is a component of a larger block but
-highlighted also as a separate chunk for adapting to other contexts.
-
-```{sql}
-#| eval: TRUE
-#| label: combined_catchments
-
-SELECT
-  usgs_site,
-  -- area_m2,
-  -- ST_Area(geometry, TRUE) AS area_m2
-  geometry
-FROM firearea.catchments
-UNION 
-SELECT
-  usgs_site,
-  -- area_m2,
-  -- ST_Area(geometry, TRUE) AS area_m2
-  geometry
-FROM firearea.non_usgs_catchments
-;
-
-```
-
-# temp: discharge and areal statistics
-
-A temporary table that calculates statistics around discharge, and catchment
-and fire areas.
+A view of statistics around discharge, and catchment and fire areas.
 
 ```{sql}
 #| eval: TRUE
@@ -636,7 +609,8 @@ ORDER BY
 
 ```
 
-# partial: chemistry with ranges
+
+## partial: chemistry with ranges
 
 Designate water-chemistry measurements relative to fires (pre, post). This is a
 template, the example here being for standardized nitrate data, that forms the
@@ -683,7 +657,7 @@ ORDER BY
 
 ```
 
-# ecoregions (file)
+# export: ecoregions
 
 Join (spatially) usgs_site to firearea.ecoregions table. Note that these
 geometries are as 4326. Chaning to a projected CRS (e.g., 5070) does generate
@@ -1124,5 +1098,104 @@ dd_area_stats ON (
 )
 ) TO '/tmp/specific_conductance_dd_area.csv' WITH DELIMITER ',' CSV HEADER
 ;
+
+```
+
+## catchment spatial overlap
+
+Calculates pairwise spatial overlap percentages and areas between all study
+catchments, including both USGS and non-USGS research network sites. This
+analysis identifies nested and overlapping watersheds within the study domain.
+
+### input data sources
+- **`firearea.catchments`** - USGS catchment geometries
+- **`firearea.non_usgs_catchments`** - Non-USGS research network catchment geometries (NEON, SBC-LTER)
+- **`firearea.ecoregion_catchments`** - Study site definitions (filters USGS catchments to study domain)
+
+### processing logic
+
+#### 1. catchment integration
+- **UNION operation** combines USGS and non-USGS catchment geometries
+- **Filtering**: USGS catchments restricted to study sites in `ecoregion_catchments`
+- **Result**: Unified catchment dataset across all monitoring networks
+
+#### 2. spatial intersection analysis
+- **Pairwise comparison**: Each catchment compared against every other catchment
+- **Self-exclusion**: Uses `c1.usgs_site < c2.usgs_site` to avoid self-comparison and duplicate pairs
+- **Intersection detection**: `ST_Intersects()` identifies overlapping catchment pairs
+- **Area calculations**: Uses spheroidal geometry (`ST_Area(geometry, TRUE)`) for accuracy
+
+#### 3. overlap metrics calculation
+- **Bidirectional percentages**: Calculates what percent of each catchment overlaps with the other
+- **Actual overlap area**: Intersection area in square kilometers
+- **Zero exclusion**: Filters out pairs with no actual spatial overlap
+
+### output fields
+
+| Field | Description | Units/Format |
+|-------|-------------|--------------|
+| `site_1` | Primary catchment identifier | USGS site ID |
+| `site_2` | Comparison catchment identifier | USGS site ID |
+| `percent_overlap_site1` | Percent of site_1 area overlapped by site_2 | Percentage (2 decimal places) |
+| `percent_overlap_site2` | Percent of site_2 area overlapped by site_1 | Percentage (2 decimal places) |
+| `overlap_area_km2` | Actual overlapping area | Square kilometers (2 decimal places) |
+
+### data quality controls
+- **Non-zero overlap requirement**: `ST_Area(ST_Intersection()) > 0` excludes trivial/edge-touching cases
+- **Spheroidal calculations**: Accurate area measurements using Earth's curvature
+- **NULLIF protection**: Prevents division by zero errors in percentage calculations
+- **Precision control**: Results rounded to 2 decimal places for consistency
+
+### output characteristics
+- **File**: `/tmp/catchment_overlaps.csv`
+- **Format**: CSV with header row
+- **Record scope**: Only catchment pairs with meaningful spatial overlap
+- **Ordering**: Alphabetical by primary site, then comparison site
+
+### common overlap patterns
+- **Nested catchments**: `percent_overlap_site2 = 100.00` indicates site_2 completely within site_1
+- **Partial overlaps**: Both percentages < 100% indicate intersecting but not nested watersheds
+- **Small overlap areas**: May indicate catchments sharing drainage boundaries or measurement uncertainties
+
+This analysis supports understanding of spatial relationships between monitoring
+sites and helps inform appropriate statistical approaches for multi-site
+comparisons
+
+
+```{sql}
+#| eval: TRUE
+
+-- Calculate percent spatial overlap between all catchment pairs (including non-USGS)
+\COPY (
+WITH combined_catchments AS (
+  SELECT usgs_site, geometry FROM firearea.catchments
+  WHERE usgs_site IN (SELECT usgs_site FROM firearea.ecoregion_catchments)
+  UNION 
+  SELECT usgs_site, geometry FROM firearea.non_usgs_catchments
+)
+SELECT
+  c1.usgs_site AS site_1,
+  c2.usgs_site AS site_2,
+  ROUND(
+    (100.0 * ST_Area(ST_Intersection(c1.geometry, c2.geometry), TRUE) / 
+     NULLIF(ST_Area(c1.geometry, TRUE), 0))::numeric, 
+    2
+  ) AS percent_overlap_site1,
+  ROUND(
+    (100.0 * ST_Area(ST_Intersection(c1.geometry, c2.geometry), TRUE) / 
+     NULLIF(ST_Area(c2.geometry, TRUE), 0))::numeric, 
+    2
+  ) AS percent_overlap_site2,
+  ROUND(
+    (ST_Area(ST_Intersection(c1.geometry, c2.geometry), TRUE) / 1000000)::numeric, 
+    2
+  ) AS overlap_area_km2
+FROM combined_catchments c1
+JOIN combined_catchments c2 
+  ON c1.usgs_site < c2.usgs_site
+WHERE ST_Intersects(c1.geometry, c2.geometry)
+  AND ST_Area(ST_Intersection(c1.geometry, c2.geometry), TRUE) > 0
+ORDER BY c1.usgs_site, c2.usgs_site
+) TO '/tmp/catchment_overlaps.csv' WITH CSV HEADER;
 
 ```
