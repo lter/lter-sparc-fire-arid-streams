@@ -1,21 +1,15 @@
----
-format: gfm
-engine: knitr
----
+
 
 # nitrate
 
 ## view: combined nitrate
 
-Create a view of standardized (forms, units) nitrate that reflects data from
-from both the USGS and non-USGS data sources.
+Create a view of standardized (forms, units) nitrate that reflects data
+from from both the USGS and non-USGS data sources.
 
 Convert NEON and SBC data (micromoles) to `mg NO3-N / L`.
 
-```{sql}
-#| eval: FALSE
-#| label: nitrate-values
-
+``` sql
 DROP VIEW IF EXISTS firearea.nitrate ;
 
 CREATE VIEW firearea.nitrate AS 
@@ -57,34 +51,32 @@ WHERE
 ) AND
   usgs_site !~~* '%bell%'
 ;
-
 ```
-
 
 ## view: nitrate_ranges (unused)
 
-Generate a view of summary statistics surrounding nitrate data availability
-(number of samples pre, post fire; time (days) since previous fire; etc.).
+Generate a view of summary statistics surrounding nitrate data
+availability (number of samples pre, post fire; time (days) since
+previous fire; etc.).
 
-The `chem_ranges` CTE uses the template detailed in `chemistry with ranges`.
+The `chem_ranges` CTE uses the template detailed in
+`chemistry with ranges`.
 
 The `num_pre_fire` and `num_post_fire` reflect the number of nitrate
-observations in the period between the fire of interest and the previous and
-next fires, respectively; not to be confused with the number of observations at
-any point prior to and after the fire of interest, respectively.
+observations in the period between the fire of interest and the previous
+and next fires, respectively; not to be confused with the number of
+observations at any point prior to and after the fire of interest,
+respectively.
 
-The number of nitrate observations reflects observations for which there is
-also a discharge measurement.
+The number of nitrate observations reflects observations for which there
+is also a discharge measurement.
 
-This query is likely not to be employed as the project has decided to use
-aggregated fires in the fire season (this query addressed only unaggregated
-data) but I think there are some errors here so it should be evaluated before a
-possible future use.
+This query is likely not to be employed as the project has decided to
+use aggregated fires in the fire season (this query addressed only
+unaggregated data) but I think there are some errors here so it should
+be evaluated before a possible future use.
 
-```{sql}
-#| eval: FALSE
-#| label: nitrate-ranges
-
+``` sql
 DROP VIEW IF EXISTS firearea.nitrate_ranges ;
 
 CREATE VIEW firearea.nitrate_ranges AS 
@@ -166,9 +158,7 @@ LEFT JOIN (
     AND adjacent_fire.event = pre_fire.pre
 )
 ;
-
 ```
-
 
 ## view: nitrate_counts (summer)
 
@@ -176,18 +166,15 @@ Generate a view of summary statistics surrounding nitrate data
 availability (number of samples pre, post fire).
 
 The `num_pre_fire` and `num_post_fire` reflect the number of nitrate
-observations in the period prior to and after fire or aggregated fires of
-interest; not to be confused with the number of observations between a fire or
-aggregated fires and interest and the next fire as is the case for
-view::nitrate_ranges.
+observations in the period prior to and after fire or aggregated fires
+of interest; not to be confused with the number of observations between
+a fire or aggregated fires and interest and the next fire as is the case
+for view::nitrate_ranges.
 
-The number of nitrate observations reflects observations for which there is
-also a discharge measurement.
+The number of nitrate observations reflects observations for which there
+is also a discharge measurement.
 
-```{sql}
-#| eval: FALSE
-#| label: nitrate-counts
-
+``` sql
 DROP VIEW IF EXISTS firearea.nitrate_counts ;
 
 CREATE VIEW firearea.nitrate_counts AS 
@@ -216,66 +203,67 @@ GROUP BY
   ranges_agg.end_date,
   ranges_agg.events
 ;
-
 ```
-
 
 ## m.view: nitrate largest fire
 
 purpose:
 
-This materialized view identifies the largest wildfire event per watershed
-(`usgs_site`) that meets strict pre- and post-fire data quality criteria for
-water quality analysis. It enables fast, repeatable queries for analyzing
-wildfire impacts on nitrate and discharge patterns.
+This materialized view identifies the largest wildfire event per
+watershed (`usgs_site`) that meets strict pre- and post-fire data
+quality criteria for water quality analysis. It enables fast, repeatable
+queries for analyzing wildfire impacts on nitrate and discharge
+patterns.
 
 use case:
 
 - Supports analysis of nitrate and streamflow responses to wildfire.
-- Used to restrict focus to watersheds with both extensive monitoring coverage
-  and a single, largest impactful fire.
+- Used to restrict focus to watersheds with both extensive monitoring
+  coverage and a single, largest impactful fire.
 - Reused in downstream workflows for filtering, reporting, or dashboard
   visualizations.
 
 logic summary:
 
-1. Join nitrate and discharge records by site and date.
-2. Match those records to fire windows from `ranges_agg`.
-3. Apply Data Sufficiency Filters:
-  - Must have nitrate + discharge data in the 3 years before and after each
-    fire.
-  - Must include observations in flow quartiles 2, 3, and 4 in both windows.
-4. Group results by fire event (site, year, start/end date).
-5. Select only the largest valid fire per watershed, ranked by `cum_fire_area`.
+1.  Join nitrate and discharge records by site and date.
+2.  Match those records to fire windows from `ranges_agg`.
+3.  Apply Data Sufficiency Filters:
+
+- Must have nitrate + discharge data in the 3 years before and after
+  each fire.
+- Must include observations in flow quartiles 2, 3, and 4 in both
+  windows.
+
+4.  Group results by fire event (site, year, start/end date).
+5.  Select only the largest valid fire per watershed, ranked by
+    `cum_fire_area`.
 
 fields included:
 
-| Column Name      | Description                                                  |
-|------------------|--------------------------------------------------------------|
-| `usgs_site`      | Watershed site identifier                                     |
-| `year`           | Fire year (based on ignition date)                            |
-| `start_date`     | Start date of fire event group                                |
-| `end_date`       | End date of fire event group                                  |
-| `cum_fire_area`  | Cumulative fire-affected area (km²) for the grouped event     |
-| `before_count`   | Count of nitrate observations in 3-year window before fire  |
-| `after_count`    | Count of nitrate observations in 3-year window after fire   |
-| `bq2`, `bq3`, `bq4` | Count of pre-fire flow quartile 2, 3, and 4 observations   |
-| `aq2`, `aq3`, `aq4` | Count of post-fire flow quartile 2, 3, and 4 observations  |
+| Column Name | Description |
+|----|----|
+| `usgs_site` | Watershed site identifier |
+| `year` | Fire year (based on ignition date) |
+| `start_date` | Start date of fire event group |
+| `end_date` | End date of fire event group |
+| `cum_fire_area` | Cumulative fire-affected area (km²) for the grouped event |
+| `before_count` | Count of nitrate observations in 3-year window before fire |
+| `after_count` | Count of nitrate observations in 3-year window after fire |
+| `bq2`, `bq3`, `bq4` | Count of pre-fire flow quartile 2, 3, and 4 observations |
+| `aq2`, `aq3`, `aq4` | Count of post-fire flow quartile 2, 3, and 4 observations |
 
 technical notes:
 
 - Source tables: `firearea.nitrate`, `firearea.discharge`,
   `firearea.ranges_agg`
-- Computation-intensive: uses joins, date filters, aggregation, and conditional
-  `HAVING` clauses.
+- Computation-intensive: uses joins, date filters, aggregation, and
+  conditional `HAVING` clauses.
 - Materialized to avoid recomputation and accelerate downstream query
   performance.
-- Refresh as needed to reflect updates to nitrate, discharge, or fire data.
+- Refresh as needed to reflect updates to nitrate, discharge, or fire
+  data.
 
-```{sql}
-#| eval: FALSE
-#| label: largest_nitrate_summer_fire
-
+``` sql
 REFRESH MATERIALIZED VIEW firearea.largest_nitrate_valid_fire_per_site ;
 
 CREATE MATERIALIZED VIEW firearea.largest_nitrate_valid_fire_per_site AS
@@ -334,16 +322,11 @@ ORDER BY usgs_site, cum_fire_area DESC
 
 CREATE INDEX idx_nitrate_fire_usgs_site ON firearea.largest_nitrate_valid_fire_per_site(usgs_site) ;
 CREATE INDEX idx_nitrate_fire_start_date ON firearea.largest_nitrate_valid_fire_per_site(start_date) ;
-
 ```
-
 
 ## export: summary all sites
 
-```{sql}
-#| eval: FALSE
-#| label: summary
-
+``` sql
 \COPY (
 SELECT
   ranges_agg.*,
@@ -361,63 +344,59 @@ ORDER BY
   ranges_agg.start_date
 ) TO '/tmp/nitrate_summary.csv' WITH CSV HEADER
 ;
-
 ```
-
 
 ## export: summary nitrate sites
 
 purpose:
 
-This query retrieves comprehensive fire event information for each watershed
-(`usgs_site`) based on the largest wildfire that also meets nitrate-discharge
-data sufficiency criteria. It ensures that only those events selected for water
-quality analysis are described in detail using the `ranges_agg` view.
+This query retrieves comprehensive fire event information for each
+watershed (`usgs_site`) based on the largest wildfire that also meets
+nitrate-discharge data sufficiency criteria. It ensures that only those
+events selected for water quality analysis are described in detail using
+the `ranges_agg` view.
 
 context:
 
 - The `ranges_agg` view aggregates fires by watershed and year,
   summarizing burn area, duration, spatial extent, and event IDs.
 - The companion materialized view
-  `firearea.largest_nitrate_valid_fire_per_site` filters these to a single,
-  largest valid fire per watershed with adequate nitrate and discharge
-  monitoring.
-- This query joins the two views on `usgs_site`, `start_date`, and `end_date`
-  to return only the selected fire events.
+  `firearea.largest_nitrate_valid_fire_per_site` filters these to a
+  single, largest valid fire per watershed with adequate nitrate and
+  discharge monitoring.
+- This query joins the two views on `usgs_site`, `start_date`, and
+  `end_date` to return only the selected fire events.
 
 query logic:
 
-1. Pull all rows from `firearea.ranges_agg`, which includes fire grouping
-   metadata per site.
-2. Filter the results to only the fire windows (start + end dates) identified
-   in the nitrate validation materialized view.
-3. Return the entire record for each matched fire.
+1.  Pull all rows from `firearea.ranges_agg`, which includes fire
+    grouping metadata per site.
+2.  Filter the results to only the fire windows (start + end dates)
+    identified in the nitrate validation materialized view.
+3.  Return the entire record for each matched fire.
 
 input tables:
 
-- `firearea.ranges_agg`: View of grouped and summarized fire events by site.
-- `firearea.largest_nitrate_valid_fire_per_site`: Materialized view of sites
-  with validated nitrate+discharge data coverage.
+- `firearea.ranges_agg`: View of grouped and summarized fire events by
+  site.
+- `firearea.largest_nitrate_valid_fire_per_site`: Materialized view of
+  sites with validated nitrate+discharge data coverage.
 
 output columns
 
-| column name            | description                                         |
-|------------------------|-----------------------------------------------------|
-| `usgs_site`            | Watershed site identifier                           |
-| `year`                 | Fire grouping year                                  |
-| `start_date`, `end_date` | Boundaries of the fire group window              |
-| `events`               | Array of associated fire `event_id`s                |
-| `cum_fire_area`        | Cumulative burned area (km²)                        |
-| `cum_per_cent_burned`  | % of watershed burned                               |
-| `catch_area`           | Catchment area (km²)                                |
-| `latitude`, `longitude`| Centroid coordinates of the watershed               |
-| `days_since`, `days_until` | Temporal spacing between fire windows           |
+| column name                | description                           |
+|----------------------------|---------------------------------------|
+| `usgs_site`                | Watershed site identifier             |
+| `year`                     | Fire grouping year                    |
+| `start_date`, `end_date`   | Boundaries of the fire group window   |
+| `events`                   | Array of associated fire `event_id`s  |
+| `cum_fire_area`            | Cumulative burned area (km²)          |
+| `cum_per_cent_burned`      | % of watershed burned                 |
+| `catch_area`               | Catchment area (km²)                  |
+| `latitude`, `longitude`    | Centroid coordinates of the watershed |
+| `days_since`, `days_until` | Temporal spacing between fire windows |
 
-
-```{sql}
-#| eval: FALSE
-#| label: nitrate_sites_fires
-
+``` sql
 \COPY (
 SELECT
   ranges_agg.*
@@ -431,16 +410,11 @@ ORDER BY
   ranges_agg.start_date
 ) TO '/tmp/nitrate_sites_fires.csv' WITH CSV HEADER
 ;
-
 ```
-
 
 ## export: q+c all
 
-```{sql}
-#| eval: FALSE
-#| label: q_chem
-
+``` sql
 \COPY (
 SELECT
   nitrate.*,
@@ -456,59 +430,55 @@ ORDER BY
   nitrate.date
 ) TO '/tmp/nitrate_q_chem.csv' WITH CSV HEADER
 ;
-
 ```
-
 
 ## export: q+c pre-post-quartiles
 
 synopsis:
 
-This query (`nitrate_q_upper_quartiles`) extracts paired nitrate and discharge
-observations from USGS and non-USGS monitoring sites, focusing on the periods
-before and after fire. It applies **strict filtering** to ensure robust
-statistical analysis:
+This query (`nitrate_q_upper_quartiles`) extracts paired nitrate and
+discharge observations from USGS and non-USGS monitoring sites, focusing
+on the periods before and after fire. It applies **strict filtering** to
+ensure robust statistical analysis:
 
-- **Joins**: Combines standardized nitrate data (`firearea.nitrate`), combined
-discharge data (`firearea.discharge`), and fire event metadata
-(`firearea.ranges_agg`).
+- **Joins**: Combines standardized nitrate data (`firearea.nitrate`),
+  combined discharge data (`firearea.discharge`), and fire event
+  metadata (`firearea.ranges_agg`).
 - **Time Windows**: Selects observations within 3 years before each fire
-window's `start_date` and 3 years after each `end_date`.
-- **Segment Labeling**: Labels each observation as `'before'` or `'after'` the
-fire window.
+  window’s `start_date` and 3 years after each `end_date`.
+- **Segment Labeling**: Labels each observation as `'before'` or
+  `'after'` the fire window.
 - **Strict Inclusion Criteria**: For each site/fire window, requires:
   - nitrate–discharge observations in both the 3-year pre- and post-fire
-  windows
-  - nitrate–discharge observations must include flow quartiles 2, 3, and 4 in
-  both windows
+    windows
+  - nitrate–discharge observations must include flow quartiles 2, 3, and
+    4 in both windows
 - **Output**: Returns all qualifying observations, along with counts and
-quartile information, suitable for robust C–Q (concentration–discharge)
-statistical analysis.
-- omits `cum_per_cent_burned` column featured in nitrate c-q queries documented
-above
+  quartile information, suitable for robust C–Q
+  (concentration–discharge) statistical analysis.
+- omits `cum_per_cent_burned` column featured in nitrate c-q queries
+  documented above
 
 output:
 
-| Column                | Description                                                                 |
-|-----------------------|-----------------------------------------------------------------------------|
-| `usgs_site`           | USGS site ID                                                                |
-| `year`                | Fire year from `ranges_agg`                                                 |
-| `start_date`          | Fire window start date                                                      |
-| `end_date`            | Fire window end date                                                        |
-| `segment`             | `'before'` or `'after'` fire window, indicating observation timing          |
-| `date`                | Observation date                                                            |
-| `value_std`           | Standardized nitrate concentration                                          |
-| `"Flow"`              | Daily discharge value                                                       |
-| `quartile`            | Discharge quartile (1–4) for the observation                                |
-| `before_count`        | Number of valid nitrate–discharge observations in the 3 years before fire   |
-| `after_count`         | Number of valid nitrate–discharge observations in the 3 years after fire    |
+| Column | Description |
+|----|----|
+| `usgs_site` | USGS site ID |
+| `year` | Fire year from `ranges_agg` |
+| `start_date` | Fire window start date |
+| `end_date` | Fire window end date |
+| `segment` | `'before'` or `'after'` fire window, indicating observation timing |
+| `date` | Observation date |
+| `value_std` | Standardized nitrate concentration |
+| `"Flow"` | Daily discharge value |
+| `quartile` | Discharge quartile (1–4) for the observation |
+| `before_count` | Number of valid nitrate–discharge observations in the 3 years before fire |
+| `after_count` | Number of valid nitrate–discharge observations in the 3 years after fire |
 
-The query result is saved as: `nitrate_discharge_data_filtered_quartiles_234.csv`
+The query result is saved as:
+`nitrate_discharge_data_filtered_quartiles_234.csv`
 
-```{sql}
-#| eval: FALSE
-#| label: nitrate_q_upper_quartiles
-
+``` sql
 \COPY (
 SELECT
   nitrate.usgs_site,
@@ -592,72 +562,72 @@ ORDER BY
   nitrate.date
 ) TO '/tmp/nitrate_discharge_data_filtered_quartiles_234.csv' WITH CSV HEADER
 ;
-
 ```
-
 
 ## export: q+c pre-post-quartiles largest fire
 
 purpose:
 
-This query extracts nitrate and discharge observations from USGS watershed sites
-surrounding wildfires. It isolates data for only the largest valid fire per
-watershed, where validity is defined by the presence of adequate water quality
-monitoring data before and after the fire.
+This query extracts nitrate and discharge observations from USGS
+watershed sites surrounding wildfires. It isolates data for only the
+largest valid fire per watershed, where validity is defined by the
+presence of adequate water quality monitoring data before and after the
+fire.
 
 key objectives:
 
-- Assess hydrologic and water quality response (nitrate + flow) to wildfire
-  disturbances.
-- Limit analysis to only the most impactful fire per watershed, based on fire
-  area (`cum_fire_area`).
+- Assess hydrologic and water quality response (nitrate + flow) to
+  wildfire disturbances.
+- Limit analysis to only the most impactful fire per watershed, based on
+  fire area (`cum_fire_area`).
 - ensure fire events are sufficiently monitored, with:
   - At least 3 years of data before and after the fire.
-  - Presence of streamflow across flow quartiles 2, 3, and 4 in both windows.
+  - Presence of streamflow across flow quartiles 2, 3, and 4 in both
+    windows.
 
 core logic steps:
 
-1. Join nitrate and discharge records by site and date.
-2. Filter for valid data windows:
-   - Records must fall within 3 years before or after each fire.
-   - Each fire must have discharge records in quartiles 2–4 in both windows.
-3. Select valid fires per watershed from `ranges_agg`, ensuring they meet all
-data coverage criteria.
-4. Identify the largest fire per `usgs_site` by selecting the maximum
-`cum_fire_area` among valid events.
-5. Return nitrate + discharge records for the selected fire per watershed, with
-an additional field (`segment`) labeling records as “before” or “after” the
-fire event.
+1.  Join nitrate and discharge records by site and date.
+2.  Filter for valid data windows:
+    - Records must fall within 3 years before or after each fire.
+    - Each fire must have discharge records in quartiles 2–4 in both
+      windows.
+3.  Select valid fires per watershed from `ranges_agg`, ensuring they
+    meet all data coverage criteria.
+4.  Identify the largest fire per `usgs_site` by selecting the maximum
+    `cum_fire_area` among valid events.
+5.  Return nitrate + discharge records for the selected fire per
+    watershed, with an additional field (`segment`) labeling records as
+    “before” or “after” the fire event.
 
 inputs:
 
 - `firearea.nitrate`: View of USGS and non-USGS nitrate observations
-- `firearea.discharge`: Daily streamflow and derived quartile classification
-- `firearea.ranges_agg`: Pre-aggregated wildfire periods and fire area metrics
-  per watershed
+- `firearea.discharge`: Daily streamflow and derived quartile
+  classification
+- `firearea.ranges_agg`: Pre-aggregated wildfire periods and fire area
+  metrics per watershed
 
 outputs:
 
-| column name         | description                                        |
-|---------------------|----------------------------------------------------|
-| `usgs_site`         | Site identifier                                    |
-| `year`              | Fire event year                                    |
-| `start_date`        | Fire event start date                              |
-| `end_date`          | Fire event end date                                |
-| `segment`           | Temporal label: `'before'` or `'after'` fire       |
-| `date`              | Nitrate/discharge observation date                 |
-| `value_std`         | Standardized nitrate concentration (mg/L as N)     |
-| `"Flow"`            | Discharge (cfs)                                    |
-| `quartile`          | Discharge flow quartile (1–4)                      |
-| `before_count`      | Count of observations in 3 years before the fire   |
-| `after_count`       | Count of observations in 3 years after the fire    |
+| column name    | description                                      |
+|----------------|--------------------------------------------------|
+| `usgs_site`    | Site identifier                                  |
+| `year`         | Fire event year                                  |
+| `start_date`   | Fire event start date                            |
+| `end_date`     | Fire event end date                              |
+| `segment`      | Temporal label: `'before'` or `'after'` fire     |
+| `date`         | Nitrate/discharge observation date               |
+| `value_std`    | Standardized nitrate concentration (mg/L as N)   |
+| `"Flow"`       | Discharge (cfs)                                  |
+| `quartile`     | Discharge flow quartile (1–4)                    |
+| `before_count` | Count of observations in 3 years before the fire |
+| `after_count`  | Count of observations in 3 years after the fire  |
 
-The query result is saved as: `nitrate_discharge_quartiles_234_max_fire.csv`
+The query result is saved as:
+`nitrate_discharge_quartiles_234_max_fire.csv`
 
-```{sql}
-#| eval: FALSE
-#| label: nitrate_q_upper_quartiles_max_fire
-
+``` sql
 \COPY (
 SELECT
   firearea.nitrate.usgs_site,
@@ -695,81 +665,80 @@ ORDER BY
   nitrate.date
 ) TO '/tmp/nitrate_discharge_quartiles_234_max_fire.csv' WITH CSV HEADER
 ;
-
 ```
-
 
 ## export: q+c pre-quartiles largest fire
 
 purpose:
 
-This query retrieves nitrate and discharge records for USGS watershed sites
-(`usgs_site`) surrounding wildfires. It ensures strong sampling coverage before
-the fire, requiring observations in flow quartiles 2, 3, and 4, while placing no
-constraint on post-fire sampling coverage.
+This query retrieves nitrate and discharge records for USGS watershed
+sites (`usgs_site`) surrounding wildfires. It ensures strong sampling
+coverage before the fire, requiring observations in flow quartiles 2, 3,
+and 4, while placing no constraint on post-fire sampling coverage.
 
-**
-It is important to note that the results of this query are NOT a superset of the
-results of the query where we are also constraining the post-fire values to
-having representative values from quartiles 2, 3, and 4. The reason is that
-largest fire for a given site is not necessarily the same across the two
-queries.
+\*\* It is important to note that the results of this query are NOT a
+superset of the results of the query where we are also constraining the
+post-fire values to having representative values from quartiles 2, 3,
+and 4. The reason is that largest fire for a given site is not
+necessarily the same across the two queries.
 
 For example, the largest fire in catchment USGS-06259000 occurred on
-2011-07-22 when both before and after fire windows must contain quartiles 2, 3,
-and 4 but on 2021-08-19 when only the pre-fire data needed to reflect values in
-quartiles 2, 3, and 4.
-**
+2011-07-22 when both before and after fire windows must contain
+quartiles 2, 3, and 4 but on 2021-08-19 when only the pre-fire data
+needed to reflect values in quartiles 2, 3, and 4. \*\*
 
-Note that we are not using these results for analyses but serves as the base
-for subsequent queries to pull discharge and fire details for the sites.
+Note that we are not using these results for analyses but serves as the
+base for subsequent queries to pull discharge and fire details for the
+sites.
 
 context:
 
-- This approach enables inclusion of fire events where post-fire data may be
-  sparse, but pre-disturbance flow conditions are well characterized.
-- It is ideal for analyses focused on establishing a robust pre-fire baseline
-  for nitrate concentrations.
+- This approach enables inclusion of fire events where post-fire data
+  may be sparse, but pre-disturbance flow conditions are well
+  characterized.
+- It is ideal for analyses focused on establishing a robust pre-fire
+  baseline for nitrate concentrations.
 
 query logic:
 
-1. Join `firearea.nitrate`, `firearea.discharge`, and `firearea.ranges_agg`.
-2. Identify all fire windows per site (`usgs_site`) and evaluate 3-year
-sampling windows:
-   - Pre-fire window must contain observations in flow quartiles 2, 3, and 4.
-   Post-fire window is included regardless of flow distribution.
-3. From qualifying fire windows, select the largest fire event per site using
-`cum_fire_area DESC`.
-4. Return nitrate–discharge samples from the 3-year pre- and post-fire windows,
-with labeled segment (`'before'` or `'after'`).
+1.  Join `firearea.nitrate`, `firearea.discharge`, and
+    `firearea.ranges_agg`.
+2.  Identify all fire windows per site (`usgs_site`) and evaluate 3-year
+    sampling windows:
+    - Pre-fire window must contain observations in flow quartiles 2, 3,
+      and 4. Post-fire window is included regardless of flow
+      distribution.
+3.  From qualifying fire windows, select the largest fire event per site
+    using `cum_fire_area DESC`.
+4.  Return nitrate–discharge samples from the 3-year pre- and post-fire
+    windows, with labeled segment (`'before'` or `'after'`).
 
 input tables:
 
-- `firearea.nitrate`: Standardized nitrate observations by site and date.
-- `firearea.discharge`: Discharge flow volume and quartile per site and date.
-- `firearea.ranges_agg`: Aggregated fire events per site, with timing and
-  spatial metrics.
+- `firearea.nitrate`: Standardized nitrate observations by site and
+  date.
+- `firearea.discharge`: Discharge flow volume and quartile per site and
+  date.
+- `firearea.ranges_agg`: Aggregated fire events per site, with timing
+  and spatial metrics.
 
 output columns:
 
-| Column Name       | Description                                         |
-|-------------------|-----------------------------------------------------|
-| `usgs_site`       | Watershed site identifier                           |
-| `year`            | Year of the fire event group                        |
-| `start_date`      | Start of fire window                                |
-| `end_date`        | End of fire window                                  |
-| `segment`         | `'before'` or `'after'` the fire event              |
-| `date`            | Observation date                                    |
-| `value_std`       | Standardized nitrate concentration (mg/L as N)      |
-| `"Flow"`          | Discharge volume (cfs)                              |
-| `quartile`        | Flow quartile category (1–4)                        |
-| `before_count`    | Total records in pre-fire window                    |
-| `after_count`     | Total records in post-fire window                   |
+| Column Name    | Description                                    |
+|----------------|------------------------------------------------|
+| `usgs_site`    | Watershed site identifier                      |
+| `year`         | Year of the fire event group                   |
+| `start_date`   | Start of fire window                           |
+| `end_date`     | End of fire window                             |
+| `segment`      | `'before'` or `'after'` the fire event         |
+| `date`         | Observation date                               |
+| `value_std`    | Standardized nitrate concentration (mg/L as N) |
+| `"Flow"`       | Discharge volume (cfs)                         |
+| `quartile`     | Flow quartile category (1–4)                   |
+| `before_count` | Total records in pre-fire window               |
+| `after_count`  | Total records in post-fire window              |
 
-```{sql}
-#| eval: FALSE
-#| label: nitrate_q_before_upper_quartiles_max_fire
-
+``` sql
 \COPY (
 WITH fire_with_data AS (
   SELECT
@@ -857,5 +826,4 @@ ORDER BY
   nitrate.date
 ) TO '/tmp/nitrate_discharge_before_quartiles_234_max_fire.csv' WITH CSV HEADER
 ;
-
 ```

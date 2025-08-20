@@ -1,26 +1,22 @@
----
-format: gfm
-engine: knitr
----
+
 
 ## overview
 
 Queries for transforming (as needed) and extracting wildfire data.
 
-Queries generate either a view, temporary table, or export. Views should be
-reconstructed as needed based on database updates; of course, temporary tables
-must be constructed prior to each new export. One additional query is partial,
-which is a template for a CTE in subsequent queries.
-
+Queries generate either a view, temporary table, or export. Views should
+be reconstructed as needed based on database updates; of course,
+temporary tables must be constructed prior to each new export. One
+additional query is partial, which is a template for a CTE in subsequent
+queries.
 
 ## view: usgs_water_chem_std (std chem)
 
-Generate a view of a standardized form of the USGS water-chemistry data that
-will provide a starting point for generating summaries of particular analytes.
+Generate a view of a standardized form of the USGS water-chemistry data
+that will provide a starting point for generating summaries of
+particular analytes.
 
-```{sql}
-#| eval: FALSE
-
+``` sql
 DROP VIEW IF EXISTS firearea.usgs_water_chem_std ;
 
 CREATE VIEW firearea.usgs_water_chem_std AS
@@ -90,18 +86,14 @@ WHERE
     SELECT usgs_site FROM firearea.ecoregion_catchments
   )
 ;
-
 ```
-
 
 ## table: discharge (aggregated discharge)
 
-A view of discharge that reflects the combined records of data from USGS and
-otherwise sites.
+A view of discharge that reflects the combined records of data from USGS
+and otherwise sites.
 
-```{sql}
-#| eval: FALSE
-
+``` sql
 DROP TABLE IF EXISTS firearea.discharge ;
 
 CREATE TABLE firearea.discharge AS
@@ -182,27 +174,23 @@ END $$;
 
 
 CALL firearea.update_discharge_quartiles();
-
 ```
-
 
 ## view: ranges (individual fires)
 
-A view of the interval (`daterange`) between sites * fires. This view allows us
-to identify the timing of a separate event (water chemistry sample, discharge
-value, etc.) relative to a fire within the catchment. Intervals reflect the
-temporal period between a fire and the most recent fire (pre) and the next
-occurring fire (post) within that catchment.
+A view of the interval (`daterange`) between sites \* fires. This view
+allows us to identify the timing of a separate event (water chemistry
+sample, discharge value, etc.) relative to a fire within the catchment.
+Intervals reflect the temporal period between a fire and the most recent
+fire (pre) and the next occurring fire (post) within that catchment.
 
-A note about quality: the construction of this table, and if and how it affects
-subsequent queries in terms of inclusivity has not been evaluated thoroughly.
-That is, for example, how a water-chemistry sample is categorized (pre, post)
-if it were to fall on the day of the fire has not been tested.
+A note about quality: the construction of this table, and if and how it
+affects subsequent queries in terms of inclusivity has not been
+evaluated thoroughly. That is, for example, how a water-chemistry sample
+is categorized (pre, post) if it were to fall on the day of the fire has
+not been tested.
 
-```{sql}
-#| eval: FALSE
-#| label: ranges
-
+``` sql
 DROP VIEW IF EXISTS firearea.ranges ;
 
 CREATE VIEW firearea.ranges AS 
@@ -292,35 +280,32 @@ JOIN post_fire_cte ON (
   AND pre_fire_cte.event = post_fire_cte.event
 )
 ;
-
 ```
 
 ## m.view ranges (ranges_agg (aggregated fires))
 
-Whereas the [## individual fires] ranges calculates range statistics based on
-all site and all fires, [## summer fires] addresses some pre-processing and
-calculates range statistics separately on summer and non-summer fires.
-Pre-processing includes filtering fires smaller than a certain percent of the
-catchment burned (0.00). Summer fires are defined as fires occurring DOY 110
-through 250. For summer fires, the interval between the previous fire and
-latest fire are from the earliest fire in the summer period and latest fire in
-the summer period.
+Whereas the \[## individual fires\] ranges calculates range statistics
+based on all site and all fires, \[## summer fires\] addresses some
+pre-processing and calculates range statistics separately on summer and
+non-summer fires. Pre-processing includes filtering fires smaller than a
+certain percent of the catchment burned (0.00). Summer fires are defined
+as fires occurring DOY 110 through 250. For summer fires, the interval
+between the previous fire and latest fire are from the earliest fire in
+the summer period and latest fire in the summer period.
 
-A view of the interval (`daterange`) between sites * fires. This view allows us
-to identify the timing of a separate event (water chemistry sample, discharge
-value, etc.) relative to a fire within the catchment. Intervals reflect the
-temporal period between a fire and the most recent fire (pre) and the next
-occurring fire (post) within that catchment.
+A view of the interval (`daterange`) between sites \* fires. This view
+allows us to identify the timing of a separate event (water chemistry
+sample, discharge value, etc.) relative to a fire within the catchment.
+Intervals reflect the temporal period between a fire and the most recent
+fire (pre) and the next occurring fire (post) within that catchment.
 
-A note about quality: the construction of this table, and if and how it affects
-subsequent queries in terms of inclusivity has not been evaluated thoroughly.
-That is, for example, how a water-chemistry sample is categorized (pre, post)
-if it were to fall on the day of the fire has not been tested.
+A note about quality: the construction of this table, and if and how it
+affects subsequent queries in terms of inclusivity has not been
+evaluated thoroughly. That is, for example, how a water-chemistry sample
+is categorized (pre, post) if it were to fall on the day of the fire has
+not been tested.
 
-```{sql}
-#| eval: FALSE
-#| label: ranges_agg
-
+``` sql
 -- REFRESH MATERIALIZED VIEW firearea.ranges_agg;
 
 DROP VIEW IF EXISTS firearea.ranges_agg CASCADE ;
@@ -502,18 +487,13 @@ JOIN
 -- add indexes for better performance
 CREATE INDEX idx_ranges_agg_usgs_site ON firearea.ranges_agg (usgs_site);
 CREATE INDEX idx_ranges_agg_dates ON firearea.ranges_agg (start_date, end_date);
-
 ```
-
 
 ## view: dd_area_stats (discharge & areal stats)
 
 A view of statistics around discharge, and catchment and fire areas.
 
-```{sql}
-#| eval: FALSE
-#| label: dd_area_stats
-
+``` sql
 DROP VIEW IF EXISTS firearea.dd_area_stats ;
 
 CREATE VIEW firearea.dd_area_stats AS 
@@ -605,21 +585,18 @@ ORDER BY
   dd_stats.usgs_site,
   dd_stats.event_id
 ;
-
 ```
-
 
 ## partial: chemistry with ranges
 
-Designate water-chemistry measurements relative to fires (pre, post). This is a
-template, the example here being for standardized nitrate data, that forms the
-chem_ranges CTE of the data summary for a given analyte. This template must be
-modified to reflect the analyte of interest then can be called independently
-or, more usefully, as part of generating summary statistics.
+Designate water-chemistry measurements relative to fires (pre, post).
+This is a template, the example here being for standardized nitrate
+data, that forms the chem_ranges CTE of the data summary for a given
+analyte. This template must be modified to reflect the analyte of
+interest then can be called independently or, more usefully, as part of
+generating summary statistics.
 
-```{sql}
-#| eval: FALSE
-
+``` sql
 SELECT
   nitrate.usgs_site,
   nitrate.date,
@@ -653,19 +630,16 @@ ORDER BY
   nitrate.usgs_site,
   nitrate.date
 ;
-
 ```
 
 # export: ecoregions
 
 Join (spatially) usgs_site to firearea.ecoregions table. Note that these
-geometries are as 4326. Chaning to a projected CRS (e.g., 5070) does generate
-differet (and probably more accurate) results but the differences are trivial.
+geometries are as 4326. Chaning to a projected CRS (e.g., 5070) does
+generate differet (and probably more accurate) results but the
+differences are trivial.
 
-```{sql}
-#| eval: FALSE
-#| label: ecoregions
-
+``` sql
 \COPY (
 SELECT
   ecoregion_catchments.usgs_site,
@@ -691,21 +665,16 @@ JOIN firearea.ecoregions
   ON ST_Intersects(ecoregion_catchments.geometry, ecoregions.wkb_geometry)
 ) to '/tmp/study_sites_ecoregions.csv' WITH CSV HEADER
 ;
-
 ```
-
 
 # ammonium
 
 ## temp: combined ammonium
 
-Create a temporary table of standardized (forms, units) that
-reflects data from both the USGS and non-USGS data sources.
+Create a temporary table of standardized (forms, units) that reflects
+data from both the USGS and non-USGS data sources.
 
-```{sql}
-#| eval: FALSE
-#| label: ammonium
-
+``` sql
 DROP TABLE IF EXISTS ammonium ;
 
 CREATE TEMPORARY TABLE ammonium AS 
@@ -730,21 +699,18 @@ SELECT
 FROM firearea.non_usgs_water_chem
 WHERE analyte ~~* '%nh4%'
 ;
-
 ```
-
 
 ## temp: ammonium with summary statistics
 
-Generate a temporary table of summary statistics surrounding ammonium data
-availability (number of samples pre, post fire; time (days) since previous
-fire; etc.).
+Generate a temporary table of summary statistics surrounding ammonium
+data availability (number of samples pre, post fire; time (days) since
+previous fire; etc.).
 
-The `chem_ranges` CTE uses the template detailed in `chemistry with ranges`.
+The `chem_ranges` CTE uses the template detailed in
+`chemistry with ranges`.
 
-```{sql}
-#| eval: FALSE
-
+``` sql
 DROP TABLE IF EXISTS ammonium_summary ;
 
 CREATE TEMPORARY TABLE ammonium_summary AS 
@@ -828,17 +794,13 @@ LEFT JOIN (
     AND adjacent_fire.event = pre_fire.pre
 )
 ;
-
 ```
 
 ## export: ammonium q events
 
 Combine raw ammonium with Q and fire events.
 
-```{sql}
-#| eval: FALSE
-#| label: ammonium_export
-
+``` sql
 \COPY (
 SELECT
   discharge.*,
@@ -867,18 +829,14 @@ LEFT JOIN
 )
 ) TO '/tmp/ammonium_q.csv' with DELIMITER ',' csv header
 ;
-
 ```
-
 
 ## export: ammonium summary and dd_area_stats
 
 Combine summary statistics with dd_area_stats for a more comprehensive
 summary.
 
-```{sql}
-#| eval: FALSE
-
+``` sql
 \COPY (
 SELECT
   dd_area_stats.*,
@@ -893,21 +851,16 @@ dd_area_stats ON (
 )
 ) TO '/tmp/ammonium_dd_area.csv' WITH DELIMITER ',' CSV HEADER
 ;
-
 ```
-
 
 # specific conductance
 
 ## temp: combined specific conductance
 
-Create a temporary table of standardized (forms, units) that reflects data
-from both the USGS and non-USGS data sources.
+Create a temporary table of standardized (forms, units) that reflects
+data from both the USGS and non-USGS data sources.
 
-```{sql}
-#| eval: FALSE
-#| label: specific_conductance
-
+``` sql
 DROP TABLE IF EXISTS specific_conductance ;
 
 CREATE TEMPORARY TABLE specific_conductance AS 
@@ -937,20 +890,18 @@ GROUP BY
   usgs_site,
   date
 ;
-
 ```
 
 ## temp: specific conductance with summary statistics
 
 Generate a temporary table of summary statistics surrounding specific
-conductance data availability (number of samples pre, post fire; time (days)
-since previous fire; etc.).
+conductance data availability (number of samples pre, post fire; time
+(days) since previous fire; etc.).
 
-The `chem_ranges` CTE uses the template detailed in `chemistry with ranges`.
+The `chem_ranges` CTE uses the template detailed in
+`chemistry with ranges`.
 
-```{sql}
-#| eval: FALSE
-
+``` sql
 DROP TABLE IF EXISTS specific_cond_summary ;
 
 CREATE TEMPORARY TABLE specific_cond_summary AS 
@@ -1032,17 +983,13 @@ LEFT JOIN (
     AND adjacent_fire.event = pre_fire.pre
 )
 ;
-
 ```
 
 ## export: specific conductance q events
 
 Combine raw specific conductance with Q and fire events.
 
-```{sql}
-#| eval: FALSE
-#| label: specific_conductance_export
-
+``` sql
 \COPY (
 SELECT
   discharge.*,
@@ -1071,18 +1018,14 @@ LEFT JOIN
 )
 ) TO '/tmp/specific_conductance_q.csv' with DELIMITER ',' csv header
 ;
-
 ```
-
 
 ## export: specific conductance summary and dd_area_stats
 
 Combine summary statistics with dd_area_stats for a more comprehensive
 summary.
 
-```{sql}
-#| eval: FALSE
-
+``` sql
 \COPY (
 SELECT
   dd_area_stats.*,
@@ -1097,42 +1040,54 @@ dd_area_stats ON (
 )
 ) TO '/tmp/specific_conductance_dd_area.csv' WITH DELIMITER ',' CSV HEADER
 ;
-
 ```
 
 ## catchment spatial overlap
 
-Calculates pairwise spatial overlap percentages and areas between all study
-catchments, including both USGS and non-USGS research network sites. This
-analysis identifies nested and overlapping watersheds within the study domain.
+Calculates pairwise spatial overlap percentages and areas between all
+study catchments, including both USGS and non-USGS research network
+sites. This analysis identifies nested and overlapping watersheds within
+the study domain.
 
 ### input data sources
+
 - **`firearea.catchments`** - USGS catchment geometries
-- **`firearea.non_usgs_catchments`** - Non-USGS research network catchment geometries (NEON, SBC-LTER)
-- **`firearea.ecoregion_catchments`** - Study site definitions (filters USGS catchments to study domain)
+- **`firearea.non_usgs_catchments`** - Non-USGS research network
+  catchment geometries (NEON, SBC-LTER)
+- **`firearea.ecoregion_catchments`** - Study site definitions (filters
+  USGS catchments to study domain)
 
 ### processing logic
 
 #### 1. catchment integration
+
 - **UNION operation** combines USGS and non-USGS catchment geometries
-- **Filtering**: USGS catchments restricted to study sites in `ecoregion_catchments`
+- **Filtering**: USGS catchments restricted to study sites in
+  `ecoregion_catchments`
 - **Result**: Unified catchment dataset across all monitoring networks
 
 #### 2. spatial intersection analysis
-- **Pairwise comparison**: Each catchment compared against every other catchment
-- **Self-exclusion**: Uses `c1.usgs_site < c2.usgs_site` to avoid self-comparison and duplicate pairs
-- **Intersection detection**: `ST_Intersects()` identifies overlapping catchment pairs
-- **Area calculations**: Uses spheroidal geometry (`ST_Area(geometry, TRUE)`) for accuracy
+
+- **Pairwise comparison**: Each catchment compared against every other
+  catchment
+- **Self-exclusion**: Uses `c1.usgs_site < c2.usgs_site` to avoid
+  self-comparison and duplicate pairs
+- **Intersection detection**: `ST_Intersects()` identifies overlapping
+  catchment pairs
+- **Area calculations**: Uses spheroidal geometry
+  (`ST_Area(geometry, TRUE)`) for accuracy
 
 #### 3. overlap metrics calculation
-- **Bidirectional percentages**: Calculates what percent of each catchment overlaps with the other
+
+- **Bidirectional percentages**: Calculates what percent of each
+  catchment overlaps with the other
 - **Actual overlap area**: Intersection area in square kilometers
 - **Zero exclusion**: Filters out pairs with no actual spatial overlap
 
 ### output fields
 
 | Field | Description | Units/Format |
-|-------|-------------|--------------|
+|----|----|----|
 | `site_1` | Primary catchment identifier | USGS site ID |
 | `site_2` | Comparison catchment identifier | USGS site ID |
 | `percent_overlap_site1` | Percent of site_1 area overlapped by site_2 | Percentage (2 decimal places) |
@@ -1140,30 +1095,37 @@ analysis identifies nested and overlapping watersheds within the study domain.
 | `overlap_area_km2` | Actual overlapping area | Square kilometers (2 decimal places) |
 
 ### data quality controls
-- **Non-zero overlap requirement**: `ST_Area(ST_Intersection()) > 0` excludes trivial/edge-touching cases
-- **Spheroidal calculations**: Accurate area measurements using Earth's curvature
-- **NULLIF protection**: Prevents division by zero errors in percentage calculations
-- **Precision control**: Results rounded to 2 decimal places for consistency
+
+- **Non-zero overlap requirement**: `ST_Area(ST_Intersection()) > 0`
+  excludes trivial/edge-touching cases
+- **Spheroidal calculations**: Accurate area measurements using Earth’s
+  curvature
+- **NULLIF protection**: Prevents division by zero errors in percentage
+  calculations
+- **Precision control**: Results rounded to 2 decimal places for
+  consistency
 
 ### output characteristics
+
 - **File**: `/tmp/catchment_overlaps.csv`
 - **Format**: CSV with header row
 - **Record scope**: Only catchment pairs with meaningful spatial overlap
 - **Ordering**: Alphabetical by primary site, then comparison site
 
 ### common overlap patterns
-- **Nested catchments**: `percent_overlap_site2 = 100.00` indicates site_2 completely within site_1
-- **Partial overlaps**: Both percentages < 100% indicate intersecting but not nested watersheds
-- **Small overlap areas**: May indicate catchments sharing drainage boundaries or measurement uncertainties
 
-This analysis supports understanding of spatial relationships between monitoring
-sites and helps inform appropriate statistical approaches for multi-site
-comparisons
+- **Nested catchments**: `percent_overlap_site2 = 100.00` indicates
+  site_2 completely within site_1
+- **Partial overlaps**: Both percentages \< 100% indicate intersecting
+  but not nested watersheds
+- **Small overlap areas**: May indicate catchments sharing drainage
+  boundaries or measurement uncertainties
 
+This analysis supports understanding of spatial relationships between
+monitoring sites and helps inform appropriate statistical approaches for
+multi-site comparisons
 
-```{sql}
-#| eval: FALSE
-
+``` sql
 -- Calculate percent spatial overlap between all catchment pairs (including non-USGS)
 \COPY (
 WITH combined_catchments AS (
@@ -1196,5 +1158,4 @@ WHERE ST_Intersects(c1.geometry, c2.geometry)
   AND ST_Area(ST_Intersection(c1.geometry, c2.geometry), TRUE) > 0
 ORDER BY c1.usgs_site, c2.usgs_site
 ) TO '/tmp/catchment_overlaps.csv' WITH CSV HEADER;
-
 ```
