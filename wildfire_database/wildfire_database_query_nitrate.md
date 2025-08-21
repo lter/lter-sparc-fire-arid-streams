@@ -160,289 +160,41 @@ LEFT JOIN (
 ;
 ```
 
-## view: nitrate_counts (summer)
-
-Generate a view of summary statistics surrounding nitrate data
-availability (number of samples pre, post fire).
-
-The `num_pre_fire` and `num_post_fire` reflect the number of nitrate
-observations in the period prior to and after fire or aggregated fires
-of interest; not to be confused with the number of observations between
-a fire or aggregated fires and interest and the next fire as is the case
-for view::nitrate_ranges.
-
-The number of nitrate observations reflects observations for which there
-is also a discharge measurement.
+## view: analyte_counts (summer)
 
 ``` sql
-DROP VIEW IF EXISTS firearea.nitrate_counts ;
-
-CREATE VIEW firearea.nitrate_counts AS 
-WITH nitrate_discharge AS (
-  SELECT
-    nitrate.usgs_site,
-    nitrate.date
-  FROM firearea.nitrate
-  JOIN firearea.discharge ON (
-    discharge."Date" = nitrate.date
-    AND discharge.usgs_site = nitrate.usgs_site
-  )
-)
-SELECT
-  nitrate_discharge.usgs_site,
-  ranges_agg.events,
-  ranges_agg.start_date,
-  ranges_agg.end_date,
-  SUM(CASE WHEN nitrate_discharge.date < ranges_agg.start_date THEN 1 ELSE 0 END) AS count_before_start,
-  SUM(CASE WHEN nitrate_discharge.date > ranges_agg.end_date THEN 1 ELSE 0 END) AS count_after_end
-FROM firearea.ranges_agg
-JOIN nitrate_discharge ON (ranges_agg.usgs_site = nitrate_discharge.usgs_site)
-GROUP BY
-  nitrate_discharge.usgs_site,
-  ranges_agg.start_date,
-  ranges_agg.end_date,
-  ranges_agg.events
-;
+SELECT firearea.create_analyte_counts_view('nitrate');
 ```
 
-## m.view: nitrate largest fire
-
-purpose:
-
-This materialized view identifies the largest wildfire event per
-watershed (`usgs_site`) that meets strict pre- and post-fire data
-quality criteria for water quality analysis. It enables fast, repeatable
-queries for analyzing wildfire impacts on nitrate and discharge
-patterns.
-
-use case:
-
-- Supports analysis of nitrate and streamflow responses to wildfire.
-- Used to restrict focus to watersheds with both extensive monitoring
-  coverage and a single, largest impactful fire.
-- Reused in downstream workflows for filtering, reporting, or dashboard
-  visualizations.
-
-logic summary:
-
-1.  Join nitrate and discharge records by site and date.
-2.  Match those records to fire windows from `ranges_agg`.
-3.  Apply Data Sufficiency Filters:
-
-- Must have nitrate + discharge data in the 3 years before and after
-  each fire.
-- Must include observations in flow quartiles 2, 3, and 4 in both
-  windows.
-
-4.  Group results by fire event (site, year, start/end date).
-5.  Select only the largest valid fire per watershed, ranked by
-    `cum_fire_area`.
-
-fields included:
-
-| Column Name | Description |
-|----|----|
-| `usgs_site` | Watershed site identifier |
-| `year` | Fire year (based on ignition date) |
-| `start_date` | Start date of fire event group |
-| `end_date` | End date of fire event group |
-| `cum_fire_area` | Cumulative fire-affected area (km²) for the grouped event |
-| `before_count` | Count of nitrate observations in 3-year window before fire |
-| `after_count` | Count of nitrate observations in 3-year window after fire |
-| `bq2`, `bq3`, `bq4` | Count of pre-fire flow quartile 2, 3, and 4 observations |
-| `aq2`, `aq3`, `aq4` | Count of post-fire flow quartile 2, 3, and 4 observations |
-
-technical notes:
-
-- Source tables: `firearea.nitrate`, `firearea.discharge`,
-  `firearea.ranges_agg`
-- Computation-intensive: uses joins, date filters, aggregation, and
-  conditional `HAVING` clauses.
-- Materialized to avoid recomputation and accelerate downstream query
-  performance.
-- Refresh as needed to reflect updates to nitrate, discharge, or fire
-  data.
+## m.view: largest fire
 
 ``` sql
-REFRESH MATERIALIZED VIEW firearea.largest_nitrate_valid_fire_per_site ;
-
-CREATE MATERIALIZED VIEW firearea.largest_nitrate_valid_fire_per_site AS
-WITH fire_with_data AS (
-  SELECT
-    firearea.nitrate.usgs_site,
-    firearea.ranges_agg.year,
-    firearea.ranges_agg.events,
-    firearea.ranges_agg.start_date,
-    firearea.ranges_agg.end_date,
-    firearea.ranges_agg.cum_fire_area,
-    COUNT(CASE WHEN firearea.nitrate.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years')
-               AND firearea.nitrate.date < firearea.ranges_agg.start_date THEN 1 END) AS before_count,
-    COUNT(CASE WHEN firearea.nitrate.date > firearea.ranges_agg.end_date
-               AND firearea.nitrate.date <= (firearea.ranges_agg.end_date + INTERVAL '3 years') THEN 1 END) AS after_count,
-    SUM(CASE WHEN firearea.nitrate.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years')
-              AND firearea.nitrate.date < firearea.ranges_agg.start_date AND firearea.discharge.quartile = 2 THEN 1 ELSE 0 END) AS bq2,
-    SUM(CASE WHEN firearea.nitrate.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years')
-              AND firearea.nitrate.date < firearea.ranges_agg.start_date AND firearea.discharge.quartile = 3 THEN 1 ELSE 0 END) AS bq3,
-    SUM(CASE WHEN firearea.nitrate.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years')
-              AND firearea.nitrate.date < firearea.ranges_agg.start_date AND firearea.discharge.quartile = 4 THEN 1 ELSE 0 END) AS bq4,
-    SUM(CASE WHEN firearea.nitrate.date > firearea.ranges_agg.end_date
-              AND firearea.nitrate.date <= (firearea.ranges_agg.end_date + INTERVAL '3 years') AND firearea.discharge.quartile = 2 THEN 1 ELSE 0 END) AS aq2,
-    SUM(CASE WHEN firearea.nitrate.date > firearea.ranges_agg.end_date
-              AND firearea.nitrate.date <= (firearea.ranges_agg.end_date + INTERVAL '3 years') AND firearea.discharge.quartile = 3 THEN 1 ELSE 0 END) AS aq3,
-    SUM(CASE WHEN firearea.nitrate.date > firearea.ranges_agg.end_date
-              AND firearea.nitrate.date <= (firearea.ranges_agg.end_date + INTERVAL '3 years') AND firearea.discharge.quartile = 4 THEN 1 ELSE 0 END) AS aq4
-  FROM firearea.nitrate
-  JOIN firearea.discharge
-    ON firearea.nitrate.usgs_site = firearea.discharge.usgs_site
-    AND firearea.nitrate.date = firearea.discharge."Date"
-  JOIN firearea.ranges_agg
-    ON firearea.nitrate.usgs_site = firearea.ranges_agg.usgs_site
-  WHERE firearea.nitrate.value_std IS NOT NULL
-    AND firearea.discharge."Flow" IS NOT NULL
-    AND firearea.discharge.quartile IS NOT NULL
-  GROUP BY
-    firearea.nitrate.usgs_site,
-    firearea.ranges_agg.year,
-    firearea.ranges_agg.events,
-    firearea.ranges_agg.start_date,
-    firearea.ranges_agg.end_date,
-    firearea.ranges_agg.cum_fire_area
-  HAVING
-    SUM(CASE WHEN firearea.nitrate.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years') AND firearea.nitrate.date < firearea.ranges_agg.start_date AND firearea.discharge.quartile = 2 THEN 1 ELSE 0 END) > 0 AND
-    SUM(CASE WHEN firearea.nitrate.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years') AND firearea.nitrate.date < firearea.ranges_agg.start_date AND firearea.discharge.quartile = 3 THEN 1 ELSE 0 END) > 0 AND
-    SUM(CASE WHEN firearea.nitrate.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years') AND firearea.nitrate.date < firearea.ranges_agg.start_date AND firearea.discharge.quartile = 4 THEN 1 ELSE 0 END) > 0 AND
-    SUM(CASE WHEN firearea.nitrate.date > firearea.ranges_agg.end_date AND firearea.nitrate.date <= (firearea.ranges_agg.end_date + INTERVAL '3 years') AND firearea.discharge.quartile = 2 THEN 1 ELSE 0 END) > 0 AND
-    SUM(CASE WHEN firearea.nitrate.date > firearea.ranges_agg.end_date AND firearea.nitrate.date <= (firearea.ranges_agg.end_date + INTERVAL '3 years') AND firearea.discharge.quartile = 3 THEN 1 ELSE 0 END) > 0 AND
-    SUM(CASE WHEN firearea.nitrate.date > firearea.ranges_agg.end_date AND firearea.nitrate.date <= (firearea.ranges_agg.end_date + INTERVAL '3 years') AND firearea.discharge.quartile = 4 THEN 1 ELSE 0 END) > 0
-)
-SELECT DISTINCT ON (usgs_site) *
-FROM fire_with_data
-ORDER BY usgs_site, cum_fire_area DESC
-;
-
-CREATE INDEX idx_nitrate_fire_usgs_site ON firearea.largest_nitrate_valid_fire_per_site(usgs_site) ;
-CREATE INDEX idx_nitrate_fire_start_date ON firearea.largest_nitrate_valid_fire_per_site(start_date) ;
+SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('nitrate');
+-- REFRESH MATERIALIZED VIEW firearea.largest_nitrate_valid_fire_per_site ;
 ```
 
-## export: summary all nitrate sites
+## export: summary all sites
 
-output columns:
-
-| Column              | Description                                           |
-|---------------------|-------------------------------------------------------|
-| usgs_site           | Catchment/site identifier                             |
-| year                | Fire year                                             |
-| start_date          | Start date of fire period                             |
-| end_date            | End date of fire period                               |
-| previous_end_date   | End date of previous fire period                      |
-| next_start_date     | Start date of next fire period                        |
-| days_since          | Days since previous fire                              |
-| days_until          | Days until next fire                                  |
-| events              | Array of event IDs in this fire period                |
-| cum_fire_area       | Cumulative burned area (km²) for the fire period      |
-| catch_area          | Catchment area (km²)                                  |
-| cum_per_cent_burned | Cumulative percent of catchment burned                |
-| all_fire_area       | Total burned area (km²) in catchment through end_date |
-| all_per_cent_burned | Percent of total catchment burned through end_date    |
-| latitude            | Catchment centroid latitude                           |
-| longitude           | Catchment centroid longitude                          |
-| count_before_start  | Number of nitrate observations before fire window     |
-| count_after_end     | Number of nitrate observations after fire window      |
+See full metadata \[here\]. Basically, though, catchment and summary
+statistics for all sites associated with this analyte.
 
 ``` sql
-\COPY (
-SELECT
-  ranges_agg.*,
-  nitrate_counts.count_before_start,
-  nitrate_counts.count_after_end
-FROM firearea.ranges_agg 
-JOIN firearea.nitrate_counts ON 
-  ranges_agg.usgs_site = nitrate_counts.usgs_site AND
-  (
-    ARRAY(SELECT UNNEST(ranges_agg.events) ORDER BY 1) = 
-    ARRAY(SELECT UNNEST(nitrate_counts.events) ORDER BY 1)
-  )
-ORDER BY
-  ranges_agg.usgs_site,
-  ranges_agg.start_date
-) TO '/tmp/nitrate_summary.csv' WITH CSV HEADER
-;
+SELECT firearea.export_analyte_summary_all_sites('nitrate');
 ```
 
-## export: summary largest fire nitrate sites
+## export: summary largest fire sites
 
-purpose:
-
-This query retrieves comprehensive fire event information for each
-watershed (`usgs_site`) based on the largest wildfire that also meets
-nitrate-discharge data sufficiency criteria. It ensures that only those
-events selected for water quality analysis are described in detail using
-the `ranges_agg` view.
-
-context:
-
-- The `ranges_agg` view aggregates fires by watershed and year,
-  summarizing burn area, duration, spatial extent, and event IDs.
-- The companion materialized view
-  `firearea.largest_nitrate_valid_fire_per_site` filters these to a
-  single, largest valid fire per watershed with adequate nitrate and
-  discharge monitoring.
-- This query joins the two views on `usgs_site`, `start_date`, and
-  `end_date` to return only the selected fire events.
-
-query logic:
-
-1.  Pull all rows from `firearea.ranges_agg`, which includes fire
-    grouping metadata per site.
-2.  Filter the results to only the fire windows (start + end dates)
-    identified in the nitrate validation materialized view.
-3.  Return the entire record for each matched fire.
-
-input tables:
-
-- `firearea.ranges_agg`: View of grouped and summarized fire events by
-  site.
-- `firearea.largest_nitrate_valid_fire_per_site`: Materialized view of
-  sites with validated nitrate+discharge data coverage.
-
-output columns:
-
-| Column              | Description                                           |
-|---------------------|-------------------------------------------------------|
-| usgs_site           | Catchment/site identifier                             |
-| year                | Fire year                                             |
-| start_date          | Start date of fire period                             |
-| end_date            | End date of fire period                               |
-| previous_end_date   | End date of previous fire period                      |
-| next_start_date     | Start date of next fire period                        |
-| days_since          | Days since previous fire                              |
-| days_until          | Days until next fire                                  |
-| events              | Array of event IDs in this fire period                |
-| cum_fire_area       | Cumulative burned area (km²) for the fire period      |
-| catch_area          | Catchment area (km²)                                  |
-| cum_per_cent_burned | Cumulative percent of catchment burned                |
-| all_fire_area       | Total burned area (km²) in catchment through end_date |
-| all_per_cent_burned | Percent of total catchment burned through end_date    |
-| latitude            | Catchment centroid latitude                           |
-| longitude           | Catchment centroid longitude                          |
+See full metadata \[here\]. Basically, though, catchment and summary
+statistics for all sites associated with this analyte for the largest
+fire.
 
 ``` sql
-\COPY (
-SELECT
-  ranges_agg.*
-FROM firearea.ranges_agg
-JOIN firearea.largest_nitrate_valid_fire_per_site
-  ON ranges_agg.usgs_site   = largest_nitrate_valid_fire_per_site.usgs_site
-  AND ranges_agg.start_date = largest_nitrate_valid_fire_per_site.start_date
-  AND ranges_agg.end_date   = largest_nitrate_valid_fire_per_site.end_date
-ORDER BY
-  ranges_agg.usgs_site,
-  ranges_agg.start_date
-) TO '/tmp/nitrate_sites_fires.csv' WITH CSV HEADER
-;
+SELECT firearea.export_analyte_largest_fire_sites('nitrate'::TEXT);
 ```
 
 ## export: q+c all
+
+All analyte + discharge observations. Used for testing but not analyses.
 
 ``` sql
 \COPY (
@@ -466,148 +218,35 @@ ORDER BY
 
 synopsis:
 
-This query (`nitrate_q_upper_quartiles`) extracts paired nitrate and
-discharge observations from USGS and non-USGS monitoring sites, focusing
-on the periods before and after fire. It applies **strict filtering** to
-ensure robust statistical analysis:
+This function generates a query (`{analyte}_q_upper_quartiles`) that
+extracts paired analyte and discharge observations from USGS and
+non-USGS monitoring sites focusing on the periods before and after fire.
 
-- **Joins**: Combines standardized nitrate data (`firearea.nitrate`),
-  combined discharge data (`firearea.discharge`), and fire event
-  metadata (`firearea.ranges_agg`).
-- **Time Windows**: Selects observations within 3 years before each fire
-  window’s `start_date` and 3 years after each `end_date`.
-- **Segment Labeling**: Labels each observation as `'before'` or
-  `'after'` the fire window.
-- **Strict Inclusion Criteria**: For each site/fire window, requires:
-  - nitrate–discharge observations in both the 3-year pre- and post-fire
-    windows
-  - nitrate–discharge observations must include flow quartiles 2, 3, and
-    4 in both windows
-- **Output**: Returns all qualifying observations, along with counts and
-  quartile information, suitable for robust C–Q
-  (concentration–discharge) statistical analysis.
-- omits `cum_per_cent_burned` column featured in nitrate c-q queries
-  documented above
+For each site/fire window, requires: - analyte–discharge observations in
+both the 3-year pre- and post-fire windows - analyte–discharge
+observations must include flow quartiles 2, 3, and 4 in both windows
 
-output:
-
-| Column | Description |
-|----|----|
-| `usgs_site` | USGS site ID |
-| `year` | Fire year from `ranges_agg` |
-| `start_date` | Fire window start date |
-| `end_date` | Fire window end date |
-| `segment` | `'before'` or `'after'` fire window, indicating observation timing |
-| `date` | Observation date |
-| `value_std` | Standardized nitrate concentration |
-| `"Flow"` | Daily discharge value |
-| `quartile` | Discharge quartile (1–4) for the observation |
-| `before_count` | Number of valid nitrate–discharge observations in the 3 years before fire |
-| `after_count` | Number of valid nitrate–discharge observations in the 3 years after fire |
+Full metadata \[here\].
 
 The query result is saved as:
-`nitrate_discharge_data_filtered_quartiles_234.csv`
+`{analyte}_discharge_data_filtered_quartiles_234.csv`
 
 ``` sql
-\COPY (
-SELECT
-  nitrate.usgs_site,
-  ranges_agg.year,
-  ranges_agg.start_date,
-  ranges_agg.end_date,
-  CASE
-    WHEN nitrate.date < ranges_agg.start_date THEN 'before'
-    WHEN nitrate.date > ranges_agg.end_date THEN 'after'
-  END AS segment,
-  nitrate.date,
-  nitrate.value_std,
-  discharge."Flow",
-  discharge.quartile,
-  counts.before_count,
-  counts.after_count
-FROM firearea.nitrate
-JOIN firearea.discharge
-  ON nitrate.usgs_site = discharge.usgs_site
-  AND nitrate.date = discharge."Date"
-JOIN firearea.ranges_agg
-  ON nitrate.usgs_site = ranges_agg.usgs_site
-  AND (
-    (nitrate.date >= (ranges_agg.start_date - INTERVAL '3 years') AND nitrate.date < ranges_agg.start_date)
-    OR
-    (nitrate.date > ranges_agg.end_date AND nitrate.date <= (ranges_agg.end_date + INTERVAL '3 years'))
-  )
-JOIN (
-  SELECT
-    nitrate.usgs_site,
-    ranges_agg.year,
-    ranges_agg.start_date,
-    ranges_agg.end_date,
-    COUNT(CASE WHEN nitrate.date >= (ranges_agg.start_date - INTERVAL '3 years') AND nitrate.date < ranges_agg.start_date THEN 1 END) AS before_count,
-    COUNT(CASE WHEN nitrate.date > ranges_agg.end_date AND nitrate.date <= (ranges_agg.end_date + INTERVAL '3 years') THEN 1 END) AS after_count
-  FROM firearea.nitrate
-  JOIN firearea.discharge
-    ON nitrate.usgs_site = discharge.usgs_site
-    AND nitrate.date = discharge."Date"
-  JOIN firearea.ranges_agg
-    ON nitrate.usgs_site = ranges_agg.usgs_site
-  WHERE nitrate.value_std IS NOT NULL
-    AND discharge."Flow" IS NOT NULL
-    AND discharge.quartile IS NOT NULL
-  GROUP BY
-    nitrate.usgs_site,
-    ranges_agg.year,
-    ranges_agg.start_date,
-    ranges_agg.end_date
-  HAVING
-    -- quartile 2, 3, and 4 must be present in before window
-    SUM(CASE WHEN nitrate.date >= (ranges_agg.start_date - INTERVAL '3 years') AND nitrate.date < ranges_agg.start_date AND discharge.quartile = 2 THEN 1 ELSE 0 END) > 0
-    AND
-    SUM(CASE WHEN nitrate.date >= (ranges_agg.start_date - INTERVAL '3 years') AND nitrate.date < ranges_agg.start_date AND discharge.quartile = 3 THEN 1 ELSE 0 END) > 0
-    AND
-    SUM(CASE WHEN nitrate.date >= (ranges_agg.start_date - INTERVAL '3 years') AND nitrate.date < ranges_agg.start_date AND discharge.quartile = 4 THEN 1 ELSE 0 END) > 0
-    -- quartile 2, 3, and 4 must be present in after window
-    AND
-    SUM(CASE WHEN nitrate.date > ranges_agg.end_date AND nitrate.date <= (ranges_agg.end_date + INTERVAL '3 years') AND discharge.quartile = 2 THEN 1 ELSE 0 END) > 0
-    AND
-    SUM(CASE WHEN nitrate.date > ranges_agg.end_date AND nitrate.date <= (ranges_agg.end_date + INTERVAL '3 years') AND discharge.quartile = 3 THEN 1 ELSE 0 END) > 0
-    AND
-    SUM(CASE WHEN nitrate.date > ranges_agg.end_date AND nitrate.date <= (ranges_agg.end_date + INTERVAL '3 years') AND discharge.quartile = 4 THEN 1 ELSE 0 END) > 0
-) AS counts
-  ON nitrate.usgs_site = counts.usgs_site
-  AND ranges_agg.year = counts.year
-  AND ranges_agg.start_date = counts.start_date
-  AND ranges_agg.end_date = counts.end_date
-WHERE nitrate.value_std IS NOT NULL
-  AND discharge."Flow" IS NOT NULL
-  AND discharge.quartile IS NOT NULL
-  AND (
-    (nitrate.date >= (ranges_agg.start_date - INTERVAL '3 years') AND nitrate.date < ranges_agg.start_date)
-    OR
-    (nitrate.date > ranges_agg.end_date AND nitrate.date <= (ranges_agg.end_date + INTERVAL '3 years'))
-  )
-ORDER BY
-  nitrate.usgs_site,
-  ranges_agg.year,
-  segment DESC,
-  nitrate.date
-) TO '/tmp/nitrate_discharge_data_filtered_quartiles_234.csv' WITH CSV HEADER
-;
+SELECT firearea.export_analyte_q_pre_post_quartiles('nitrate'::TEXT);
 ```
 
 ## export: q+c pre-post-quartiles largest fire
 
 purpose:
 
-This query extracts nitrate and discharge observations from USGS
+This query extracts analyte and discharge observations from USGS
 watershed sites surrounding wildfires. It isolates data for only the
 largest valid fire per watershed, where validity is defined by the
 presence of adequate water quality monitoring data before and after the
 fire.
 
-key objectives:
+filtering:
 
-- Assess hydrologic and water quality response (nitrate + flow) to
-  wildfire disturbances.
 - Limit analysis to only the most impactful fire per watershed, based on
   fire area (`cum_fire_area`).
 - ensure fire events are sufficiently monitored, with:
@@ -615,86 +254,11 @@ key objectives:
   - Presence of streamflow across flow quartiles 2, 3, and 4 in both
     windows.
 
-core logic steps:
-
-1.  Join nitrate and discharge records by site and date.
-2.  Filter for valid data windows:
-    - Records must fall within 3 years before or after each fire.
-    - Each fire must have discharge records in quartiles 2–4 in both
-      windows.
-3.  Select valid fires per watershed from `ranges_agg`, ensuring they
-    meet all data coverage criteria.
-4.  Identify the largest fire per `usgs_site` by selecting the maximum
-    `cum_fire_area` among valid events.
-5.  Return nitrate + discharge records for the selected fire per
-    watershed, with an additional field (`segment`) labeling records as
-    “before” or “after” the fire event.
-
-inputs:
-
-- `firearea.nitrate`: View of USGS and non-USGS nitrate observations
-- `firearea.discharge`: Daily streamflow and derived quartile
-  classification
-- `firearea.ranges_agg`: Pre-aggregated wildfire periods and fire area
-  metrics per watershed
-
-outputs:
-
-| column name    | description                                      |
-|----------------|--------------------------------------------------|
-| `usgs_site`    | Site identifier                                  |
-| `year`         | Fire event year                                  |
-| `start_date`   | Fire event start date                            |
-| `end_date`     | Fire event end date                              |
-| `segment`      | Temporal label: `'before'` or `'after'` fire     |
-| `date`         | Nitrate/discharge observation date               |
-| `value_std`    | Standardized nitrate concentration (mg/L as N)   |
-| `"Flow"`       | Discharge (cfs)                                  |
-| `quartile`     | Discharge flow quartile (1–4)                    |
-| `before_count` | Count of observations in 3 years before the fire |
-| `after_count`  | Count of observations in 3 years after the fire  |
-
 The query result is saved as:
-`nitrate_discharge_quartiles_234_max_fire.csv`
+`{analyte}_discharge_quartiles_234_max_fire.csv`
 
 ``` sql
-\COPY (
-SELECT
-  firearea.nitrate.usgs_site,
-  firearea.largest_nitrate_valid_fire_per_site.year,
-  firearea.largest_nitrate_valid_fire_per_site.start_date,
-  firearea.largest_nitrate_valid_fire_per_site.end_date,
-  CASE
-    WHEN firearea.nitrate.date < firearea.largest_nitrate_valid_fire_per_site.start_date THEN 'before'
-    WHEN firearea.nitrate.date > firearea.largest_nitrate_valid_fire_per_site.end_date THEN 'after'
-  END AS segment,
-  firearea.nitrate.date,
-  firearea.nitrate.value_std,
-  firearea.discharge."Flow",
-  firearea.discharge.quartile,
-  firearea.largest_nitrate_valid_fire_per_site.before_count,
-  firearea.largest_nitrate_valid_fire_per_site.after_count
-FROM firearea.nitrate
-JOIN firearea.discharge
-  ON firearea.nitrate.usgs_site = firearea.discharge.usgs_site
-  AND firearea.nitrate.date = firearea.discharge."Date"
-JOIN firearea.largest_nitrate_valid_fire_per_site
-  ON firearea.nitrate.usgs_site = firearea.largest_nitrate_valid_fire_per_site.usgs_site
-WHERE firearea.nitrate.value_std IS NOT NULL
-  AND firearea.discharge."Flow" IS NOT NULL
-  AND firearea.discharge.quartile IS NOT NULL
-  AND (
-    (firearea.nitrate.date >= (firearea.largest_nitrate_valid_fire_per_site.start_date - INTERVAL '3 years') AND firearea.nitrate.date < firearea.largest_nitrate_valid_fire_per_site.start_date)
-    OR
-    (firearea.nitrate.date > firearea.largest_nitrate_valid_fire_per_site.end_date AND firearea.nitrate.date <= (firearea.largest_nitrate_valid_fire_per_site.end_date + INTERVAL '3 years'))
-  )
-ORDER BY
-  nitrate.usgs_site,
-  largest_nitrate_valid_fire_per_site.year,
-  segment DESC,
-  nitrate.date
-) TO '/tmp/nitrate_discharge_quartiles_234_max_fire.csv' WITH CSV HEADER
-;
+SELECT firearea.export_analyte_q_pre_post_quartiles_largest_fire('nitrate'::TEXT);
 ```
 
 ## export: q+c pre-quartiles largest fire
@@ -706,154 +270,9 @@ sites (`usgs_site`) surrounding wildfires. It ensures strong sampling
 coverage before the fire, requiring observations in flow quartiles 2, 3,
 and 4, while placing no constraint on post-fire sampling coverage.
 
-\*\* It is important to note that the results of this query are NOT a
-superset of the results of the query where we are also constraining the
-post-fire values to having representative values from quartiles 2, 3,
-and 4. The reason is that largest fire for a given site is not
-necessarily the same across the two queries.
-
-For example, the largest fire in catchment USGS-06259000 occurred on
-2011-07-22 when both before and after fire windows must contain
-quartiles 2, 3, and 4 but on 2021-08-19 when only the pre-fire data
-needed to reflect values in quartiles 2, 3, and 4. \*\*
-
-Note that we are not using these results for analyses but serves as the
-base for subsequent queries to pull discharge and fire details for the
-sites.
-
-context:
-
-- This approach enables inclusion of fire events where post-fire data
-  may be sparse, but pre-disturbance flow conditions are well
-  characterized.
-- It is ideal for analyses focused on establishing a robust pre-fire
-  baseline for nitrate concentrations.
-
-query logic:
-
-1.  Join `firearea.nitrate`, `firearea.discharge`, and
-    `firearea.ranges_agg`.
-2.  Identify all fire windows per site (`usgs_site`) and evaluate 3-year
-    sampling windows:
-    - Pre-fire window must contain observations in flow quartiles 2, 3,
-      and 4. Post-fire window is included regardless of flow
-      distribution.
-3.  From qualifying fire windows, select the largest fire event per site
-    using `cum_fire_area DESC`.
-4.  Return nitrate–discharge samples from the 3-year pre- and post-fire
-    windows, with labeled segment (`'before'` or `'after'`).
-
-input tables:
-
-- `firearea.nitrate`: Standardized nitrate observations by site and
-  date.
-- `firearea.discharge`: Discharge flow volume and quartile per site and
-  date.
-- `firearea.ranges_agg`: Aggregated fire events per site, with timing
-  and spatial metrics.
-
-output columns:
-
-| Column Name    | Description                                    |
-|----------------|------------------------------------------------|
-| `usgs_site`    | Watershed site identifier                      |
-| `year`         | Year of the fire event group                   |
-| `start_date`   | Start of fire window                           |
-| `end_date`     | End of fire window                             |
-| `segment`      | `'before'` or `'after'` the fire event         |
-| `date`         | Observation date                               |
-| `value_std`    | Standardized nitrate concentration (mg/L as N) |
-| `"Flow"`       | Discharge volume (cfs)                         |
-| `quartile`     | Flow quartile category (1–4)                   |
-| `before_count` | Total records in pre-fire window               |
-| `after_count`  | Total records in post-fire window              |
+The query result is saved as:
+`{analyte}_discharge_before_quartiles_234_max_fire.csv`
 
 ``` sql
-\COPY (
-WITH fire_with_data AS (
-  SELECT
-    firearea.nitrate.usgs_site,
-    firearea.ranges_agg.year,
-    firearea.ranges_agg.start_date,
-    firearea.ranges_agg.end_date,
-    firearea.ranges_agg.cum_fire_area,
-    COUNT(CASE WHEN firearea.nitrate.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years')
-               AND firearea.nitrate.date < firearea.ranges_agg.start_date THEN 1 END) AS before_count,
-    COUNT(CASE WHEN firearea.nitrate.date > firearea.ranges_agg.end_date
-               AND firearea.nitrate.date <= (firearea.ranges_agg.end_date + INTERVAL '3 years') THEN 1 END) AS after_count,
-    SUM(CASE WHEN firearea.nitrate.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years')
-              AND firearea.nitrate.date < firearea.ranges_agg.start_date AND firearea.discharge.quartile = 2 THEN 1 ELSE 0 END) AS bq2,
-    SUM(CASE WHEN firearea.nitrate.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years')
-              AND firearea.nitrate.date < firearea.ranges_agg.start_date AND firearea.discharge.quartile = 3 THEN 1 ELSE 0 END) AS bq3,
-    SUM(CASE WHEN firearea.nitrate.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years')
-              AND firearea.nitrate.date < firearea.ranges_agg.start_date AND firearea.discharge.quartile = 4 THEN 1 ELSE 0 END) AS bq4
-  FROM firearea.nitrate
-  JOIN firearea.discharge
-    ON firearea.nitrate.usgs_site = firearea.discharge.usgs_site
-    AND firearea.nitrate.date = firearea.discharge."Date"
-  JOIN firearea.ranges_agg
-    ON firearea.nitrate.usgs_site = firearea.ranges_agg.usgs_site
-  WHERE firearea.nitrate.value_std IS NOT NULL
-    AND firearea.discharge."Flow" IS NOT NULL
-    AND firearea.discharge.quartile IS NOT NULL
-  GROUP BY
-    firearea.nitrate.usgs_site,
-    firearea.ranges_agg.year,
-    firearea.ranges_agg.start_date,
-    firearea.ranges_agg.end_date,
-    firearea.ranges_agg.cum_fire_area
-  HAVING
-    SUM(CASE WHEN firearea.nitrate.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years')
-              AND firearea.nitrate.date < firearea.ranges_agg.start_date AND firearea.discharge.quartile = 2 THEN 1 ELSE 0 END) > 0 AND
-    SUM(CASE WHEN firearea.nitrate.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years')
-              AND firearea.nitrate.date < firearea.ranges_agg.start_date AND firearea.discharge.quartile = 3 THEN 1 ELSE 0 END) > 0 AND
-    SUM(CASE WHEN firearea.nitrate.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years')
-              AND firearea.nitrate.date < firearea.ranges_agg.start_date AND firearea.discharge.quartile = 4 THEN 1 ELSE 0 END) > 0
-)
-SELECT
-  firearea.nitrate.usgs_site,
-  fire_with_data.year,
-  fire_with_data.start_date,
-  fire_with_data.end_date,
-  CASE
-    WHEN firearea.nitrate.date < fire_with_data.start_date THEN 'before'
-    WHEN firearea.nitrate.date > fire_with_data.end_date THEN 'after'
-  END AS segment,
-  firearea.nitrate.date,
-  firearea.nitrate.value_std,
-  firearea.discharge."Flow",
-  firearea.discharge.quartile,
-  fire_with_data.before_count,
-  fire_with_data.after_count
-FROM firearea.nitrate
-JOIN firearea.discharge
-  ON firearea.nitrate.usgs_site = firearea.discharge.usgs_site
-  AND firearea.nitrate.date = firearea.discharge."Date"
-JOIN (
-  SELECT DISTINCT ON (fire_with_data.usgs_site)
-    fire_with_data.usgs_site,
-    fire_with_data.year,
-    fire_with_data.start_date,
-    fire_with_data.end_date,
-    fire_with_data.before_count,
-    fire_with_data.after_count
-  FROM fire_with_data
-  ORDER BY fire_with_data.usgs_site, fire_with_data.cum_fire_area DESC
-) AS fire_with_data
-  ON firearea.nitrate.usgs_site = fire_with_data.usgs_site
-WHERE firearea.nitrate.value_std IS NOT NULL
-  AND firearea.discharge."Flow" IS NOT NULL
-  AND firearea.discharge.quartile IS NOT NULL
-  AND (
-    (firearea.nitrate.date >= (fire_with_data.start_date - INTERVAL '3 years') AND firearea.nitrate.date < fire_with_data.start_date)
-    OR
-    (firearea.nitrate.date > fire_with_data.end_date AND firearea.nitrate.date <= (fire_with_data.end_date + INTERVAL '3 years'))
-  )
-ORDER BY
-  nitrate.usgs_site,
-  fire_with_data.year,
-  segment DESC,
-  nitrate.date
-) TO '/tmp/nitrate_discharge_before_quartiles_234_max_fire.csv' WITH CSV HEADER
-;
+SELECT firearea.export_analyte_q_pre_quartiles_largest_fire('nitrate'::TEXT);
 ```
