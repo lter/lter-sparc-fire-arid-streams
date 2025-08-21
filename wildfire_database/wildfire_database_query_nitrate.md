@@ -265,7 +265,7 @@ SELECT firearea.export_analyte_q_pre_post_quartiles_largest_fire('nitrate'::TEXT
 
 purpose:
 
-This query retrieves nitrate and discharge records for USGS watershed
+This query retrieves analyte and discharge records for USGS watershed
 sites (`usgs_site`) surrounding wildfires. It ensures strong sampling
 coverage before the fire, requiring observations in flow quartiles 2, 3,
 and 4, while placing no constraint on post-fire sampling coverage.

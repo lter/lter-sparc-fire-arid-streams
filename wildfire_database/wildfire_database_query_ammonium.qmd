@@ -3,11 +3,11 @@ format: gfm
 engine: knitr
 ---
 
-# nitrate
+# ammonium
 
-## view: combined nitrate
+## view: combined ammonium
 
-Create a view of standardized (forms, units) nitrate that reflects data from
+Create a view of standardized (forms, units) ammonium that reflects data from
 from both the USGS and non-USGS data sources.
 
 Convert NEON and SBC data (micromoles) to `mg NO3-N / L`.
@@ -15,21 +15,17 @@ Convert NEON and SBC data (micromoles) to `mg NO3-N / L`.
 ```{sql}
 #| eval: FALSE
 
-DROP VIEW IF EXISTS firearea.nitrate ;
+DROP VIEW IF EXISTS firearea.ammonium ;
 
-CREATE VIEW firearea.nitrate AS 
+CREATE TEMPORARY TABLE ammonium AS 
 SELECT
   usgs_site,
   "ActivityStartDate" AS date,
-  'nitrate' as analyte,
+  'ammonium' as analyte,
   AVG (value_std) AS value_std,
   'mg/L as N' AS units_std
 FROM firearea.usgs_water_chem_std
-WHERE
-  "USGSPCode" IN (
-    '00618',
-    '00631'
-  )
+WHERE "USGSPCode" IN ('00608')
 GROUP BY
   usgs_site,
   date
@@ -38,41 +34,28 @@ SELECT
   usgs_site,
   date,
   analyte,
-  CASE
-    WHEN unit ~~* 'micromoles%' THEN mean * (14.0 / 1000.0)
-    WHEN unit ~~* '%uM%' THEN mean * (14.0 / 1000.0) 
-    ELSE mean
-  END value_std,
-  CASE
-    WHEN unit ~~* 'micromoles%' THEN 'mg/L as N'
-    WHEN unit ~~* '%uM%' THEN 'mg/L as N' 
-    ELSE unit
-  END units_std
+  mean AS value_std,
+  unit AS units_std
 FROM firearea.non_usgs_water_chem
-WHERE
-(
-  analyte ~~* '%nitrate%' OR
-  analyte ~~* '%no3%'
-) AND
-  usgs_site !~~* '%bell%'
+WHERE analyte ~~* '%nh4%'
 ;
 
 ```
 
 
-## view: nitrate_ranges (unused)
+## view: ammonium_ranges (unused)
 
-Generate a view of summary statistics surrounding nitrate data availability
+Generate a view of summary statistics surrounding ammonium data availability
 (number of samples pre, post fire; time (days) since previous fire; etc.).
 
 The `chem_ranges` CTE uses the template detailed in `chemistry with ranges`.
 
-The `num_pre_fire` and `num_post_fire` reflect the number of nitrate
+The `num_pre_fire` and `num_post_fire` reflect the number of ammonium
 observations in the period between the fire of interest and the previous and
 next fires, respectively; not to be confused with the number of observations at
 any point prior to and after the fire of interest, respectively.
 
-The number of nitrate observations reflects observations for which there is
+The number of ammonium observations reflects observations for which there is
 also a discharge measurement.
 
 This query is likely not to be employed as the project has decided to use
@@ -83,44 +66,44 @@ possible future use.
 ```{sql}
 #| eval: FALSE
 
-DROP VIEW IF EXISTS firearea.nitrate_ranges ;
+DROP VIEW IF EXISTS firearea.ammonium_ranges ;
 
-CREATE VIEW firearea.nitrate_ranges AS 
+CREATE VIEW firearea.ammonium_ranges AS 
 WITH chem_ranges AS (
   SELECT
-    nitrate.usgs_site,
-    nitrate.date,
-    nitrate.value_std,
+    ammonium.usgs_site,
+    ammonium.date,
+    ammonium.value_std,
     ranges.event AS pre,
     ranges_post.post
-  FROM firearea.nitrate
+  FROM firearea.ammonium
   JOIN firearea.discharge ON (
-    discharge."Date" = nitrate.date
-    AND discharge.usgs_site = nitrate.usgs_site
+    discharge."Date" = ammonium.date
+    AND discharge.usgs_site = ammonium.usgs_site
   )
   LEFT JOIN firearea.ranges ON (
-    nitrate.usgs_site = ranges.usgs_site
-    -- AND daterange(nitrate.date, nitrate.date, '[]') && ranges.pre
-    AND ranges.pre @> nitrate.date
+    ammonium.usgs_site = ranges.usgs_site
+    -- AND daterange(ammonium.date, ammonium.date, '[]') && ranges.pre
+    AND ranges.pre @> ammonium.date
   )
   LEFT JOIN (
     SELECT
-      nitrate.usgs_site,
-      nitrate.date,
+      ammonium.usgs_site,
+      ammonium.date,
       ranges.event AS post
-    FROM firearea.nitrate 
+    FROM firearea.ammonium 
     LEFT JOIN firearea.ranges ON (
-      nitrate.usgs_site = ranges.usgs_site
-      -- AND daterange(nitrate.date, nitrate.date, '[]') && ranges.post
-      AND ranges.post @> nitrate.date
+      ammonium.usgs_site = ranges.usgs_site
+      -- AND daterange(ammonium.date, ammonium.date, '[]') && ranges.post
+      AND ranges.post @> ammonium.date
     )
   ) AS ranges_post ON (
-    ranges_post.usgs_site = nitrate.usgs_site
-    AND ranges_post.date = nitrate.date
+    ranges_post.usgs_site = ammonium.usgs_site
+    AND ranges_post.date = ammonium.date
   )
   ORDER BY
-    nitrate.usgs_site,
-    nitrate.date
+    ammonium.usgs_site,
+    ammonium.date
 )
 SELECT
   pre_fire.usgs_site,
@@ -173,7 +156,7 @@ LEFT JOIN (
 ```{sql}
 #| eval: FALSE
 
-SELECT firearea.create_analyte_counts_view('nitrate');
+SELECT firearea.create_analyte_counts_view('ammonium');
 
 ```
 
@@ -183,8 +166,8 @@ SELECT firearea.create_analyte_counts_view('nitrate');
 ```{sql}
 #| eval: FALSE
 
-SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('nitrate');
--- REFRESH MATERIALIZED VIEW firearea.largest_nitrate_valid_fire_per_site ;
+SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('ammonium');
+-- REFRESH MATERIALIZED VIEW firearea.largest_ammonium_valid_fire_per_site ;
 
 ```
 
@@ -197,7 +180,7 @@ all sites associated with this analyte.
 ```{sql}
 #| eval: FALSE
 
-SELECT firearea.export_analyte_summary_all_sites('nitrate');
+SELECT firearea.export_analyte_summary_all_sites('ammonium');
 
 ```
 
@@ -210,7 +193,7 @@ for all sites associated with this analyte for the largest fire.
 ```{sql}
 #| eval: FALSE
 
-SELECT firearea.export_analyte_largest_fire_sites('nitrate'::TEXT);
+SELECT firearea.export_analyte_largest_fire_sites('ammonium'::TEXT);
 
 ```
 
@@ -224,18 +207,18 @@ All analyte + discharge observations. Used for testing but not analyses.
 
 \COPY (
 SELECT
-  nitrate.*,
+  ammonium.*,
   discharge."Flow",
   discharge.quartile
-FROM firearea.nitrate
+FROM firearea.ammonium
 JOIN firearea.discharge ON (
-  discharge."Date" = nitrate.date
-  AND discharge.usgs_site = nitrate.usgs_site
+  discharge."Date" = ammonium.date
+  AND discharge.usgs_site = ammonium.usgs_site
 )
 ORDER BY
-  nitrate.usgs_site,
-  nitrate.date
-) TO '/tmp/nitrate_q_chem.csv' WITH CSV HEADER
+  ammonium.usgs_site,
+  ammonium.date
+) TO '/tmp/ammonium_q_chem.csv' WITH CSV HEADER
 ;
 
 ```
@@ -262,7 +245,7 @@ The query result is saved as: `{analyte}_discharge_data_filtered_quartiles_234.c
 ```{sql}
 #| eval: FALSE
 
-SELECT firearea.export_analyte_q_pre_post_quartiles('nitrate'::TEXT);
+SELECT firearea.export_analyte_q_pre_post_quartiles('ammonium'::TEXT);
 
 ```
 
@@ -289,7 +272,7 @@ The query result is saved as: `{analyte}_discharge_quartiles_234_max_fire.csv`
 ```{sql}
 #| eval: FALSE
 
-SELECT firearea.export_analyte_q_pre_post_quartiles_largest_fire('nitrate'::TEXT);
+SELECT firearea.export_analyte_q_pre_post_quartiles_largest_fire('ammonium'::TEXT);
 
 ```
 
@@ -298,7 +281,7 @@ SELECT firearea.export_analyte_q_pre_post_quartiles_largest_fire('nitrate'::TEXT
 
 purpose:
 
-This query retrieves nitrate and discharge records for USGS watershed sites
+This query retrieves ammonium and discharge records for USGS watershed sites
 (`usgs_site`) surrounding wildfires. It ensures strong sampling coverage before
 the fire, requiring observations in flow quartiles 2, 3, and 4, while placing no
 constraint on post-fire sampling coverage.
@@ -308,6 +291,6 @@ The query result is saved as: `{analyte}_discharge_before_quartiles_234_max_fire
 ```{sql}
 #| eval: FALSE
 
-SELECT firearea.export_analyte_q_pre_quartiles_largest_fire('nitrate'::TEXT);
+SELECT firearea.export_analyte_q_pre_quartiles_largest_fire('ammonium'::TEXT);
 
 ```
