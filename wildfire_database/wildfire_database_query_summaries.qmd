@@ -783,10 +783,10 @@ $$;
 
 purpose:
 
-Function to create a materialized view that identifies the largest wildfire
-event per watershed (`usgs_site`) that meets strict pre- and post-fire data
-quality criteria for water quality analysis. It enables fast, repeatable queries
-for analyzing wildfire impacts on nitrate and discharge patterns.
+Function to create a materialized view that identifies the largest wildfire per
+watershed (`usgs_site`) that meets strict pre- and post-fire data quality
+criteria for water quality analysis. It enables fast, repeatable queries for
+analyzing wildfire impacts on analyte and discharge patterns.
 
 use case:
 
@@ -816,8 +816,8 @@ fields included:
 | `start_date`     | Start date of fire event group                                |
 | `end_date`       | End date of fire event group                                  |
 | `cum_fire_area`  | Cumulative fire-affected area (km²) for the grouped event     |
-| `before_count`   | Count of nitrate observations in 3-year window before fire  |
-| `after_count`    | Count of nitrate observations in 3-year window after fire   |
+| `before_count`   | Count of analyte observations in 3-year window before fire  |
+| `after_count`    | Count of analyte observations in 3-year window after fire   |
 | `bq2`, `bq3`, `bq4` | Count of pre-fire flow quartile 2, 3, and 4 observations   |
 | `aq2`, `aq3`, `aq4` | Count of post-fire flow quartile 2, 3, and 4 observations  |
 
@@ -978,8 +978,8 @@ output columns:
 | all_per_cent_burned | Percent of total catchment burned through end_date       |
 | latitude            | Catchment centroid latitude                              |
 | longitude           | Catchment centroid longitude                             |
-| count_before_start  | Number of nitrate observations before fire window        |
-| count_after_end     | Number of nitrate observations after fire window         |
+| count_before_start  | Number of analyte observations before fire window        |
+| count_after_end     | Number of analyte observations after fire window         |
 
 
 ```{sql}
@@ -1058,7 +1058,7 @@ purpose:
 
 This function generates a query that retrieves comprehensive fire event
 information for each watershed (`usgs_site`) based on the largest wildfire that
-also meets nitrate-discharge data sufficiency criteria. It ensures that only
+also meets analyte-discharge data sufficiency criteria. It ensures that only
 those events selected for water quality analysis are described in detail using
 the `ranges_agg` view.
 
@@ -1067,7 +1067,7 @@ context:
 - The `ranges_agg` view aggregates fires by watershed and year,
   summarizing burn area, duration, spatial extent, and event IDs.
 - The companion materialized view
-  `firearea.largest_nitrate_valid_fire_per_site` filters these to a single,
+  `firearea.largest_{analyte}_valid_fire_per_site` filters these to a single,
   largest valid fire per watershed with adequate analyte and discharge
   monitoring.
 - This query joins the two views on `usgs_site`, `start_date`, and `end_date`
@@ -1737,52 +1737,6 @@ $$;
 
 -- For any future analyte
 -- SELECT firearea.export_analyte_q_pre_quartiles_largest_fire('phosphate'::TEXT, '/data/phosphate_pre_quartiles.csv'::TEXT);
-
-```
-
-
-
-
-
-
-
-
-
-# ammonium
-
-## temp: combined ammonium
-
-Create a temporary table of standardized (forms, units) that
-reflects data from both the USGS and non-USGS data sources.
-
-```{sql}
-#| eval: FALSE
-#| label: ammonium
-
-DROP TABLE IF EXISTS ammonium ;
-
-CREATE TEMPORARY TABLE ammonium AS 
-SELECT
-  usgs_site,
-  "ActivityStartDate" AS date,
-  'ammonium' as analyte,
-  AVG (value_std) AS value_std,
-  'mg/L as N' AS units_std
-FROM firearea.usgs_water_chem_std
-WHERE "USGSPCode" IN ('00608')
-GROUP BY
-  usgs_site,
-  date
-UNION
-SELECT
-  usgs_site,
-  date,
-  analyte,
-  mean AS value_std,
-  unit AS units_std
-FROM firearea.non_usgs_water_chem
-WHERE analyte ~~* '%nh4%'
-;
 
 ```
 
