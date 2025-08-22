@@ -608,7 +608,7 @@ ORDER BY
 ;
 ```
 
-# export: ecoregions
+## export: ecoregions
 
 Join (spatially) usgs_site to firearea.ecoregions table. Note that these
 geometries are as 4326. Changing to a projected CRS (e.g., 5070) does
@@ -1170,6 +1170,19 @@ It applies **strict filtering**.
 - **Output**: Returns all qualifying observations, along with counts and
   quartile information.
 
+processing note:
+
+Filtering the observations to include flow spanning quartiles 2-3 in
+each of the windows before and after a fire is a heavy lift
+computationally. This lift is addressed by the materialized view of the
+largest fire when we are filtering by both quartiles and selecting only
+the largest fire in a catchment (e.g., see [here]()). As a result, the
+query to select observations where we filter to the largest fire is much
+faster. So, if there is interest to explore patterns other than only
+those associated with the largest fire in a catchment, consider
+offloading the filtering of flow quartiles to another table,
+materialized view, or even make this query a table or materialized view.
+
 output:
 
 | Column | Description |
@@ -1364,6 +1377,21 @@ core logic steps:
 5.  Return analyte + discharge records for the selected fire per
     watershed, with an additional field (`segment`) labeling records as
     “before” or “after” the fire event.
+
+processing note:
+
+When export_analyte_q_pre_post_quartiles_largest_fire joins to
+largest\_{analyte}\_valid_fire_per_site:
+
+1.  The materialized view only contains fires that have already passed
+    the quartile filtering
+2.  The join on usgs_site will only return data for sites/fires that met
+    the criteria
+3.  The date filtering in the export function ensures only the 3-year
+    windows around those validated fires are included
+
+As a result of \#1 and \#2 above, this query is very fast relative to
+only querying the quartiles alone (e.g, [here]()).
 
 inputs:
 

@@ -3,8 +3,6 @@ format: gfm
 engine: knitr
 ---
 
-# specific conductance
-
 ## view: combined specific conductance
 
 Create a view of standardized (forms, units) specific conductance that reflects data from
@@ -75,8 +73,11 @@ SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('spcond');
 
 ## export: summary all sites
 
-See full metadata [here]. Basically, though, catchment and summary statistics for
-all sites associated with this analyte.
+Catchment and summary statistics for all sites associated with this analyte.
+
+See full metadata [here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#fn-export-summary-all-analyte-sites). 
+
+The query result is saved as: `{analyte}_summary.csv`
 
 ```{sql}
 #| eval: FALSE
@@ -88,8 +89,12 @@ SELECT firearea.export_analyte_summary_all_sites('spcond');
 
 ## export: summary largest fire sites
 
-See full metadata [here]. Basically, though, catchment and summary statistics
-for all sites associated with this analyte for the largest fire.
+Catchment and summary statistics for all sites associated with this analyte for
+the largest fire.
+
+See full metadata [here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#fn-export-summary-largest-fire-sites).
+
+The query result is saved as: `{analyte}_sites_fires.csv`
 
 ```{sql}
 #| eval: FALSE
@@ -139,7 +144,7 @@ For each site/fire window, requires:
   - analyte–discharge observations must include flow quartiles 2, 3, and 4 in
   both windows
 
-Full metadata [here].
+Full metadata [here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#export-qc-pre-post-quartiles).
 
 The query result is saved as: `{analyte}_discharge_data_filtered_quartiles_234.csv`
 
@@ -168,6 +173,8 @@ filtering:
   - At least 3 years of data before and after the fire.
   - Presence of streamflow across flow quartiles 2, 3, and 4 in both windows.
 
+Full metadata [here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#fn-export-qc-pre-post-quartiles-largest-fire).
+
 The query result is saved as: `{analyte}_discharge_quartiles_234_max_fire.csv`
 
 ```{sql}
@@ -186,6 +193,8 @@ This query retrieves analyte and discharge records for USGS watershed sites
 (`usgs_site`) surrounding wildfires. It ensures strong sampling coverage before
 the fire, requiring observations in flow quartiles 2, 3, and 4, while placing
 no constraint on post-fire sampling coverage.
+
+Full metadata [here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#export-qc-pre-quartiles-largest-fire).
 
 The query result is saved as: `{analyte}_discharge_before_quartiles_234_max_fire.csv`
 

@@ -1,7 +1,5 @@
 
 
-# nitrate
-
 ## view: combined nitrate
 
 Create a view of standardized (forms, units) nitrate that reflects data
@@ -175,8 +173,13 @@ SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('nitrate');
 
 ## export: summary all sites
 
-See full metadata \[here\]. Basically, though, catchment and summary
-statistics for all sites associated with this analyte.
+Catchment and summary statistics for all sites associated with this
+analyte.
+
+See full metadata
+[here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#fn-export-summary-all-analyte-sites).
+
+The query result is saved as: `{analyte}_summary.csv`
 
 ``` sql
 SELECT firearea.export_analyte_summary_all_sites('nitrate');
@@ -184,9 +187,13 @@ SELECT firearea.export_analyte_summary_all_sites('nitrate');
 
 ## export: summary largest fire sites
 
-See full metadata \[here\]. Basically, though, catchment and summary
-statistics for all sites associated with this analyte for the largest
-fire.
+Catchment and summary statistics for all sites associated with this
+analyte for the largest fire.
+
+See full metadata
+[here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#fn-export-summary-largest-fire-sites).
+
+The query result is saved as: `{analyte}_sites_fires.csv`
 
 ``` sql
 SELECT firearea.export_analyte_largest_fire_sites('nitrate'::TEXT);
@@ -226,7 +233,8 @@ For each site/fire window, requires: - analyte–discharge observations in
 both the 3-year pre- and post-fire windows - analyte–discharge
 observations must include flow quartiles 2, 3, and 4 in both windows
 
-Full metadata \[here\].
+Full metadata
+[here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#export-qc-pre-post-quartiles).
 
 The query result is saved as:
 `{analyte}_discharge_data_filtered_quartiles_234.csv`
@@ -254,6 +262,9 @@ filtering:
   - Presence of streamflow across flow quartiles 2, 3, and 4 in both
     windows.
 
+Full metadata
+[here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#fn-export-qc-pre-post-quartiles-largest-fire).
+
 The query result is saved as:
 `{analyte}_discharge_quartiles_234_max_fire.csv`
 
@@ -269,6 +280,9 @@ This query retrieves analyte and discharge records for USGS watershed
 sites (`usgs_site`) surrounding wildfires. It ensures strong sampling
 coverage before the fire, requiring observations in flow quartiles 2, 3,
 and 4, while placing no constraint on post-fire sampling coverage.
+
+Full metadata
+[here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#export-qc-pre-quartiles-largest-fire).
 
 The query result is saved as:
 `{analyte}_discharge_before_quartiles_234_max_fire.csv`
