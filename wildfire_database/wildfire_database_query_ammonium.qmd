@@ -3,21 +3,19 @@ format: gfm
 engine: knitr
 ---
 
-# ammonium
-
 ## view: combined ammonium
 
 Create a view of standardized (forms, units) ammonium that reflects data from
 from both the USGS and non-USGS data sources.
 
-Convert NEON and SBC data (micromoles) to `mg NO3-N / L`.
+Convert NEON and SBC data (micromoles) to `mg NH4-N / L`.
 
 ```{sql}
 #| eval: FALSE
 
 DROP VIEW IF EXISTS firearea.ammonium ;
 
-CREATE TEMPORARY TABLE ammonium AS 
+CREATE VIEW firearea.ammonium AS
 SELECT
   usgs_site,
   "ActivityStartDate" AS date,
@@ -25,7 +23,11 @@ SELECT
   AVG (value_std) AS value_std,
   'mg/L as N' AS units_std
 FROM firearea.usgs_water_chem_std
-WHERE "USGSPCode" IN ('00608')
+WHERE
+  "USGSPCode" IN (
+    '71846',
+    '00608'
+  )
 GROUP BY
   usgs_site,
   date
@@ -34,11 +36,24 @@ SELECT
   usgs_site,
   date,
   analyte,
-  mean AS value_std,
-  unit AS units_std
+  CASE
+    WHEN unit ~~* 'micromoles%' THEN mean * 0.014007
+    WHEN unit ~~* '%uM%' THEN mean * 0.014007
+    ELSE mean
+  END value_std,
+  CASE
+    WHEN unit ~~* 'micromoles%' THEN 'mg/L as N'
+    WHEN unit ~~* '%uM%' THEN 'mg/L as N' 
+    ELSE unit
+  END units_std
 FROM firearea.non_usgs_water_chem
-WHERE analyte ~~* '%nh4%'
+WHERE
+(
+  analyte ~~* '%nh4%'
+) AND
+  usgs_site !~~* '%bell%'
 ;
+
 
 ```
 
