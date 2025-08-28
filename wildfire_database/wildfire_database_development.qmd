@@ -493,18 +493,35 @@ ecoregion_catchment_sites <- DBI::dbGetQuery(
     )
   )
 
-ecoregion_catchment_sites <- ecoregion_catchment_sites |> dplyr::slice(1:3)
-
 write_flowlines_safely <- purrr::safely(firearea::write_usgs_flowlines)
+
+# add progress tracking
+total_sites <- length(ecoregion_catchment_sites$site_id)
+message("Processing ", total_sites, " sites with rate limiting...")
 
 results <- purrr::map(
   .x = ecoregion_catchment_sites$site_id,
-  .f = ~ write_flowlines_safely(
-    usgs_site = .x
-  )
+  .f = ~ {
+
+    # progress message
+    current_index <- which(ecoregion_catchment_sites$site_id == .x)
+    if (current_index %% 10 == 0 || current_index == 1) {
+      message("Processing site ", current_index, " of ", total_sites, ": ", .x)
+    }
+    
+    # call the function
+    result <- write_flowlines_safely(usgs_site = .x)
+    
+    # rate limiting delay (except for the last iteration)
+    if (current_index < total_sites) {
+      Sys.sleep(60)  # delay
+    }
+    
+    return(result)
+  }
 )
 
-# usgs sites successes and errors
+# flowlines successes and errors
 
 successes      <- purrr::map_lgl(results, ~ is.null(.x$error))
 flowline_sites <- ecoregion_catchment_sites$usgs_site
