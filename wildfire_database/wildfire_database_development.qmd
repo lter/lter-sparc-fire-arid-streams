@@ -448,9 +448,7 @@ DBI::dbExecute(
 
 # flowlines --------------------------------------------------------------------
 
-Flowlines are generated only for catchments that make it into the analyses set.
-Here we document only creating the table, populating the table is a separate
-workflow. Note that this table does not have a primary key.
+Note that this table does not have a primary key.
 
 ```{sql}
 #| eval: FALSE
@@ -473,4 +471,51 @@ ALTER TABLE firearea.flowlines
 ;
 
 )
+```
+
+
+```{r}
+
+ecoregion_catchment_sites <- DBI::dbGetQuery(
+  conn      = pg,
+  statement = "
+  SELECT usgs_site
+  FROM firearea.ecoregion_catchments
+  ;
+  "
+) |>
+  dplyr::mutate(
+    site_id = gsub(
+      pattern     = "usgs-",
+      replacement = "",
+      x           = usgs_site,
+      ignore.case = TRUE
+    )
+  )
+
+ecoregion_catchment_sites <- ecoregion_catchment_sites |> dplyr::slice(1:3)
+
+write_flowlines_safely <- purrr::safely(firearea::write_usgs_flowlines)
+
+results <- purrr::map(
+  .x = ecoregion_catchment_sites$site_id,
+  .f = ~ write_flowlines_safely(
+    usgs_site = .x
+  )
+)
+
+# usgs sites successes and errors
+
+successes      <- purrr::map_lgl(results, ~ is.null(.x$error))
+flowline_sites <- ecoregion_catchment_sites$usgs_site
+
+result_df  <- tibble::tibble(
+  usgs_site = flowline_sites,
+  success   = successes,
+  error     = purrr::map_chr(
+    results,
+    ~ if (!is.null(.x$error)) as.character(.x$error) else NA_character_
+  )
+)
+
 ```
