@@ -4,7 +4,7 @@
 #' Export Spatial Data from PostgreSQL to GeoJSON Files
 #'
 #' Extracts spatial data (catchments, fire-catchment intersections, flowlines, 
-#' and pour points) from PostgreSQL database tables for specified chemistry 
+#' and pour points) from PostgreSQL database tables for specified 
 #' sites and exports them as separate GeoJSON files. This function combines 
 #' both USGS and non-USGS site data from multiple database tables.
 #'
@@ -68,6 +68,21 @@
 #'
 #' postgres_to_geojson(
 #'   chem_sites = nitrate_sites$usgs_site,
+#'   path       = "/tmp/"
+#' )
+#'
+#' eco_catch_sites <- DBI::dbGetQuery(
+#'   conn      = pg,
+#'   statement = "
+#'   SELECT DISTINCT usgs_site
+#'   FROM firearea.ecoregion_catchments
+#'   ;
+#'   "
+#' ) |>
+#' dplyr::pull(usgs_site)
+#'
+#' postgres_to_geojson(
+#'   chem_sites = eco_catch_sites,
 #'   path       = "/tmp/"
 #' )
 #' }
