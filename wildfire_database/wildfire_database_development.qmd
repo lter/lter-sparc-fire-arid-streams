@@ -448,6 +448,8 @@ DBI::dbExecute(
 
 # flowlines --------------------------------------------------------------------
 
+## firearea.flowlines
+
 Note that this table does not have a primary key.
 
 ```{sql}
@@ -473,29 +475,18 @@ ALTER TABLE firearea.flowlines
 )
 ```
 
+## add USGS sites
+
+We can use the UGSS site id to query flowlines for USGS sites since those are
+(mostly, anyway) catalogued in the NLDI system.
 
 ```{r}
 
 source("wildfire_database_add_flowlines_helpers.R")
 
-ecoregion_catchment_sites <- DBI::dbGetQuery(
-  conn      = pg,
-  statement = "
-  SELECT usgs_site
-  FROM firearea.ecoregion_catchments
-  ;
-  "
-) |>
-  dplyr::mutate(
-    site_id = gsub(
-      pattern     = "usgs-",
-      replacement = "",
-      x           = usgs_site,
-      ignore.case = TRUE
-    )
-  )
-
 write_flowlines_safely <- purrr::safely(firearea::write_usgs_flowlines)
+
+ecoregion_catchment_sites <- new_flowline_sites()
 
 # add progress tracking
 total_sites <- length(ecoregion_catchment_sites$site_id)
@@ -513,6 +504,93 @@ results <- purrr::map(
     
     # call the function
     result <- write_flowlines_safely(usgs_site = .x)
+    
+    # rate limiting delay (except for the last iteration)
+    if (current_index < total_sites) {
+      Sys.sleep(60)  # delay
+    }
+    
+    return(result)
+  }
+)
+
+# flowlines successes and errors
+
+successes      <- purrr::map_lgl(results, ~ is.null(.x$error))
+flowline_sites <- ecoregion_catchment_sites$usgs_site
+
+result_df  <- tibble::tibble(
+  usgs_site = flowline_sites,
+  success   = successes,
+  error     = purrr::map_chr(
+    results,
+    ~ if (!is.null(.x$error)) as.character(.x$error) else NA_character_
+  )
+)
+
+```
+
+
+## add non-USGS sites
+
+Unlike USGS sites, we need to pass the latitude and longitude of the sampling
+location for non-USGS sites. Note also that we will use the full USGS site ID
+(e.g., USGS-09512500) in the loop instead of just the 'site_id' (i.e., the
+numeric portion) since under the hood we are not passing a nwis id to
+dataRetrieval::findNLDI(), which expects only a numeric ID, but rather a
+location in the form of a latitude/longitude pair.
+
+```{r}
+
+source("wildfire_database_add_flowlines_helpers.R")
+
+write_flowlines_safely <- purrr::safely(firearea::write_usgs_flowlines)
+
+ecoregion_catchment_sites <- new_flowline_sites() |> 
+  dplyr::filter(
+    !grepl(
+      pattern     = "usgs",
+      x           = usgs_site,
+      ignore.case = TRUE
+    )
+  )
+
+sites_geom <- sf::st_read(
+  dsn   = pg,
+  query = glue::glue_sql(
+    "
+    SELECT *
+    FROM firearea.non_usgs_pour_points
+    WHERE usgs_site IN ({ ecoregion_catchment_sites$usgs_site* })
+    ;
+    ",
+    .con = DBI::ANSI()
+  ),
+  geometry_column = "geometry"
+)
+
+sites_geom$longitude <- sf::st_coordinates(sites_geom)[, 1]
+sites_geom$latitude  <- sf::st_coordinates(sites_geom)[, 2]
+
+# add progress tracking
+total_sites <- length(ecoregion_catchment_sites$usgs_site)
+message("Processing ", total_sites, " sites with rate limiting...")
+
+results <- purrr::map2(
+  .x = split(sites_geom, seq_len(nrow(sites_geom))),
+  .y = sites_geom$usgs_site,
+  .f = ~ {
+
+    # progress message
+    current_index <- which(sites_geom$usgs_site == .y)
+    if (current_index %% 10 == 0 || current_index == 1) {
+      message("Processing site ", current_index, " of ", total_sites, ": ", .x)
+    }
+
+    result <- write_flowlines_safely(
+      location_df         = .x,
+      non_usgs_identifier = .y
+    )
     
     # rate limiting delay (except for the last iteration)
     if (current_index < total_sites) {

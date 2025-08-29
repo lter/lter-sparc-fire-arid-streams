@@ -99,7 +99,7 @@ new_flowline_sites <- function() {
 
   if (nrow(present) > 0) {
     message(
-      "chem sites already present in flowline_sites: ",
+      "sites already present in flowline_sites: ",
       paste(present$site_id, collapse = ", ")
     )
   }
