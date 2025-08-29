@@ -476,6 +476,8 @@ ALTER TABLE firearea.flowlines
 
 ```{r}
 
+source("wildfire_database_add_flowlines_helpers.R")
+
 ecoregion_catchment_sites <- DBI::dbGetQuery(
   conn      = pg,
   statement = "
