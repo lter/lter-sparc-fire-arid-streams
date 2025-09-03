@@ -26,19 +26,24 @@ SELECT firearea.create_ammonium_view();
 SELECT firearea.create_analyte_counts_view('nitrate');
 SELECT firearea.create_analyte_counts_view('spcond');
 SELECT firearea.create_analyte_counts_view('ammonium');
+SELECT firearea.create_analyte_counts_view('orthop');
 
 SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('nitrate');
 SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('spcond');
 SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('ammonium');
+SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('orthop');
 
--- Just rebuild one analyte's full stack
+single site:
+
+-- Just rebuild one analyte's full stack (e.g., nitrate)
 SELECT firearea.create_nitrate_view();
 SELECT firearea.create_analyte_counts_view('nitrate');  
 SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('nitrate');
 
--- OR --
+the whole game:
 
 SELECT firearea.rebuild_usgs_water_chem_std_and_dependencies();
+
 
 ## fn. view: usgs_water_chem_std (std chem)
 
@@ -115,7 +120,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     analyte_name TEXT;
-    analyte_list TEXT[] := ARRAY['nitrate', 'spcond', 'ammonium']; -- Easy to extend
+    analyte_list TEXT[] := ARRAY['nitrate', 'spcond', 'ammonium', 'orthop']; -- append new analytes
     result_msg TEXT;
     base_result TEXT;
     success_count INTEGER := 0;

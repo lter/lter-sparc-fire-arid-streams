@@ -78,114 +78,6 @@ SELECT firearea.create_ammonium_view();
 ```
 
 
-## view: ammonium_ranges (unused)
-
-Generate a view of summary statistics surrounding ammonium data availability
-(number of samples pre, post fire; time (days) since previous fire; etc.).
-
-The `chem_ranges` CTE uses the template detailed in `chemistry with ranges`.
-
-The `num_pre_fire` and `num_post_fire` reflect the number of ammonium
-observations in the period between the fire of interest and the previous and
-next fires, respectively; not to be confused with the number of observations at
-any point prior to and after the fire of interest, respectively.
-
-The number of ammonium observations reflects observations for which there is
-also a discharge measurement.
-
-This query is likely not to be employed as the project has decided to use
-aggregated fires in the fire season (this query addressed only unaggregated
-data) but I think there are some errors here so it should be evaluated before a
-possible future use.
-
-```{sql}
-#| eval: FALSE
-
-DROP VIEW IF EXISTS firearea.ammonium_ranges ;
-
-CREATE VIEW firearea.ammonium_ranges AS 
-WITH chem_ranges AS (
-  SELECT
-    ammonium.usgs_site,
-    ammonium.date,
-    ammonium.value_std,
-    ranges.event AS pre,
-    ranges_post.post
-  FROM firearea.ammonium
-  JOIN firearea.discharge ON (
-    discharge."Date" = ammonium.date
-    AND discharge.usgs_site = ammonium.usgs_site
-  )
-  LEFT JOIN firearea.ranges ON (
-    ammonium.usgs_site = ranges.usgs_site
-    -- AND daterange(ammonium.date, ammonium.date, '[]') && ranges.pre
-    AND ranges.pre @> ammonium.date
-  )
-  LEFT JOIN (
-    SELECT
-      ammonium.usgs_site,
-      ammonium.date,
-      ranges.event AS post
-    FROM firearea.ammonium 
-    LEFT JOIN firearea.ranges ON (
-      ammonium.usgs_site = ranges.usgs_site
-      -- AND daterange(ammonium.date, ammonium.date, '[]') && ranges.post
-      AND ranges.post @> ammonium.date
-    )
-  ) AS ranges_post ON (
-    ranges_post.usgs_site = ammonium.usgs_site
-    AND ranges_post.date = ammonium.date
-  )
-  ORDER BY
-    ammonium.usgs_site,
-    ammonium.date
-)
-SELECT
-  pre_fire.usgs_site,
-  pre_fire.pre AS event,
-  adjacent_fire.date,
-  adjacent_fire.days_since_prior_fire,
-  pre_fire.num_pre_fire,
-  post_fire.num_post_fire
-FROM (
-  SELECT
-    chem_ranges.usgs_site,
-    chem_ranges.pre,
-    count(chem_ranges.pre) AS num_pre_fire
-  FROM chem_ranges
-  GROUP BY
-    chem_ranges.usgs_site,
-    chem_ranges.pre
-) AS pre_fire
-JOIN (
-  SELECT
-    chem_ranges.usgs_site,
-    chem_ranges.post,
-    count(chem_ranges.post) AS num_post_fire
-  FROM chem_ranges
-  GROUP BY
-    chem_ranges.usgs_site,
-    chem_ranges.post
-) AS post_fire ON (
-    post_fire.usgs_site = pre_fire.usgs_site
-    AND post_fire.post  = pre_fire.pre
-)
-LEFT JOIN (
-  SELECT
-    usgs_site,
-    date,
-    event,
-    UPPER(ranges.pre) - LOWER(ranges.pre) AS days_since_prior_fire
-  FROM firearea.ranges
-) AS adjacent_fire ON (
-    adjacent_fire.usgs_site = pre_fire.usgs_site
-    AND adjacent_fire.event = pre_fire.pre
-)
-;
-
-```
-
-
 ## view: analyte_counts (summer)
 
 ```{sql}
@@ -202,15 +94,17 @@ SELECT firearea.create_analyte_counts_view('ammonium');
 #| eval: FALSE
 
 SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('ammonium');
--- REFRESH MATERIALIZED VIEW firearea.largest_ammonium_valid_fire_per_site ;
 
 ```
 
 
 ## export: summary all sites
 
-See full metadata [here]. Basically, though, catchment and summary statistics for
-all sites associated with this analyte.
+Catchment and summary statistics for all sites associated with this analyte.
+
+See full metadata [here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#fn-export-summary-all-analyte-sites). 
+
+The query result is saved as: `{analyte}_summary.csv`
 
 ```{sql}
 #| eval: FALSE
@@ -222,8 +116,12 @@ SELECT firearea.export_analyte_summary_all_sites('ammonium');
 
 ## export: summary largest fire sites
 
-See full metadata [here]. Basically, though, catchment and summary statistics
-for all sites associated with this analyte for the largest fire.
+Catchment and summary statistics for all sites associated with this analyte for
+the largest fire.
+
+See full metadata [here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#fn-export-summary-largest-fire-sites).
+
+The query result is saved as: `{analyte}_sites_fires.csv`
 
 ```{sql}
 #| eval: FALSE
@@ -273,7 +171,7 @@ For each site/fire window, requires:
   - analyte–discharge observations must include flow quartiles 2, 3, and 4 in
   both windows
 
-Full metadata [here].
+Full metadata [here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#export-qc-pre-post-quartiles).
 
 The query result is saved as: `{analyte}_discharge_data_filtered_quartiles_234.csv`
 
@@ -302,6 +200,8 @@ filtering:
   - At least 3 years of data before and after the fire.
   - Presence of streamflow across flow quartiles 2, 3, and 4 in both windows.
 
+Full metadata [here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#fn-export-qc-pre-post-quartiles-largest-fire).
+
 The query result is saved as: `{analyte}_discharge_quartiles_234_max_fire.csv`
 
 ```{sql}
@@ -320,6 +220,8 @@ This query retrieves ammonium and discharge records for USGS watershed sites
 (`usgs_site`) surrounding wildfires. It ensures strong sampling coverage before
 the fire, requiring observations in flow quartiles 2, 3, and 4, while placing no
 constraint on post-fire sampling coverage.
+
+Full metadata [here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#export-qc-pre-quartiles-largest-fire).
 
 The query result is saved as: `{analyte}_discharge_before_quartiles_234_max_fire.csv`
 
