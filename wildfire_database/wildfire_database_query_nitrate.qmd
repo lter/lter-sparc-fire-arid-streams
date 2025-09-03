@@ -35,7 +35,8 @@ BEGIN
     WHERE
       "USGSPCode" IN (
         '00618',
-        '00631'
+        '00631',
+        '71851'
       )
     GROUP BY
       usgs_site,
