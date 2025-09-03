@@ -1,12 +1,14 @@
 
 
-## fn. view: combined specific conductance
+## fn. view: combined orthop
 
-Create a view of standardized (forms, units) specific conductance that
+Create a view of standardized (forms, units) of orthophosphate that
 reflects data from from both the USGS and non-USGS data sources.
 
+Convert SBC data (micromoles) to `mg PO4-P / L`.
+
 ``` sql
-CREATE OR REPLACE FUNCTION firearea.create_spcond_view()
+CREATE OR REPLACE FUNCTION firearea.create_orthop_view()
 RETURNS TEXT
 LANGUAGE plpgsql
 AS $$
@@ -14,22 +16,21 @@ DECLARE
     result_msg TEXT;
 BEGIN
     -- Drop existing view
-    DROP VIEW IF EXISTS firearea.spcond;
+    DROP VIEW IF EXISTS firearea.orthop;
 
-    -- Create spcond view (directly from your .qmd file)
-    CREATE VIEW firearea.spcond AS 
+    -- Create orthop view (directly from your .qmd file)
+    CREATE VIEW firearea.orthop AS
     SELECT
       usgs_site,
       "ActivityStartDate" AS date,
-      'spcond' as analyte,
+      'orthop' as analyte,
       AVG (value_std) AS value_std,
-      'microsiemensPerCentimeter' AS units_std
+      'mg/L as P' AS units_std
     FROM firearea.usgs_water_chem_std
     WHERE
       "USGSPCode" IN (
-        '00094',
-        '00095',
-        '90095'
+        '00660', -- PO4
+        '00671'  -- PO4-P
       )
     GROUP BY
       usgs_site,
@@ -39,40 +40,46 @@ BEGIN
       usgs_site,
       date,
       analyte,
-      mean AS value_std,
-      'microsiemensPerCentimeter' AS units_std
+      CASE
+        WHEN unit ~~* '%uM%' THEN mean * 0.030974 -- mg PO₄–P/L=µmol PO₄/L×0.030974
+        ELSE mean
+      END value_std,
+      CASE
+        WHEN unit ~~* '%uM%' THEN 'mg/L as P' 
+        ELSE unit
+      END units_std
     FROM firearea.non_usgs_water_chem
     WHERE
     (
-      analyte ~~* '%spec_cond_uSpercm%' OR
-      analyte ~~* '%specificConductance%'
+      analyte ~~* '%po4%' OR
+      analyte ~~* '%ortho%'
     ) AND
       usgs_site !~~* '%bell%';
 
-    result_msg := 'SUCCESS: Created firearea.spcond view';
+    result_msg := 'SUCCESS: Created firearea.orthop view';
     RAISE NOTICE '%', result_msg;
     
     RETURN result_msg;
 
 EXCEPTION
     WHEN OTHERS THEN
-        RAISE EXCEPTION 'FAILED: Error creating spcond view: %', SQLERRM;
+        RAISE EXCEPTION 'FAILED: Error creating orthop view: %', SQLERRM;
 END;
 $$;
 
-SELECT firearea.create_spcond_view();
+SELECT firearea.create_orthop_view();
 ```
 
 ## view: analyte_counts (summer)
 
 ``` sql
-SELECT firearea.create_analyte_counts_view('spcond');
+SELECT firearea.create_analyte_counts_view('orthop');
 ```
 
 ## m.view: largest fire
 
 ``` sql
-SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('spcond');
+SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('orthop');
 ```
 
 ## export: summary all sites
@@ -86,7 +93,7 @@ See full metadata
 The query result is saved as: `{analyte}_summary.csv`
 
 ``` sql
-SELECT firearea.export_analyte_summary_all_sites('spcond');
+SELECT firearea.export_analyte_summary_all_sites('orthop');
 ```
 
 ## export: summary largest fire sites
@@ -100,7 +107,7 @@ See full metadata
 The query result is saved as: `{analyte}_sites_fires.csv`
 
 ``` sql
-SELECT firearea.export_analyte_largest_fire_sites('spcond'::TEXT);
+SELECT firearea.export_analyte_largest_fire_sites('orthop'::TEXT);
 ```
 
 ## export: q+c all
@@ -110,18 +117,18 @@ All analyte + discharge observations. Used for testing but not analyses.
 ``` sql
 \COPY (
 SELECT
-  spcond.*,
+  orthop.*,
   discharge."Flow",
   discharge.quartile
-FROM firearea.spcond
+FROM firearea.orthop
 JOIN firearea.discharge ON (
-  discharge."Date" = spcond.date
-  AND discharge.usgs_site = spcond.usgs_site
+  discharge."Date" = orthop.date
+  AND discharge.usgs_site = orthop.usgs_site
 )
 ORDER BY
-  spcond.usgs_site,
-  spcond.date
-) TO '/tmp/spcond_q_chem.csv' WITH CSV HEADER
+  orthop.usgs_site,
+  orthop.date
+) TO '/tmp/orthop_q_chem.csv' WITH CSV HEADER
 ;
 ```
 
@@ -144,7 +151,7 @@ The query result is saved as:
 `{analyte}_discharge_data_filtered_quartiles_234.csv`
 
 ``` sql
-SELECT firearea.export_analyte_q_pre_post_quartiles('spcond'::TEXT);
+SELECT firearea.export_analyte_q_pre_post_quartiles('orthop'::TEXT);
 ```
 
 ## export: q+c pre-post-quartiles largest fire
@@ -173,14 +180,14 @@ The query result is saved as:
 `{analyte}_discharge_quartiles_234_max_fire.csv`
 
 ``` sql
-SELECT firearea.export_analyte_q_pre_post_quartiles_largest_fire('spcond'::TEXT);
+SELECT firearea.export_analyte_q_pre_post_quartiles_largest_fire('orthop'::TEXT);
 ```
 
 ## export: q+c pre-quartiles largest fire
 
 purpose:
 
-This query retrieves analyte and discharge records for USGS watershed
+This query retrieves orthop and discharge records for USGS watershed
 sites (`usgs_site`) surrounding wildfires. It ensures strong sampling
 coverage before the fire, requiring observations in flow quartiles 2, 3,
 and 4, while placing no constraint on post-fire sampling coverage.
@@ -192,5 +199,5 @@ The query result is saved as:
 `{analyte}_discharge_before_quartiles_234_max_fire.csv`
 
 ``` sql
-SELECT firearea.export_analyte_q_pre_quartiles_largest_fire('spcond'::TEXT);
+SELECT firearea.export_analyte_q_pre_quartiles_largest_fire('orthop'::TEXT);
 ```

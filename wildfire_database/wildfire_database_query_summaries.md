@@ -4,88 +4,229 @@
 
 Queries for transforming (as needed) and extracting wildfire data.
 
-Queries generate either a view, temporary table, or export. Views should
-be reconstructed as needed based on database updates; of course,
-temporary tables must be constructed prior to each new export. One
-additional query is partial, which is a template for a CTE in subsequent
-queries.
+Queries generate either a view, materialized view, or export. Views
+should be reconstructed as needed based on database updates.
 
-## view: usgs_water_chem_std (std chem)
+## standarize water chemistry
 
-Generate a view of a standardized form of the USGS water-chemistry data
-that will provide a starting point for generating summaries of
-particular analytes.
+stepwise:
+
+– Step 1: Rebuild base view only (destroys all dependencies) SELECT
+firearea.rebuild_usgs_water_chem_std();
+
+– Step 2: Rebuild analyte views SELECT firearea.create_nitrate_view();
+SELECT firearea.create_spcond_view(); SELECT
+firearea.create_ammonium_view();
+
+– Step 3: Rebuild counts and materialized views SELECT
+firearea.create_analyte_counts_view(‘nitrate’); SELECT
+firearea.create_analyte_counts_view(‘spcond’); SELECT
+firearea.create_analyte_counts_view(‘ammonium’); SELECT
+firearea.create_analyte_counts_view(‘orthop’);
+
+SELECT
+firearea.create_largest_analyte_valid_fire_per_site_mv(‘nitrate’);
+SELECT firearea.create_largest_analyte_valid_fire_per_site_mv(‘spcond’);
+SELECT
+firearea.create_largest_analyte_valid_fire_per_site_mv(‘ammonium’);
+SELECT firearea.create_largest_analyte_valid_fire_per_site_mv(‘orthop’);
+
+single site:
+
+– Just rebuild one analyte’s full stack (e.g., nitrate) SELECT
+firearea.create_nitrate_view(); SELECT
+firearea.create_analyte_counts_view(‘nitrate’);  
+SELECT
+firearea.create_largest_analyte_valid_fire_per_site_mv(‘nitrate’);
+
+the whole game:
+
+SELECT firearea.rebuild_usgs_water_chem_std_and_dependencies();
+
+## fn. view: usgs_water_chem_std (std chem)
 
 ``` sql
-DROP VIEW IF EXISTS firearea.usgs_water_chem_std ;
+CREATE OR REPLACE FUNCTION firearea.rebuild_usgs_water_chem_std()
+RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    result_msg TEXT;
+BEGIN
+    RAISE NOTICE 'Rebuilding firearea.usgs_water_chem_std (this will CASCADE DROP all dependent views)...';
+    
+    -- Drop the base view with CASCADE (destroys all dependent objects)
+    DROP VIEW IF EXISTS firearea.usgs_water_chem_std CASCADE;
+    
+    -- Recreate the base view
+    CREATE VIEW firearea.usgs_water_chem_std AS
+    SELECT
+      *,
+      CASE
+        WHEN "USGSPCode" = '71851' THEN "ResultMeasureValue" * (14.0/62.0) -- no3_d
+        WHEN "USGSPCode" = '71856' THEN "ResultMeasureValue" * (14.0/46.0) -- no2_d
+        WHEN "USGSPCode" = '71846' THEN "ResultMeasureValue" * (14.0/18.0) -- nh4_d
+        WHEN "USGSPCode" = '71845' THEN "ResultMeasureValue" * (14.0/18.0) -- nh4_t
+        WHEN "USGSPCode" = '00660' THEN "ResultMeasureValue" * 0.3261      -- po4_d
+        ELSE "ResultMeasureValue"
+      END value_std,
+      CASE
+        WHEN "USGSPCode" = '71851' THEN 'mg/l as N'
+        WHEN "USGSPCode" = '71856' THEN 'mg/l as N'
+        WHEN "USGSPCode" = '71846' THEN 'mg/l as N'
+        WHEN "USGSPCode" = '71845' THEN 'mg/l as N'
+        WHEN "USGSPCode" = '00660' THEN 'mg/l as P'
+        ELSE "ResultMeasure.MeasureUnitCode"
+      END units_std
+    FROM firearea.water_chem
+    WHERE
+      "ActivityMediaName" ~~* 'Water' AND
+      "ActivityMediaSubdivisionName" ~* 'Surface' AND
+      "ActivityTypeCode" !~* 'quality' AND
+      "ResultSampleFractionText" !~* 'bed sediment' AND
+      usgs_site IN (
+        SELECT usgs_site FROM firearea.ecoregion_catchments
+      );
+    
+    result_msg := 'SUCCESS: Rebuilt firearea.usgs_water_chem_std. All dependent views were CASCADE dropped and need to be recreated manually.';
+    RAISE NOTICE '%', result_msg;
+    
+    RETURN result_msg;
+    
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE EXCEPTION 'FAILED: Error rebuilding usgs_water_chem_std: %', SQLERRM;
+END;
+$$;
 
-CREATE VIEW firearea.usgs_water_chem_std AS
-SELECT
-  *,
-  CASE
-    WHEN "USGSPCode" = '71851' THEN "ResultMeasureValue" * (14.0/62.0) -- no3_d
-    WHEN "USGSPCode" = '71856' THEN "ResultMeasureValue" * (14.0/46.0) -- no2_d
-    WHEN "USGSPCode" = '71846' THEN "ResultMeasureValue" * (14.0/18.0) -- nh4_d
-    WHEN "USGSPCode" = '71845' THEN "ResultMeasureValue" * (14.0/18.0) -- nh4_t
-    ELSE "ResultMeasureValue"
-  END value_std,
-  CASE
-    WHEN "USGSPCode" = '71851' THEN 'mg/l as N'
-    WHEN "USGSPCode" = '71856' THEN 'mg/l as N'
-    WHEN "USGSPCode" = '71846' THEN 'mg/l as N'
-    WHEN "USGSPCode" = '71845' THEN 'mg/l as N'
-    ELSE "ResultMeasure.MeasureUnitCode"
-  END units_std,
-  CASE
-    WHEN "USGSPCode" = '71851' THEN '00618'
-    WHEN "USGSPCode" = '71856' THEN '00613'
-    WHEN "USGSPCode" = '71846' THEN '00608'
-    WHEN "USGSPCode" = '71845' THEN '00610'
-    WHEN "USGSPCode" = '90095' THEN '00095' -- sp cond
-    ELSE "USGSPCode"
-  END usgspcode_std
-FROM firearea.water_chem
-WHERE
-  "ActivityMediaName" ~~* 'Water' AND             -- water samples only
-  "ActivityMediaSubdivisionName" ~* 'Surface' AND -- surface water only
-  "ActivityTypeCode" !~* 'quality' AND            -- omit QC (blanks, spikes, etc.)
-  -- omit bed sediments and null values
-  "ResultSampleFractionText" IN (
-    'Dissolved',
-    'Non-filterable',
-    'Recoverable',
-    'Suspended',
-    'Total'
-    ) AND
-  "USGSPCode" NOT IN (
-    '00402', -- spcond not at 25 c
-    -- '91003', -- nitrate ug/L n=1
-    '00070'  -- turbidity as JTU
-  ) AND
-  "HydrologicEvent" IN (
-    'Affected by fire',
-    'Backwater',
-    -- 'Dambreak',
-    'Drought',
-    -- 'Earthquake',
-    'Flood',
-    -- 'Hurricane',
-    -- 'Mudflow',
-    'Not applicable',
-    'Not Determined (historical)',
-    'Regulated flow',
-    'Routine sample',
-    'Snowmelt',
-    -- 'Spill',
-    'Spring breakup' --,
-    -- 'Storm',
-    -- 'Under ice cover',
-    -- 'Volcanic action'
-  ) AND
-  usgs_site IN (
-    SELECT usgs_site FROM firearea.ecoregion_catchments
-  )
-;
+-- Step 1: Rebuild base view only (destroys all dependencies)
+SELECT firearea.rebuild_usgs_water_chem_std();
+```
+
+## fn. view: usgs_water_chem_std AND dependencies
+
+``` sql
+CREATE OR REPLACE FUNCTION firearea.rebuild_usgs_water_chem_std_and_dependencies()
+RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    analyte_name TEXT;
+    analyte_list TEXT[] := ARRAY['nitrate', 'spcond', 'ammonium', 'orthop']; -- append new analytes
+    result_msg TEXT;
+    base_result TEXT;
+    success_count INTEGER := 0;
+BEGIN
+    RAISE NOTICE 'Starting complete rebuild of firearea.usgs_water_chem_std and all dependencies...';
+    
+    -- Step 1: Call the base rebuild function
+    RAISE NOTICE 'Calling firearea.rebuild_usgs_water_chem_std()...';
+    SELECT firearea.rebuild_usgs_water_chem_std() INTO base_result;
+    RAISE NOTICE '%', base_result;
+    
+    -- Check that base rebuild succeeded
+    IF base_result NOT LIKE 'SUCCESS:%' THEN
+        RAISE EXCEPTION 'Base view rebuild failed: %', base_result;
+    END IF;
+    
+    -- Step 2: Recreate analyte views using the specific functions
+    FOREACH analyte_name IN ARRAY analyte_list
+    LOOP
+        BEGIN
+            RAISE NOTICE 'Creating analyte view: %', analyte_name;
+            CASE analyte_name
+                WHEN 'nitrate' THEN
+                    PERFORM firearea.create_nitrate_view();
+                WHEN 'spcond' THEN  
+                    PERFORM firearea.create_spcond_view();
+                WHEN 'ammonium' THEN
+                    PERFORM firearea.create_ammonium_view();
+                ELSE
+                    RAISE WARNING 'No create function found for analyte: %', analyte_name;
+            END CASE;
+            success_count := success_count + 1;
+        EXCEPTION
+            WHEN OTHERS THEN
+                RAISE WARNING 'Failed to create analyte view for %: %', analyte_name, SQLERRM;
+        END;
+    END LOOP;
+    
+    -- Step 3: Recreate counts views
+    FOREACH analyte_name IN ARRAY analyte_list
+    LOOP
+        BEGIN
+            RAISE NOTICE 'Creating counts view: %_counts', analyte_name;
+            PERFORM firearea.create_analyte_counts_view(analyte_name);
+        EXCEPTION
+            WHEN OTHERS THEN
+                RAISE WARNING 'Failed to create counts view for %: %', analyte_name, SQLERRM;
+        END;
+    END LOOP;
+    
+    -- Step 4: Recreate largest fire materialized views
+    FOREACH analyte_name IN ARRAY analyte_list
+    LOOP
+        BEGIN
+            RAISE NOTICE 'Creating largest fire materialized view: largest_%_valid_fire_per_site', analyte_name;
+            PERFORM firearea.create_largest_analyte_valid_fire_per_site_mv(analyte_name);
+        EXCEPTION
+            WHEN OTHERS THEN
+                RAISE WARNING 'Failed to create largest fire matview for %: %', analyte_name, SQLERRM;
+        END;
+    END LOOP;
+    
+    -- Step 5: Final verification
+    RAISE NOTICE 'Verifying all objects were created successfully...';
+    
+    -- Check base view exists (should always pass since we called the function)
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_views 
+        WHERE schemaname = 'firearea' AND viewname = 'usgs_water_chem_std'
+    ) THEN
+        RAISE EXCEPTION 'Failed to create firearea.usgs_water_chem_std';
+    END IF;
+    
+    -- Check analyte views exist
+    FOREACH analyte_name IN ARRAY analyte_list
+    LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_views 
+            WHERE schemaname = 'firearea' AND viewname = analyte_name
+        ) THEN
+            RAISE WARNING 'Missing analyte view: firearea.%', analyte_name;
+        END IF;
+        
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_views 
+            WHERE schemaname = 'firearea' AND viewname = analyte_name || '_counts'
+        ) THEN
+            RAISE WARNING 'Missing counts view: firearea.%_counts', analyte_name;
+        END IF;
+        
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_matviews 
+            WHERE schemaname = 'firearea' AND matviewname = 'largest_' || analyte_name || '_valid_fire_per_site'
+        ) THEN
+            RAISE WARNING 'Missing largest fire matview: firearea.largest_%_valid_fire_per_site', analyte_name;
+        END IF;
+    END LOOP;
+    
+    result_msg := FORMAT('SUCCESS: Rebuilt firearea.usgs_water_chem_std and all dependencies for %s analytes: %s', 
+                         array_length(analyte_list, 1),
+                         array_to_string(analyte_list, ', '));
+    RAISE NOTICE '%', result_msg;
+    
+    RETURN result_msg;
+    
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE EXCEPTION 'FAILED: Error rebuilding dependencies: %', SQLERRM;
+        -- Transaction will automatically roll back on exception
+END;
+$$;
+
+-- Complete rebuild of everything
+SELECT firearea.rebuild_usgs_water_chem_std_and_dependencies();
 ```
 
 ## table: discharge (aggregated discharge)
