@@ -21,6 +21,7 @@ SELECT firearea.rebuild_usgs_water_chem_std();
 SELECT firearea.create_nitrate_view();
 SELECT firearea.create_spcond_view();
 SELECT firearea.create_ammonium_view();
+SELECT firearea.create_orthop_view();
 
 -- Step 3: Rebuild counts and materialized views
 SELECT firearea.create_analyte_counts_view('nitrate');
@@ -149,6 +150,8 @@ BEGIN
                     PERFORM firearea.create_spcond_view();
                 WHEN 'ammonium' THEN
                     PERFORM firearea.create_ammonium_view();
+                WHEN 'orthop' THEN
+                    PERFORM firearea.create_orthop_view();
                 ELSE
                     RAISE WARNING 'No create function found for analyte: %', analyte_name;
             END CASE;
@@ -1845,7 +1848,7 @@ DECLARE
         fire_with_data.usgs_site,
         fire_with_data.year,
         fire_with_data.start_date,
-        fire_with_data.end_date,
+        fire_with_data.end_date>,
         fire_with_data.before_count,
         fire_with_data.after_count
       FROM fire_with_data
