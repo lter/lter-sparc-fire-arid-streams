@@ -1,0 +1,9 @@
+project:
+  render:
+    - water_chem_functions.qmd
+    - wildfire_database_query_nitrate.qmd
+    - wildfire_database_query_ammonium.qmd
+    - wildfire_database_query_spcond.qmd
+    - wildfire_database_query_orthop.qmd
+
+# quarto render --profile chem -P user:user

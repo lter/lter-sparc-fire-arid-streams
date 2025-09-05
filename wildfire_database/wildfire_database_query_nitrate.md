@@ -1,77 +1,11 @@
 
 
-## fn. view: combined nitrate
+## overview
 
-Create a view of standardized (forms, units) nitrate that reflects data
-from from both the USGS and non-USGS data sources.
-
-Convert NEON and SBC data (micromoles) to `mg NO3-N / L`.
-
-``` sql
-CREATE OR REPLACE FUNCTION firearea.create_nitrate_view()
-RETURNS TEXT
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    result_msg TEXT;
-BEGIN
-    -- Drop existing view
-    DROP VIEW IF EXISTS firearea.nitrate;
-
-    -- Create nitrate view (directly from your .qmd file)
-    CREATE VIEW firearea.nitrate AS 
-    SELECT
-      usgs_site,
-      "ActivityStartDate" AS date,
-      'nitrate' as analyte,
-      AVG (value_std) AS value_std,
-      'mg/L as N' AS units_std
-    FROM firearea.usgs_water_chem_std
-    WHERE
-      "USGSPCode" IN (
-        '00618',
-        '00631',
-        '71851'
-      )
-    GROUP BY
-      usgs_site,
-      date
-    UNION
-    SELECT
-      usgs_site,
-      date,
-      analyte,
-      CASE
-        WHEN unit ~~* 'micromoles%' THEN mean * (14.0 / 1000.0)
-        WHEN unit ~~* '%uM%' THEN mean * (14.0 / 1000.0) 
-        ELSE mean
-      END value_std,
-      CASE
-        WHEN unit ~~* 'micromoles%' THEN 'mg/L as N'
-        WHEN unit ~~* '%uM%' THEN 'mg/L as N' 
-        ELSE unit
-      END units_std
-    FROM firearea.non_usgs_water_chem
-    WHERE
-    (
-      analyte ~~* '%nitrate%' OR
-      analyte ~~* '%no3%'
-    ) AND
-      usgs_site !~~* '%bell%';
-
-    result_msg := 'SUCCESS: Created firearea.nitrate view';
-    RAISE NOTICE '%', result_msg;
-    
-    RETURN result_msg;
-
-EXCEPTION
-    WHEN OTHERS THEN
-        RAISE EXCEPTION 'FAILED: Error creating nitrate view: %', SQLERRM;
-END;
-$$;
-
-SELECT firearea.create_nitrate_view();
-```
+Calls to functions to generate analyte-specific views and materialized
+views; and exports. Functions to build views can be called individually
+for each analyte or, more likely, as part of a rebuild of standardied
+water chemistry and related views for each analyte.
 
 ## view: nitrate_ranges (unused)
 

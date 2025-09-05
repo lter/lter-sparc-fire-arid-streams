@@ -4,13 +4,21 @@
 library(RPostgreSQL)
 
 pg_wildfire_connect <- function(
-  this_user = NULL,
-  db        = "wildfire_dev",
-  this_host = "localhost"
-) {
+    this_user = NULL,
+    db        = "wildfire_dev",
+    this_host = "localhost"
+    ) {
+
+  # connection <- DBI::dbConnect(
+  #   drv      = DBI::dbDriver("PostgreSQL"),
+  #   user     = this_user,
+  #   dbname   = db,
+  #   host     = this_host,
+  #   password = Sys.getenv("POSTGRES")
+  # )
 
   connection <- DBI::dbConnect(
-    drv      = DBI::dbDriver("PostgreSQL"),
+    drv      = RPostgres::Postgres(),
     user     = this_user,
     dbname   = db,
     host     = this_host,
@@ -18,7 +26,6 @@ pg_wildfire_connect <- function(
   )
 
   return(connection)
-
 }
 
 pg <- pg_wildfire_connect(
@@ -28,12 +35,15 @@ pg <- pg_wildfire_connect(
 )
 
 # Cleanly disconnect when the render ends
-on.exit({
-  if (exists("pg", inherits = FALSE)) {
-    ok <- FALSE
-    try(ok <- DBI::dbIsValid(pg), silent = TRUE)
-    if (isTRUE(ok)) DBI::dbDisconnect(pg)
-  }
-}, add = TRUE)
+on.exit(
+  {
+    if (exists("pg", inherits = FALSE)) {
+      ok <- FALSE
+      try(ok <- DBI::dbIsValid(pg), silent = TRUE)
+      if (isTRUE(ok)) DBI::dbDisconnect(pg)
+    }
+  },
+  add = TRUE
+)
 
 ```

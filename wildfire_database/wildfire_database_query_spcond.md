@@ -1,67 +1,11 @@
 
 
-## fn. view: combined specific conductance
+## overview
 
-Create a view of standardized (forms, units) specific conductance that
-reflects data from from both the USGS and non-USGS data sources.
-
-``` sql
-CREATE OR REPLACE FUNCTION firearea.create_spcond_view()
-RETURNS TEXT
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    result_msg TEXT;
-BEGIN
-    -- Drop existing view
-    DROP VIEW IF EXISTS firearea.spcond;
-
-    -- Create spcond view (directly from your .qmd file)
-    CREATE VIEW firearea.spcond AS 
-    SELECT
-      usgs_site,
-      "ActivityStartDate" AS date,
-      'spcond' as analyte,
-      AVG (value_std) AS value_std,
-      'microsiemensPerCentimeter' AS units_std
-    FROM firearea.usgs_water_chem_std
-    WHERE
-      "USGSPCode" IN (
-        '00094',
-        '00095',
-        '90095'
-      )
-    GROUP BY
-      usgs_site,
-      date
-    UNION
-    SELECT
-      usgs_site,
-      date,
-      analyte,
-      mean AS value_std,
-      'microsiemensPerCentimeter' AS units_std
-    FROM firearea.non_usgs_water_chem
-    WHERE
-    (
-      analyte ~~* '%spec_cond_uSpercm%' OR
-      analyte ~~* '%specificConductance%'
-    ) AND
-      usgs_site !~~* '%bell%';
-
-    result_msg := 'SUCCESS: Created firearea.spcond view';
-    RAISE NOTICE '%', result_msg;
-    
-    RETURN result_msg;
-
-EXCEPTION
-    WHEN OTHERS THEN
-        RAISE EXCEPTION 'FAILED: Error creating spcond view: %', SQLERRM;
-END;
-$$;
-
-SELECT firearea.create_spcond_view();
-```
+Calls to functions to generate analyte-specific views and materialized
+views; and exports. Functions to build views can be called individually
+for each analyte or, more likely, as part of a rebuild of standardied
+water chemistry and related views for each analyte.
 
 ## view: analyte_counts (summer)
 

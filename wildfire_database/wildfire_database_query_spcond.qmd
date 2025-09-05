@@ -69,7 +69,7 @@ See full metadata [here](https://github.com/lter/lter-sparc-fire-arid-streams/bl
 The query result is saved as: `{analyte}_sites_fires.csv`
 
 ```{sql}
-#| eval: TRUE
+#| eval: FALSE
 #| connection: "pg"
 
 SELECT firearea.export_analyte_largest_fire_sites('spcond'::TEXT);
@@ -153,7 +153,7 @@ Full metadata [here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/m
 The query result is saved as: `{analyte}_discharge_quartiles_234_max_fire.csv`
 
 ```{sql}
-#| eval: TRUE
+#| eval: FALSE
 #| connection: "pg"
 
 SELECT firearea.export_analyte_q_pre_post_quartiles_largest_fire('spcond'::TEXT);
@@ -175,7 +175,7 @@ Full metadata [here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/m
 The query result is saved as: `{analyte}_discharge_before_quartiles_234_max_fire.csv`
 
 ```{sql}
-#| eval: TRUE
+#| eval: FALSE
 #| connection: "pg"
 
 SELECT firearea.export_analyte_q_pre_quartiles_largest_fire('spcond'::TEXT);

@@ -1,75 +1,11 @@
 
 
-## fn. view: combined ammonium
+## overview
 
-Create a view of standardized (forms, units) ammonium that reflects data
-from from both the USGS and non-USGS data sources.
-
-Convert NEON and SBC data (micromoles) to `mg NH4-N / L`.
-
-``` sql
-CREATE OR REPLACE FUNCTION firearea.create_ammonium_view()
-RETURNS TEXT
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    result_msg TEXT;
-BEGIN
-    -- Drop existing view
-    DROP VIEW IF EXISTS firearea.ammonium;
-
-    -- Create ammonium view (directly from your .qmd file)
-    CREATE VIEW firearea.ammonium AS
-    SELECT
-      usgs_site,
-      "ActivityStartDate" AS date,
-      'ammonium' as analyte,
-      AVG (value_std) AS value_std,
-      'mg/L as N' AS units_std
-    FROM firearea.usgs_water_chem_std
-    WHERE
-      "USGSPCode" IN (
-        '71846',
-        '00608'
-      )
-    GROUP BY
-      usgs_site,
-      date
-    UNION
-    SELECT
-      usgs_site,
-      date,
-      analyte,
-      CASE
-        WHEN unit ~~* 'micromoles%' THEN mean * 0.014007
-        WHEN unit ~~* '%uM%' THEN mean * 0.014007
-        ELSE mean
-      END value_std,
-      CASE
-        WHEN unit ~~* 'micromoles%' THEN 'mg/L as N'
-        WHEN unit ~~* '%uM%' THEN 'mg/L as N' 
-        ELSE unit
-      END units_std
-    FROM firearea.non_usgs_water_chem
-    WHERE
-    (
-      analyte ~~* '%nh4%'
-    ) AND
-      usgs_site !~~* '%bell%';
-
-    result_msg := 'SUCCESS: Created firearea.ammonium view';
-    RAISE NOTICE '%', result_msg;
-    
-    RETURN result_msg;
-
-EXCEPTION
-    WHEN OTHERS THEN
-        RAISE EXCEPTION 'FAILED: Error creating ammonium view: %', SQLERRM;
-END;
-$$;
-
-SELECT firearea.create_ammonium_view();
-```
+Calls to functions to generate analyte-specific views and materialized
+views; and exports. Functions to build views can be called individually
+for each analyte or, more likely, as part of a rebuild of standardied
+water chemistry and related views for each analyte.
 
 ## view: analyte_counts (summer)
 

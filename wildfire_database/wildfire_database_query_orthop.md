@@ -1,74 +1,11 @@
 
 
-## fn. view: combined orthop
+## overview
 
-Create a view of standardized (forms, units) of orthophosphate that
-reflects data from from both the USGS and non-USGS data sources.
-
-Convert SBC data (micromoles) to `mg PO4-P / L`.
-
-``` sql
-CREATE OR REPLACE FUNCTION firearea.create_orthop_view()
-RETURNS TEXT
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    result_msg TEXT;
-BEGIN
-    -- Drop existing view
-    DROP VIEW IF EXISTS firearea.orthop;
-
-    -- Create orthop view (directly from your .qmd file)
-    CREATE VIEW firearea.orthop AS
-    SELECT
-      usgs_site,
-      "ActivityStartDate" AS date,
-      'orthop' as analyte,
-      AVG (value_std) AS value_std,
-      'mg/L as P' AS units_std
-    FROM firearea.usgs_water_chem_std
-    WHERE
-      "USGSPCode" IN (
-        '00660', -- PO4
-        '00671'  -- PO4-P
-      )
-    GROUP BY
-      usgs_site,
-      date
-    UNION
-    SELECT
-      usgs_site,
-      date,
-      analyte,
-      CASE
-        WHEN unit ~~* '%uM%' THEN mean * 0.030974 -- mg PO₄–P/L=µmol PO₄/L×0.030974
-        ELSE mean
-      END value_std,
-      CASE
-        WHEN unit ~~* '%uM%' THEN 'mg/L as P' 
-        ELSE unit
-      END units_std
-    FROM firearea.non_usgs_water_chem
-    WHERE
-    (
-      analyte ~~* '%po4%' OR
-      analyte ~~* '%ortho%'
-    ) AND
-      usgs_site !~~* '%bell%';
-
-    result_msg := 'SUCCESS: Created firearea.orthop view';
-    RAISE NOTICE '%', result_msg;
-    
-    RETURN result_msg;
-
-EXCEPTION
-    WHEN OTHERS THEN
-        RAISE EXCEPTION 'FAILED: Error creating orthop view: %', SQLERRM;
-END;
-$$;
-
-SELECT firearea.create_orthop_view();
-```
+Calls to functions to generate analyte-specific views and materialized
+views; and exports. Functions to build views can be called individually
+for each analyte or, more likely, as part of a rebuild of standardied
+water chemistry and related views for each analyte.
 
 ## view: analyte_counts (summer)
 
