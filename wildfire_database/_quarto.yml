@@ -1,0 +1,13 @@
+project:
+  type: default
+  render:
+    - wildfire_database_query_summaries.qmd
+    - wildfire_database_query_nitrate.qmd
+    - wildfire_database_query_ammonium.qmd
+    - wildfire_database_query_spcond.qmd
+    - wildfire_database_query_orthop.qmd
+
+# default parameter values
+params:
+  db: wildfire_dev
+  localhost: localhost
