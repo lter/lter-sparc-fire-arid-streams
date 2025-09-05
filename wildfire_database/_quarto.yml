@@ -1,8 +1,10 @@
 project:
   type: default
-  render: [] # let profiles provide the file list
+  render: []
 
 params:
   db: wildfire_dev
   localhost: localhost
   user: null
+
+# database params are superflous since we are not executing sql from quarto

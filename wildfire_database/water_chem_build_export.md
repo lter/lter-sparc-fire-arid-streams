@@ -3,19 +3,28 @@
 ## overview
 
 Calls to functions to generate analyte-specific views and materialized
-views; and exports. Functions to build views can be called individually
-for each analyte or, more likely, as part of a rebuild of standardied
-water chemistry and related views for each analyte.
+views; and exports.
+
+Functions to build views can be called individually for each analyte or,
+more likely, as part of a rebuild of standardised water chemistry and
+related views for each analyte: see
+[here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/water_chem_functions.md#water-chemistry-alignment-and-products).
 
 ## view: analyte_counts (summer)
 
 ``` sql
+SELECT firearea.create_analyte_counts_view('nitrate');
+SELECT firearea.create_analyte_counts_view('ammonium');
+SELECT firearea.create_analyte_counts_view('orthop');
 SELECT firearea.create_analyte_counts_view('spcond');
 ```
 
 ## m.view: largest fire
 
 ``` sql
+SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('nitrate');
+SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('ammonium');
+SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('orthop');
 SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('spcond');
 ```
 
@@ -24,12 +33,14 @@ SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('spcond');
 Catchment and summary statistics for all sites associated with this
 analyte.
 
-See full metadata
-[here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#fn-export-summary-all-analyte-sites).
+See full metadata [here]().
 
 The query result is saved as: `{analyte}_summary.csv`
 
 ``` sql
+SELECT firearea.export_analyte_summary_all_sites('nitrate');
+SELECT firearea.export_analyte_summary_all_sites('ammonium');
+SELECT firearea.export_analyte_summary_all_sites('orthop');
 SELECT firearea.export_analyte_summary_all_sites('spcond');
 ```
 
@@ -38,18 +49,82 @@ SELECT firearea.export_analyte_summary_all_sites('spcond');
 Catchment and summary statistics for all sites associated with this
 analyte for the largest fire.
 
-See full metadata
-[here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#fn-export-summary-largest-fire-sites).
+See full metadata [here]().
 
 The query result is saved as: `{analyte}_sites_fires.csv`
 
 ``` sql
+SELECT firearea.export_analyte_largest_fire_sites('nitrate'::TEXT);
+SELECT firearea.export_analyte_largest_fire_sites('ammonium'::TEXT);
+SELECT firearea.export_analyte_largest_fire_sites('orthop'::TEXT);
 SELECT firearea.export_analyte_largest_fire_sites('spcond'::TEXT);
 ```
 
 ## export: q+c all
 
+### nitrate
+
 All analyte + discharge observations. Used for testing but not analyses.
+
+``` sql
+\COPY (
+SELECT
+  nitrate.*,
+  discharge."Flow",
+  discharge.quartile
+FROM firearea.nitrate
+JOIN firearea.discharge ON (
+  discharge."Date" = nitrate.date
+  AND discharge.usgs_site = nitrate.usgs_site
+)
+ORDER BY
+  nitrate.usgs_site,
+  nitrate.date
+) TO '/tmp/nitrate_q_chem.csv' WITH CSV HEADER
+;
+```
+
+### ammonium
+
+``` sql
+\COPY (
+SELECT
+  ammonium.*,
+  discharge."Flow",
+  discharge.quartile
+FROM firearea.ammonium
+JOIN firearea.discharge ON (
+  discharge."Date" = ammonium.date
+  AND discharge.usgs_site = ammonium.usgs_site
+)
+ORDER BY
+  ammonium.usgs_site,
+  ammonium.date
+) TO '/tmp/ammonium_q_chem.csv' WITH CSV HEADER
+;
+```
+
+### orthop
+
+``` sql
+\COPY (
+SELECT
+  orthop.*,
+  discharge."Flow",
+  discharge.quartile
+FROM firearea.orthop
+JOIN firearea.discharge ON (
+  discharge."Date" = orthop.date
+  AND discharge.usgs_site = orthop.usgs_site
+)
+ORDER BY
+  orthop.usgs_site,
+  orthop.date
+) TO '/tmp/orthop_q_chem.csv' WITH CSV HEADER
+;
+```
+
+### spcond
 
 ``` sql
 \COPY (
@@ -81,13 +156,15 @@ For each site/fire window, requires: - analyte–discharge observations in
 both the 3-year pre- and post-fire windows - analyte–discharge
 observations must include flow quartiles 2, 3, and 4 in both windows
 
-Full metadata
-[here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#export-qc-pre-post-quartiles).
+Full metadata [here]().
 
 The query result is saved as:
 `{analyte}_discharge_data_filtered_quartiles_234.csv`
 
 ``` sql
+SELECT firearea.export_analyte_q_pre_post_quartiles('nitrate'::TEXT);
+SELECT firearea.export_analyte_q_pre_post_quartiles('ammonium'::TEXT);
+SELECT firearea.export_analyte_q_pre_post_quartiles('orthop'::TEXT);
 SELECT firearea.export_analyte_q_pre_post_quartiles('spcond'::TEXT);
 ```
 
@@ -110,13 +187,15 @@ filtering:
   - Presence of streamflow across flow quartiles 2, 3, and 4 in both
     windows.
 
-Full metadata
-[here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#fn-export-qc-pre-post-quartiles-largest-fire).
+Full metadata [here]().
 
 The query result is saved as:
 `{analyte}_discharge_quartiles_234_max_fire.csv`
 
 ``` sql
+SELECT firearea.export_analyte_q_pre_post_quartiles_largest_fire('nitrate'::TEXT);
+SELECT firearea.export_analyte_q_pre_post_quartiles_largest_fire('ammonium'::TEXT);
+SELECT firearea.export_analyte_q_pre_post_quartiles_largest_fire('orthop'::TEXT);
 SELECT firearea.export_analyte_q_pre_post_quartiles_largest_fire('spcond'::TEXT);
 ```
 
@@ -129,12 +208,14 @@ sites (`usgs_site`) surrounding wildfires. It ensures strong sampling
 coverage before the fire, requiring observations in flow quartiles 2, 3,
 and 4, while placing no constraint on post-fire sampling coverage.
 
-Full metadata
-[here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/wildfire_database/wildfire_database_query_summaries.md#export-qc-pre-quartiles-largest-fire).
+Full metadata [here]().
 
 The query result is saved as:
 `{analyte}_discharge_before_quartiles_234_max_fire.csv`
 
 ``` sql
+SELECT firearea.export_analyte_q_pre_quartiles_largest_fire('nitrate'::TEXT);
+SELECT firearea.export_analyte_q_pre_quartiles_largest_fire('ammonium'::TEXT);
+SELECT firearea.export_analyte_q_pre_quartiles_largest_fire('orthop'::TEXT);
 SELECT firearea.export_analyte_q_pre_quartiles_largest_fire('spcond'::TEXT);
 ```

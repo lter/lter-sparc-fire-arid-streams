@@ -29,11 +29,11 @@ docs QMD_FILE:
 all QMD_FILE: (run QMD_FILE) (docs QMD_FILE)
     @echo "🎉 Complete workflow finished for {{QMD_FILE}}!"
 
-# Convenience aliases for common files
-water-chem: (run "water_chem_functions.qmd")
-nitrate: (run "wildfire_database_query_nitrate.qmd") 
-orthop: (run "wildfire_database_query_orthop.qmd")
-ammonium: (run "wildfire_database_query_ammonium.qmd")
+# Convenience aliases for common files (files archived)
+# water-chem: (run "water_chem_functions.qmd")
+# nitrate: (run "wildfire_database_query_nitrate.qmd") 
+# orthop: (run "wildfire_database_query_orthop.qmd")
+# ammonium: (run "wildfire_database_query_ammonium.qmd")
 
 # Manual execution with custom parameters
 manual SQL_FILE *ARGS:
