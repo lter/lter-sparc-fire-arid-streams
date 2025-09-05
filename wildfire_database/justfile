@@ -1,0 +1,62 @@
+# Default settings
+dbname := env_var_or_default("PGDATABASE", "wildfire_dev")
+user := env_var_or_default("PGUSER", env_var("USER"))
+host := env_var_or_default("PGHOST", "localhost")
+
+# Extract SQL chunks from any .qmd file
+extract QMD_FILE:
+    @echo "📖 Extracting SQL chunks from {{QMD_FILE}}..."
+    python3 extract_sql.py {{QMD_FILE}}
+
+# Execute any .sql file
+execute-sql SQL_FILE:
+    @echo "🚀 Executing {{SQL_FILE}} in transaction..."
+    psql -h {{host}} -d {{dbname}} -U {{user}} -f {{SQL_FILE}}
+
+# Extract and execute in one step
+run QMD_FILE:
+    @echo "📖 Processing {{QMD_FILE}}..."
+    python3 extract_sql.py {{QMD_FILE}}
+    @echo "🚀 Executing generated SQL..."
+    psql -h {{host}} -d {{dbname}} -U {{user}} -f {{replace(QMD_FILE, '.qmd', '.sql')}}
+
+# Generate documentation for any .qmd file
+docs QMD_FILE:
+    @echo "📚 Generating documentation for {{QMD_FILE}}..."
+    quarto render {{QMD_FILE}} --to gfm
+
+# Complete workflow: extract, execute, and generate docs
+all QMD_FILE: (run QMD_FILE) (docs QMD_FILE)
+    @echo "🎉 Complete workflow finished for {{QMD_FILE}}!"
+
+# Convenience aliases for common files
+water-chem: (run "water_chem_functions.qmd")
+nitrate: (run "wildfire_database_query_nitrate.qmd") 
+orthop: (run "wildfire_database_query_orthop.qmd")
+ammonium: (run "wildfire_database_query_ammonium.qmd")
+
+# Manual execution with custom parameters
+manual SQL_FILE *ARGS:
+    @echo "🎯 Manual execution with custom parameters..."
+    @echo "Command: psql {{ARGS}} -f {{SQL_FILE}}"
+    psql {{ARGS}} -f {{SQL_FILE}}
+
+# Test database connection
+test:
+    @echo "🔌 Testing database connection..."
+    psql -h {{host}} -d {{dbname}} -U {{user}} -c "SELECT version();"
+
+# List all .qmd files in directory
+list-qmd:
+    @echo "📋 Available .qmd files:"
+    @find . -name "*.qmd" -type f | sort
+
+# Clean generated .sql files
+clean:
+    @echo "🧹 Cleaning generated .sql files..."
+    rm -f *.sql
+
+# Show help
+help:
+    @echo "🔧 Available commands:"
+    @just --list
