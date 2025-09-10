@@ -57,19 +57,16 @@ largest_distance |>
   ) |>
   dplyr::count(has_distance)
   # dplyr::filter(is.na(distance)) |>
-  # dplyr::distinct(usgs_site) # |>
-  # readr::write_csv("/tmp/sans_distances.csv")
+# dplyr::distinct(usgs_site) # |>
+# readr::write_csv("/tmp/sans_distances.csv")
 
 # only able to calculate distance for ~40% of distinct(fire*catchment)
 # distance>=0	count	percent
 # False     	337 	61.50
 # True	      211 	38.50
 
-
 # data source: distance calc logs
-failed_sites <- readr::read_csv(
-  "~/Desktop/distance_scp/site_results/failed_sites.csv"
-) |>
+failed_sites <- readr::read_csv("failed_sites.csv") |>
   dplyr::mutate(usgs_site = paste0("USGS-", site))
 
 
@@ -84,7 +81,7 @@ counts <- DBI::dbGetQuery(
   )
 
 
-# data source: comid counts
+# computation: sites sans distances (adjust distinct() as needed)
 sans_distances <- largest_distance |>
   dplyr::distinct(
     usgs_site,
@@ -104,14 +101,7 @@ sans_distances <- largest_distance |>
   # readr::write_csv("/tmp/sans_distances.csv")
 
 
-# data source: use a modified postre_to_geojson fn to get a lot of layer availability 
-
-failed_sites_resources <- postgres_to_geojson_log(
-  chem_sites = sans_distances$usgs_site,
-  path       = "/tmp/geojson"
-)
-
-failed_sites_resources$presence_log
+# data source: use a modified postres_to_geojson fn to get a lot of layer availability 
 
 postgres_to_geojson_log <- function(
   chem_sites,
@@ -246,8 +236,16 @@ postgres_to_geojson_log <- function(
   invisible(presence_log)
 }
 
+failed_sites_resources <- postgres_to_geojson_log(
+  chem_sites = sans_distances$usgs_site,
+  path       = "/tmp/geojson"
+)
+
+failed_sites_resources$presence_log
+
 
 # output: detailed hits and misses
+
 #   success:
 #     none  = no distances for any fire (probably a layer problem)
 #     all   = distances for all fires (all good)
@@ -356,13 +354,15 @@ get_geos <- function(chem_sites) {
 
 # investigate
 
+source("distance_helper_functions.R")
+
 this_site <- get_geos(chem_sites = c("USGS-11060400"))
 
 this_site <- get_geos(chem_sites = c("USGS-08402000"))
 simple_plot(chem_site = "USGS-08402000", interactive = TRUE)
 
 this_site <- get_geos(chem_sites = c("USGS-07110400"))
-simple_plot(chem_site = "USGS-07110400", interactive = FALSE)
+simple_plot(chem_site = "USGS-07110400", interactive = TRUE)
 
 this_site <- get_geos(chem_sites = c("USGS-07103990")) # single fire without overlap
 simple_plot(chem_site = "USGS-07103990")
