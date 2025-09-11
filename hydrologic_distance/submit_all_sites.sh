@@ -14,21 +14,33 @@ rm -f $OUTPUT_DIR/sites_no_data.txt
 echo "Submitting jobs for individual sites..."
 echo "Output directory: $OUTPUT_DIR"
 
-# Read site IDs from CSV (skip header) and submit jobs
 job_count=0
-while IFS=',' read -r usgs_site site_id
+line_num=0
+while IFS=',' read -r usgs_site site_id extra
 do
-    # Skip header line
-    if [[ "$site_id" != "site_id" ]]; then
-        echo "Submitting job for site: $site_id"
-        job_id=$(sbatch --parsable --job-name="dist_$site_id" run_single_site.sh $site_id $OUTPUT_DIR)
-        echo "  Job ID: $job_id"
-        ((job_count++))
-        
-        # Optional: Add a small delay to avoid overwhelming the scheduler
-        sleep 0.1
+    line_num=$((line_num+1))
+
+    # Trim whitespace / carriage returns
+    site_id=${site_id//$'\r'/}
+    site_id=$(echo "$site_id" | xargs)
+
+    # Skip header (case-insensitive) or empty line
+    if [[ -z "$site_id" ]] || [[ "$site_id" =~ ^site_id$|^SITE_ID$ ]]; then
+        continue
     fi
-done < $SITES_FILE
+
+    # Basic validation: digits only (adjust if alphanumeric expected)
+    if [[ ! "$site_id" =~ ^[0-9A-Za-z_-]+$ ]]; then
+        echo "Skipping invalid site_id on line $line_num: '$site_id'" >&2
+        continue
+    fi
+
+    echo "Submitting job for site: $site_id"
+    job_id=$(sbatch --parsable --job-name="dist_$site_id" run_single_site.sh "$site_id" "$OUTPUT_DIR")
+    echo "  Job ID: $job_id"
+    ((job_count++))
+    sleep 0.05
+done < "$SITES_FILE"
 
 echo "Submitted $job_count jobs"
 echo ""

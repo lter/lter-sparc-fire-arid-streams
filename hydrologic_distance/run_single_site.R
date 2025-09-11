@@ -17,6 +17,11 @@ library(readr)
 library(future)
 library(furrr)
 
+# Set an upper bound for serialized globals (~2 TiB). This is effectively
+# near-unlimited for practical purposes while still finite.
+options(future.globals.maxSize = 2 * 1024^4)
+message("future.globals.maxSize set to ", format(2 * 1024^4, scientific = FALSE), " bytes (~2 TiB)")
+
 # Source the calculate function
 source("/scratch/srearl/firearea/R/calculate_hydrologic_distance.R")
 

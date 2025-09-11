@@ -216,6 +216,10 @@ postgres_to_geojson <- function(
 #'   intersections to event IDs contained in the 
 #'   \code{firearea.largest_nitrate_valid_fire_per_site} view for the specified 
 #'   site. This filtering applies to both interactive and non-interactive modes.
+#' @param fire_label_mode Character; how to show fire event IDs in interactive mode.
+#'   One of \code{"hover"} (default; show event_id on hover/click popup) or
+#'   \code{"none"} (suppress labels/popups for fire polygons). Ignored when
+#'   \code{interactive = FALSE}.
 #'
 #' @return When \code{interactive = TRUE}, returns a mapview object showing 
 #'   layered spatial data, or \code{invisible(NULL)} if no data is found. 
@@ -273,8 +277,11 @@ postgres_to_geojson <- function(
 simple_plot <- function(
   chem_site,
   interactive = TRUE,
-  winnow_largest_fire = FALSE
+  winnow_largest_fire = FALSE,
+  fire_label_mode = c("hover","none")
   ) {
+
+  fire_label_mode <- match.arg(fire_label_mode)
 
   catchment <- sf::st_read(
     dsn = pg,
@@ -364,12 +371,16 @@ if (interactive == TRUE) {
   } else NULL
   
   m2 <- if (nrow(fires_catchment) > 0) {
+    event_ids <- as.character(fires_catchment$event_id)
     mapview::mapview(
       fires_catchment,
       color = "orange",
       col.regions = "transparent",
-      lwd = 3,
-      alpha.regions = 0
+      lwd = 4,
+      alpha.regions = 0,
+      popup = if (fire_label_mode == "hover") event_ids else NULL,
+      label = if (fire_label_mode == "hover") event_ids else NULL,
+      layer.name = "Fire events"
     )
   } else NULL
   

@@ -368,6 +368,7 @@ this_site <- get_geos(chem_sites = c("USGS-07103990")) # single fire without ove
 simple_plot(chem_site = "USGS-07103990")
 
 # something is wrong with firearea::calculate_fire_flow_length (source it instead)
+source("~/localRepos/firearea/R/calculate_hydrologic_distance.R")
 
 # this_dist <- firearea::calculate_fire_flow_length(
 #   catchment           = this_site$catchments,
