@@ -2,20 +2,67 @@
 
 # Get command line arguments
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) != 2) {
-  stop("Usage: Rscript run_single_site.R <site_id> <output_dir>")
+if (length(args) != 3) {
+  stop("Usage: Rscript run_single_site.R <site_id> <data_dir> <output_dir>")
 }
 
-site_id <- args[1]
-output_dir <- args[2]
+site_id    <- args[1]
+data_dir   <- args[2]
+output_dir <- args[3]
 
-# Load required libraries
-library(sf)
-library(dplyr)
-library(purrr)
-library(readr)
-library(future)
-library(furrr)
+# Validate data directory (must exist and contain required files)
+if (!dir.exists(data_dir)) {
+  stop("Data directory does not exist: ", data_dir)
+}
+
+required_files <- c(
+  "catchments.geojson",
+  "fires_catchments.geojson",
+  "flowlines.geojson",
+  "pour_points.geojson"
+)
+
+missing <- required_files[!file.exists(file.path(data_dir, required_files))]
+if (length(missing) > 0) {
+  stop(
+    "Missing expected GeoJSON file(s) in ", data_dir, ": ",
+    paste(missing, collapse = ", ")
+  )
+}
+
+## Ensure required packages ----------------------------------------------------
+required_pkgs <- c(
+  "sf", "dplyr", "purrr", "readr", "future", "furrr"
+)
+
+pick_mirror <- function() {
+  # Allow override via env var R_CRAN_MIRROR; fallback to a stable cloud mirror
+  mirror <- Sys.getenv("R_CRAN_MIRROR", unset = NA)
+  if (is.na(mirror) || mirror == "") {
+    mirror <- "https://cloud.r-project.org"  # CDN-backed, usually fast
+  }
+  options(repos = c(CRAN = mirror))
+  message("Using CRAN mirror: ", mirror)
+}
+
+ensure_packages <- function(pkgs) {
+  pick_mirror()
+  installed <- rownames(installed.packages())
+  missing <- setdiff(pkgs, installed)
+  if (length(missing)) {
+    message("Installing missing packages: ", paste(missing, collapse = ", "))
+    install.packages(missing, dependencies = TRUE)
+  } else {
+    message("All required packages already installed")
+  }
+  invisible(NULL)
+}
+
+ensure_packages(required_pkgs)
+
+# Load required libraries after ensuring installation
+lapply(required_pkgs, require, character.only = TRUE)
+utils::globalVariables(c("usgs_site"))
 
 # Set an upper bound for serialized globals (~2 TiB). This is effectively
 # near-unlimited for practical purposes while still finite.
@@ -55,7 +102,7 @@ return_distances <- function(path, this_site) {
 
   message("starting site: ", this_site)
 
-  catchment <- sf::st_read(dsn = paste0(path, "catchments.geojson")) |>
+  catchment <- sf::st_read(dsn = file.path(path, "catchments.geojson")) |>
     dplyr::filter(
       grepl(
         pattern     = this_site,
@@ -64,7 +111,7 @@ return_distances <- function(path, this_site) {
       )
     )
 
-  fires <- sf::st_read(dsn = paste0(path, "fires_catchments.geojson")) |>
+  fires <- sf::st_read(dsn = file.path(path, "fires_catchments.geojson")) |>
     dplyr::filter(
       grepl(
         pattern     = this_site,
@@ -73,7 +120,7 @@ return_distances <- function(path, this_site) {
       )
     )
 
-  flowlines <- sf::st_read(dsn = paste0(path, "flowlines.geojson")) |>
+  flowlines <- sf::st_read(dsn = file.path(path, "flowlines.geojson")) |>
     dplyr::filter(
       grepl(
         pattern     = this_site,
@@ -82,7 +129,7 @@ return_distances <- function(path, this_site) {
       )
     )
 
-  sampling <- sf::st_read(dsn = paste0(path, "pour_points.geojson")) |>
+  sampling <- sf::st_read(dsn = file.path(path, "pour_points.geojson")) |>
     dplyr::filter(
       grepl(
         pattern     = this_site,
@@ -139,7 +186,7 @@ return_distances <- function(path, this_site) {
 # Process the site with error handling
 result <- tryCatch({
   return_distances(
-    path = "/scratch/srearl/nitrate_spatial/",
+    path = data_dir,
     this_site = site_id
   )
 }, error = function(e) {

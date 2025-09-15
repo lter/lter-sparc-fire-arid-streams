@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Configuration
+DATA_DIR="/scratch/srearl/nitrate_spatial/"  # directory containing geojson inputs
 OUTPUT_DIR="/scratch/srearl/nitrate_spatial/site_results"
 SITES_FILE="nitrate_sites.csv"
 
@@ -36,7 +37,7 @@ do
     fi
 
     echo "Submitting job for site: $site_id"
-    job_id=$(sbatch --parsable --job-name="dist_$site_id" run_single_site.sh "$site_id" "$OUTPUT_DIR")
+    job_id=$(sbatch --parsable --job-name="dist_$site_id" run_single_site.sh "$site_id" "$DATA_DIR" "$OUTPUT_DIR")
     echo "  Job ID: $job_id"
     ((job_count++))
     sleep 0.05
