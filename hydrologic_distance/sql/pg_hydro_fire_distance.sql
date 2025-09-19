@@ -78,15 +78,21 @@ WHERE ST_Intersects(e.geom, c.geometry);
 -- 6) Fire boundary intersection points per event and edge
 DROP TABLE IF EXISTS firearea.fire_boundary_points CASCADE;
 CREATE TABLE firearea.fire_boundary_points AS
+WITH fire_bounds AS (
+  SELECT usgs_site, event_id, ST_Boundary(geometry) AS boundary
+  FROM firearea.fires_catchments
+)
 SELECT f.usgs_site,
        f.event_id,
        e.id AS edge_id,
-       (ST_Dump(
-          ST_Intersection(e.geom, ST_Boundary(f.geometry))
-       )).geom::geometry(Point,4326) AS pt
-FROM firearea.fires_catchments f
+       d.geom::geometry(Point,4326) AS pt
+FROM fire_bounds f
 JOIN firearea.flow_edges_in_catchment e ON e.usgs_site = f.usgs_site
-WHERE ST_Intersects(e.geom, f.geometry);
+CROSS JOIN LATERAL (
+  SELECT (ST_Dump(ST_Intersection(e.geom, f.boundary))).geom AS geom
+) d
+WHERE ST_Intersects(e.geom, f.boundary)
+  AND GeometryType(d.geom) = 'ST_Point';
 
 CREATE INDEX IF NOT EXISTS fire_boundary_points_site_evt_idx ON firearea.fire_boundary_points(usgs_site,event_id);
 CREATE INDEX IF NOT EXISTS fire_boundary_points_edge_idx ON firearea.fire_boundary_points(edge_id);
