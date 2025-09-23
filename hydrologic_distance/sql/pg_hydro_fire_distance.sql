@@ -79,20 +79,56 @@ WHERE ST_Intersects(e.geom, c.geometry);
 DROP TABLE IF EXISTS firearea.fire_boundary_points CASCADE;
 CREATE TABLE firearea.fire_boundary_points AS
 WITH fire_bounds AS (
-  SELECT usgs_site, event_id, ST_Boundary(geometry) AS boundary
+  SELECT usgs_site,
+         event_id,
+         geometry,
+         ST_Boundary(ST_MakeValid(geometry)) AS boundary
   FROM firearea.fires_catchments
+), raw_intersections AS (
+  SELECT f.usgs_site,
+         f.event_id,
+         e.id AS edge_id,
+         (ST_Dump(ST_Intersection(e.geom, f.boundary))).geom AS g
+  FROM fire_bounds f
+  JOIN firearea.flow_edges_in_catchment e ON e.usgs_site = f.usgs_site
+  -- broad prefilter: any relation to the polygon (not just boundary) to avoid missing near-coincident cases
+  WHERE ST_Intersects(e.geom, f.geometry)
+), exact_points AS (
+  SELECT usgs_site,
+         event_id,
+         edge_id,
+         CASE
+           WHEN GeometryType(g) = 'ST_Point' THEN g::geometry(Point,4326)
+           WHEN GeometryType(g) = 'ST_LineString' THEN ST_LineInterpolatePoint(g::geometry(LineString,4326), 0.5)
+         END AS pt
+  FROM raw_intersections
+  WHERE GeometryType(g) IN ('ST_Point','ST_LineString')
+), no_exact AS (
+  SELECT f.usgs_site,
+         f.event_id,
+         e.id AS edge_id
+  FROM fire_bounds f
+  JOIN firearea.flow_edges_in_catchment e ON e.usgs_site = f.usgs_site
+  WHERE ST_Intersects(e.geom, f.geometry)
+    AND NOT EXISTS (
+      SELECT 1 FROM exact_points ep
+      WHERE ep.usgs_site = f.usgs_site
+        AND ep.event_id = f.event_id
+        AND ep.edge_id  = e.id
+    )
+    AND ST_DWithin(e.geom::geography, f.boundary::geography, 20.0) -- near-miss tolerance (meters)
+), near_points AS (
+  SELECT f.usgs_site,
+         f.event_id,
+         e.id AS edge_id,
+         ST_ClosestPoint(f.boundary, e.geom)::geometry(Point,4326) AS pt
+  FROM fire_bounds f
+  JOIN firearea.flow_edges_in_catchment e ON e.usgs_site = f.usgs_site
+  JOIN no_exact ne ON ne.usgs_site = f.usgs_site AND ne.event_id = f.event_id AND ne.edge_id = e.id
 )
-SELECT f.usgs_site,
-       f.event_id,
-       e.id AS edge_id,
-       d.geom::geometry(Point,4326) AS pt
-FROM fire_bounds f
-JOIN firearea.flow_edges_in_catchment e ON e.usgs_site = f.usgs_site
-CROSS JOIN LATERAL (
-  SELECT (ST_Dump(ST_Intersection(e.geom, f.boundary))).geom AS geom
-) d
-WHERE ST_Intersects(e.geom, f.boundary)
-  AND GeometryType(d.geom) = 'ST_Point';
+SELECT * FROM exact_points
+UNION ALL
+SELECT * FROM near_points;
 
 CREATE INDEX IF NOT EXISTS fire_boundary_points_site_evt_idx ON firearea.fire_boundary_points(usgs_site,event_id);
 CREATE INDEX IF NOT EXISTS fire_boundary_points_edge_idx ON firearea.fire_boundary_points(edge_id);
