@@ -23,9 +23,10 @@ event in that catchment.
 - `firearea.flow_edges_base` edges + topology (`_vertices_pgr` auto-created)
 - `firearea.pour_point_nodes` nearest vertex per pour point
 - `firearea.flow_edges_in_catchment` view to limit graph to contributing network
-- `firearea.fire_boundary_points` exact intersection points of network edges with fire boundaries (by event)
 - `firearea.hydro_fire_min_distance` results table
 - `firearea.compute_hydro_fire_distances(site text)` per-site compute function
+(now performs on-demand boundary distance aggregation; no global intersection
+table)
 
 ## run order
 1. Open and run `pg_hydro_fire_distance.sql` in the `wildfire` DB.
@@ -59,7 +60,8 @@ geometry(LineString,4326)`, `length_m double precision`, `source bigint`,
 `ST_Length(geom::geography)`).
 - Populate `source`/`target` using a vertices table derived from the edges.
 
-Step-by-step replacement for section “Create topology (assign source/target nodes)”: 
+Step-by-step replacement for section “Create topology (assign source/target
+nodes)”: 
 1) Ensure the edges exist (as the script already does):
    - Insert one row per flowline into `firearea.flow_edges_base` with `cost` and
    `reverse_cost` set to edge length (or your preferred weighting).
@@ -120,11 +122,155 @@ https://docs.pgrouting.org/latest/en/migration.html#migration-of-pgr-createtopol
 https://docs.pgrouting.org/latest/en/pgRouting-concepts.html
 
 ## maintenance
-- If you add new flowlines or fires, re-run the script section creating
-`flow_edges_base` and `fire_boundary_points`, or convert them into materialized
-views and refresh.
+- If you add new flowlines, re-run the section creating `flow_edges_base` (and
+   rebuild topology if needed) then rerun distances for affected sites.
+- If you add or change fires (`fires_catchments`), you only need to call
+   `compute_hydro_fire_distances` again for impacted sites. Boundary intersections
+   are now computed on-demand; no global table rebuild required.
 
 ## troubleshooting
-- If a site returns no distance, ensure its pour point is near the network
-(check `pour_point_nodes`) and that at least one edge intersects the fire
-polygon boundary (`fire_boundary_points`).
+- If a site returns no distance:
+   - Ensure its pour point snapped to a vertex (`pour_point_nodes`).
+   - Confirm there are edges in its catchment (`flow_edges_in_catchment`).
+   - Check that at least one edge intersects or is within the near-distance
+      tolerance (20 m) of a fire boundary for that site (`fires_catchments`).
+   - Increase the near-distance tolerance in the function (constant `near_meters`)
+      if boundaries nearly touch but do not intersect.
+
+## design change: on-demand boundary intersections
+Previously the workflow materialized a global table
+`firearea.fire_boundary_points` containing every (site,event,edge) intersection
+or near-miss point. This caused large storage and processing overhead. The
+refactored design (Strategy B) computes, for each site processed, the minimum
+hydrologic distance per event directly by pairing candidate edges with that
+site's fire boundaries and locating the closest boundary point along each edge.
+No persistent intersection table is created; only final distances are stored.
+
+## debugging / QA workflow
+
+Use the unified (production-parity) debug function
+`firearea.debug_hydro_fire_distance_rows2(site text, event_id text)` to visually
+inspect how a hydrologic distance was chosen. It reconstructs the exact path and
+the terminal edge portion actually used.
+
+### 1. Identify site + event needing inspection
+```
+SELECT usgs_site, event_id, min_distance_m
+FROM firearea.hydro_fire_min_distance
+WHERE usgs_site = 'USGS-09404900'
+ORDER BY min_distance_m;
+```
+
+### 2. See provenance components (detail table)
+```
+SELECT *
+FROM firearea.hydro_fire_min_distance_detail
+WHERE usgs_site='USGS-09404900'
+   AND event_id='UT3743511264420120702';
+```
+Columns of interest: `edge_id`, `orientation`, `fraction` (fractional position
+along the terminal edge), `from_cost_m` (network distance to chosen endpoint
+vertex), `partial_edge_m` (distance along terminal edge portion),
+`min_distance_m` (sum).
+
+### 3. Export debug geometries for GIS
+The debug function returns multiple rows distinguished by a `role` column:
+- flowpath_full
+- flowpath_base
+- terminal_edge
+- terminal_edge_partial
+- boundary_point
+- pour_point
+- fire_boundary
+- fire_polygon
+- catchment
+
+Full export (GeoJSON):
+```
+ogr2ogr -f GeoJSON flowpath_debug_USGS-09404900_UT3743511264420120702.geojson \
+PG:"host=YOURHOST dbname=wildfire user=YOURUSER password=YOURPASS" \ -sql
+"SELECT role, geom, site, event_id, distance_m, from_cost_m, partial_edge_m,
+fraction, edge_id, orientation FROM
+firearea.debug_hydro_fire_distance_rows2('USGS-09404900','UT3743511264420120702')"
+```
+
+Minimal export (only final full path):
+```
+ogr2ogr -f GeoJSON flowpath_only.geojson \
+   PG:"host=YOURHOST dbname=wildfire user=YOURUSER password=YOURPASS" \
+   -sql "SELECT * FROM firearea.debug_hydro_fire_distance_rows2('USGS-09404900','UT3743511264420120702') WHERE role='flowpath_full'"
+```
+
+GeoPackage (keeps multiple geometry types cleanly for QGIS styling):
+```
+ogr2ogr -f GPKG flowpath_debug.gpkg \
+   PG:"host=YOURHOST dbname=wildfire user=YOURUSER password=YOURPASS" \
+   -sql "SELECT role, geom, site, event_id, distance_m, from_cost_m, partial_edge_m, fraction, edge_id, orientation FROM firearea.debug_hydro_fire_distance_rows2('USGS-09404900','UT3743511264420120702')"
+```
+
+### 4. Load in QGIS
+Option A: Drag the exported `.gpkg` or `.geojson` into QGIS.
+Option B: Add a PostGIS connection and run the same SQL in the QGIS DB Manager;
+or simply add the function call as a virtual layer with the above SELECT.
+
+Suggested styling:
+- Symbol layer rule-based on `role`.
+   - flowpath_full: wide solid color (e.g., blue, width 1.2)
+   - terminal_edge_partial: dashed overlay or contrasting color
+   - terminal_edge: thin outline gray
+   - boundary_point & pour_point: distinct point symbols (circle vs star)
+   - fire_boundary: red/orange line
+   - fire_polygon & catchment: transparent fill with thin outline
+- Label `flowpath_full` with `distance_m` (format to integer or 1 decimal).
+
+### 5. Interpret orientation and fraction
+- If `orientation='source'`, the path reached the boundary point moving from the
+edge's source vertex forward `fraction * edge_length` along the edge.
+- If `orientation='target'`, it approached from the target vertex; the used
+portion length is from the boundary point back to the target (`partial_edge_m =
+len_from_end`).
+- Fraction is always measured from the edge start (source→target direction),
+even when orientation='target'.
+
+### 6. Adjust tolerance (if candidates missing)
+If the boundary almost touches but isn't selected, increase `near_meters`
+(default 20.0) inside the function definitions and rerun the compute for that
+site. Keep it small to avoid spurious candidate edges.
+
+### 7. Re-run after edits
+After modifying SQL functions:
+```
+-- Reload functions (psql or GUI) then:
+SELECT firearea.compute_hydro_fire_distances('USGS-09404900');
+SELECT * FROM firearea.hydro_fire_min_distance_detail WHERE usgs_site='USGS-09404900' LIMIT 5;
+```
+
+### 8. Quick regression spot-check
+Pick several random events and confirm recomputed debug path distance matches stored summary:
+```
+WITH sample AS (
+   SELECT event_id FROM firearea.hydro_fire_min_distance
+   WHERE usgs_site='USGS-09404900'
+   ORDER BY random() LIMIT 5
+)
+SELECT s.event_id,
+          d.min_distance_m AS stored,
+          (SELECT distance_m FROM firearea.debug_hydro_fire_distance_rows2('USGS-09404900', s.event_id) WHERE role='flowpath_full') AS recomputed
+FROM sample s
+JOIN firearea.hydro_fire_min_distance d USING (event_id)
+WHERE d.usgs_site='USGS-09404900';
+```
+Any discrepancies > small floating precision (millimeters) should be investigated.
+
+### 9. Common issues
+- No rows from debug function: event_id typo or site/event pair not in
+`fires_catchments`.
+- Distance unexpectedly large: verify there isn’t a nearer boundary point on the
+same terminal edge (multi-intersection logic should handle this) and confirm
+flow network connectivity (no unintended detours). Check for missing flowlines
+in `flow_edges_in_catchment`.
+- Fraction very close to 0 or 1: boundary point is almost exactly at an
+endpoint; verify if a neighboring edge would have been shorter (possible
+topology gap).
+
+---
