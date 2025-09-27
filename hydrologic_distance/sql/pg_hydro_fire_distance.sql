@@ -110,6 +110,8 @@ CREATE TABLE firearea.hydro_fire_min_distance_detail (
   from_cost_m double precision NOT NULL,
   partial_edge_m double precision NOT NULL,
   min_distance_m double precision NOT NULL,
+  zero_reason text,                        -- NULL unless zero-distance classification applied
+  pp_edge_length_m double precision,       -- length of nearest pour point edge (for zero-distance provenance)
   PRIMARY KEY (usgs_site, event_id)
 );
 
@@ -135,13 +137,58 @@ BEGIN
   -- Pour point geometry
   SELECT geometry INTO pp_geom FROM firearea.pour_points_all WHERE usgs_site = site LIMIT 1;
 
-  -- Identify fire events where pour point lies inside fire polygon -> zero distance
+  -- Identify fire events with zero hydrologic distance.
+  -- Criteria (any satisfied):
+  --   (a) Fire polygon covers the original pour point geometry (zero_reason='pour_point')
+  --   (b) Fire polygon covers the upstream vertex of the nearest flow edge to the pour point (zero_reason='upstream_vertex')
+  --       Upstream vertex derivation hardened: pick the endpoint of the nearest edge that is FARTHER (network-proxy) from the pour point,
+  --       approximated here by choosing the endpoint that is NOT the closest in Euclidean distance to the pour point.
+  --       (Improvement opportunity: replace with true network distance comparison if direction metadata becomes available.)
+  -- If both are covered, we prioritize 'pour_point'.
   DROP TABLE IF EXISTS _inside_zero;
   CREATE TEMP TABLE _inside_zero AS
-  SELECT event_id
+  WITH nearest_edge_raw AS (
+    SELECT e.id AS edge_id, e.source, e.target, e.cost AS edge_length_m,
+           e.geom
+    FROM firearea.flow_edges_in_catchment e
+    WHERE e.usgs_site = site
+    ORDER BY e.geom <-> pp_geom
+    LIMIT 1
+  ), endpoint_coords AS (
+    SELECT ner.edge_id,
+           ner.edge_length_m,
+           ner.source,
+           ner.target,
+           vs.the_geom AS source_geom,
+           vt.the_geom AS target_geom,
+           ST_Distance(vs.the_geom::geography, pp_geom::geography) AS dist_source_m,
+           ST_Distance(vt.the_geom::geography, pp_geom::geography) AS dist_target_m
+    FROM nearest_edge_raw ner
+    JOIN firearea.flow_edges_base_vertices_pgr vs ON vs.id = ner.source
+    JOIN firearea.flow_edges_base_vertices_pgr vt ON vt.id = ner.target
+  ), classified_edge AS (
+    SELECT edge_id,
+           edge_length_m,
+           CASE WHEN dist_source_m <= dist_target_m THEN target ELSE source END AS upstream_node,
+           CASE WHEN dist_source_m <= dist_target_m THEN source ELSE target END AS downstream_node,
+           CASE WHEN dist_source_m <= dist_target_m THEN target_geom ELSE source_geom END AS upstream_geom,
+           CASE WHEN dist_source_m <= dist_target_m THEN source_geom ELSE target_geom END AS downstream_geom
+    FROM endpoint_coords
+  )
+  SELECT f.event_id,
+         CASE
+           WHEN ST_Covers(ST_MakeValid(f.geometry), pp_geom) THEN 'pour_point'
+           WHEN (ce.upstream_geom IS NOT NULL AND ST_Covers(ST_MakeValid(f.geometry), ce.upstream_geom)) THEN 'upstream_vertex'
+           ELSE NULL
+         END AS zero_reason,
+         ce.edge_length_m AS pp_edge_length_m
   FROM firearea.fires_catchments f
+  LEFT JOIN classified_edge ce ON TRUE
   WHERE f.usgs_site = site
-    AND ST_Contains(ST_MakeValid(f.geometry), pp_geom);
+    AND (
+      ST_Covers(ST_MakeValid(f.geometry), pp_geom)
+      OR (ce.upstream_geom IS NOT NULL AND ST_Covers(ST_MakeValid(f.geometry), ce.upstream_geom))
+    );
 
   SELECT COUNT(*) INTO total_events FROM firearea.fires_catchments WHERE usgs_site = site;
   SELECT COUNT(*) INTO zero_events FROM _inside_zero;
@@ -152,8 +199,8 @@ BEGIN
   ON CONFLICT (usgs_site, event_id) DO UPDATE SET min_distance_m = 0.0;
 
   -- Upsert zero-distance events (detail)
-  INSERT INTO firearea.hydro_fire_min_distance_detail (usgs_site, event_id, edge_id, orientation, fraction, boundary_point, from_cost_m, partial_edge_m, min_distance_m)
-  SELECT site, event_id, 0::bigint, 'inside', 0.0, pp_geom, 0.0, 0.0, 0.0
+  INSERT INTO firearea.hydro_fire_min_distance_detail (usgs_site, event_id, edge_id, orientation, fraction, boundary_point, from_cost_m, partial_edge_m, min_distance_m, zero_reason, pp_edge_length_m)
+  SELECT site, event_id, 0::bigint, 'inside', 0.0, pp_geom, 0.0, 0.0, 0.0, zero_reason, pp_edge_length_m
   FROM _inside_zero
   ON CONFLICT (usgs_site, event_id) DO UPDATE SET
     edge_id = 0,
@@ -162,7 +209,9 @@ BEGIN
     boundary_point = EXCLUDED.boundary_point,
     from_cost_m = 0.0,
     partial_edge_m = 0.0,
-    min_distance_m = 0.0;
+    min_distance_m = 0.0,
+    zero_reason = EXCLUDED.zero_reason,
+    pp_edge_length_m = EXCLUDED.pp_edge_length_m;
 
   -- If ALL events are zero-distance, we can return early
   IF total_events = zero_events THEN
@@ -192,8 +241,22 @@ BEGIN
         from_cost_m double precision NOT NULL,
         partial_edge_m double precision NOT NULL,
         min_distance_m double precision NOT NULL,
+        zero_reason text,
+        pp_edge_length_m double precision,
         PRIMARY KEY (usgs_site, event_id)
       )';
+  END IF;
+
+  -- Migration: add provenance columns if missing
+  PERFORM 1 FROM information_schema.columns
+    WHERE table_schema='firearea' AND table_name='hydro_fire_min_distance_detail' AND column_name='zero_reason';
+  IF NOT FOUND THEN
+    EXECUTE 'ALTER TABLE firearea.hydro_fire_min_distance_detail ADD COLUMN zero_reason text';
+  END IF;
+  PERFORM 1 FROM information_schema.columns
+    WHERE table_schema='firearea' AND table_name='hydro_fire_min_distance_detail' AND column_name='pp_edge_length_m';
+  IF NOT FOUND THEN
+    EXECUTE 'ALTER TABLE firearea.hydro_fire_min_distance_detail ADD COLUMN pp_edge_length_m double precision';
   END IF;
 
   edges_sql := format('SELECT id, source, target, cost, reverse_cost FROM firearea.flow_edges_in_catchment WHERE usgs_site = %L', site);
