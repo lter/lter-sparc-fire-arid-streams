@@ -2,18 +2,25 @@
 -- Database: wildfire (schema firearea)
 -- Requires: postgis, pgrouting
 
--- 0) Extensions
+-- (0) Extensions
 CREATE EXTENSION IF NOT EXISTS postgis;
 CREATE EXTENSION IF NOT EXISTS pgrouting;
 
--- 1) Unified catchments (USGS + non-USGS)
+-- (1) Unified catchments and pour points (USGS + non-USGS)
 DROP VIEW IF EXISTS firearea.catchments_all CASCADE;
 CREATE VIEW firearea.catchments_all AS
 SELECT usgs_site, geometry FROM firearea.catchments
 UNION ALL
 SELECT usgs_site, geometry FROM firearea.non_usgs_catchments;
 
--- 2) Build routing edges from flowlines (one edge per flowline)
+DROP VIEW IF EXISTS firearea.pour_points_all CASCADE;
+CREATE VIEW firearea.pour_points_all AS
+SELECT usgs_site, geometry FROM firearea.pour_points
+UNION ALL
+SELECT usgs_site, geometry FROM firearea.non_usgs_pour_points;
+
+
+-- (2) Build routing edges from flowlines (one edge per flowline)
 DROP TABLE IF EXISTS firearea.flow_edges_base CASCADE;
 CREATE TABLE firearea.flow_edges_base (
   id bigserial PRIMARY KEY,
@@ -37,7 +44,7 @@ FROM firearea.flowlines fl;
 CREATE INDEX IF NOT EXISTS flow_edges_base_geom_idx ON firearea.flow_edges_base USING gist (geom);
 CREATE INDEX IF NOT EXISTS flow_edges_base_site_idx ON firearea.flow_edges_base (usgs_site);
 
--- 3) Create topology (assign source/target nodes)
+-- (3) Create topology (assign source/target nodes)
 -- Tolerance ~ 1 meter in degrees
 SELECT pgr_createTopology(
   'firearea.flow_edges_base',
@@ -49,13 +56,13 @@ SELECT pgr_createTopology(
   rows_where:='true'
 );
 
--- 4) Pour-point to nearest vertex per site
+-- (4) Pour-point to nearest vertex per site
 DROP TABLE IF EXISTS firearea.pour_point_nodes CASCADE;
 CREATE TABLE firearea.pour_point_nodes AS
 SELECT p.usgs_site,
        n.id AS node_id,
        p.geometry AS geom
-FROM firearea.pour_points p
+FROM firearea.pour_points_all p
 JOIN LATERAL (
   SELECT nn.id, nn.the_geom
   FROM firearea.flow_edges_base_vertices_pgr nn
@@ -67,7 +74,7 @@ JOIN LATERAL (
 CREATE INDEX IF NOT EXISTS pour_point_nodes_site_idx ON firearea.pour_point_nodes (usgs_site);
 CREATE INDEX IF NOT EXISTS pour_point_nodes_geom_idx ON firearea.pour_point_nodes USING gist (geom);
 
--- 5) Subgraph edges limited to catchment (contributing network proxy)
+-- (5) Subgraph edges limited to catchment (contributing network proxy)
 DROP VIEW IF EXISTS firearea.flow_edges_in_catchment CASCADE;
 CREATE VIEW firearea.flow_edges_in_catchment AS
 SELECT e.*
@@ -75,14 +82,14 @@ FROM firearea.flow_edges_base e
 JOIN firearea.catchments_all c USING (usgs_site)
 WHERE ST_Intersects(e.geom, c.geometry);
 
--- 6) (Refactored) Fire boundary intersections (on-demand)
+-- (6) (Refactored) Fire boundary intersections (on-demand)
 -- Previous version materialized all (site,event,edge) intersection points in a global table
 --   firearea.fire_boundary_points, which could become extremely large.
 -- Strategy B: We now compute event distances per site on-demand inside the
 -- per-site function without persisting individual intersection points.
 -- This section is retained only as documentation; no table is created here.
 
--- 7) Results table
+-- (7) Results table
 DROP TABLE IF EXISTS firearea.hydro_fire_min_distance CASCADE;
 CREATE TABLE firearea.hydro_fire_min_distance (
   usgs_site text NOT NULL,
@@ -106,7 +113,7 @@ CREATE TABLE firearea.hydro_fire_min_distance_detail (
   PRIMARY KEY (usgs_site, event_id)
 );
 
--- 8) Compute function (per-site)
+-- (8) Compute function (per-site)
 DROP FUNCTION IF EXISTS firearea.compute_hydro_fire_distances(site text);
 CREATE OR REPLACE FUNCTION firearea.compute_hydro_fire_distances(site text)
 RETURNS void
@@ -116,10 +123,50 @@ DECLARE
   src_node bigint;
   edges_sql text;
   near_meters constant double precision := 20.0; -- tolerance for near-boundary (meters)
+  pp_geom geometry(Point,4326);
+  total_events integer;
+  zero_events integer;
 BEGIN
   SELECT node_id INTO src_node FROM firearea.pour_point_nodes WHERE usgs_site = site;
   IF src_node IS NULL THEN
     RAISE NOTICE 'No source node for %', site; RETURN;
+  END IF;
+
+  -- Pour point geometry
+  SELECT geometry INTO pp_geom FROM firearea.pour_points_all WHERE usgs_site = site LIMIT 1;
+
+  -- Identify fire events where pour point lies inside fire polygon -> zero distance
+  DROP TABLE IF EXISTS _inside_zero;
+  CREATE TEMP TABLE _inside_zero AS
+  SELECT event_id
+  FROM firearea.fires_catchments f
+  WHERE f.usgs_site = site
+    AND ST_Contains(ST_MakeValid(f.geometry), pp_geom);
+
+  SELECT COUNT(*) INTO total_events FROM firearea.fires_catchments WHERE usgs_site = site;
+  SELECT COUNT(*) INTO zero_events FROM _inside_zero;
+
+  -- Upsert zero-distance events (summary)
+  INSERT INTO firearea.hydro_fire_min_distance (usgs_site, event_id, min_distance_m)
+  SELECT site, event_id, 0.0 FROM _inside_zero
+  ON CONFLICT (usgs_site, event_id) DO UPDATE SET min_distance_m = 0.0;
+
+  -- Upsert zero-distance events (detail)
+  INSERT INTO firearea.hydro_fire_min_distance_detail (usgs_site, event_id, edge_id, orientation, fraction, boundary_point, from_cost_m, partial_edge_m, min_distance_m)
+  SELECT site, event_id, 0::bigint, 'inside', 0.0, pp_geom, 0.0, 0.0, 0.0
+  FROM _inside_zero
+  ON CONFLICT (usgs_site, event_id) DO UPDATE SET
+    edge_id = 0,
+    orientation = 'inside',
+    fraction = 0.0,
+    boundary_point = EXCLUDED.boundary_point,
+    from_cost_m = 0.0,
+    partial_edge_m = 0.0,
+    min_distance_m = 0.0;
+
+  -- If ALL events are zero-distance, we can return early
+  IF total_events = zero_events THEN
+    RETURN;
   END IF;
 
   -- Ensure summary & detail tables exist (in case only function body was loaded without earlier DDL)
@@ -195,6 +242,7 @@ BEGIN
     SELECT event_id, ST_Boundary(ST_MakeValid(geometry)) AS boundary
     FROM firearea.fires_catchments
     WHERE usgs_site = site
+      AND event_id NOT IN (SELECT event_id FROM _inside_zero)
   ), base AS (
     SELECT sf.event_id,
            ec.edge_id,
@@ -353,7 +401,9 @@ DECLARE
   chosen_partial_edge_m double precision;
   chosen_node bigint; -- endpoint node we route to (depends on orientation)
   term_edge_geom geometry(LineString,4326);
+  -- Partial terminal segment: ensure LineString type even if degenerate
   term_edge_partial_geom geometry(LineString,4326);
+  tmp_partial geometry; -- may be a POINT from ST_LineSubstring
   base_path_geo geometry; -- path to chosen_node
   full_path_geo geometry; -- base path + partial segment
   fire_poly geometry;
@@ -518,12 +568,35 @@ BEGIN
     chosen_from_cost_m := chosen_cost_source;
     chosen_partial_edge_m := chosen_len_from_start;
     chosen_node := chosen_source_node;
-    term_edge_partial_geom := ST_LineSubstring(term_edge_geom, 0.0, chosen_frac);
+    IF chosen_frac <= 0 THEN
+      tmp_partial := NULL; -- boundary at source node
+    ELSIF chosen_frac >= 1 THEN
+      tmp_partial := term_edge_geom; -- whole edge
+    ELSE
+      tmp_partial := ST_LineSubstring(term_edge_geom, 0.0, chosen_frac);
+    END IF;
   ELSE
     chosen_from_cost_m := chosen_cost_target;
     chosen_partial_edge_m := chosen_len_from_end;
     chosen_node := chosen_target_node;
-    term_edge_partial_geom := ST_LineSubstring(term_edge_geom, chosen_frac, 1.0);
+    IF chosen_frac >= 1 THEN
+      tmp_partial := NULL; -- boundary at target node
+    ELSIF chosen_frac <= 0 THEN
+      tmp_partial := term_edge_geom; -- whole edge (approached from target)
+    ELSE
+      tmp_partial := ST_LineSubstring(term_edge_geom, chosen_frac, 1.0);
+    END IF;
+  END IF;
+
+  -- Normalize POINT → zero-length LineString, keep NULL as NULL
+  IF tmp_partial IS NOT NULL THEN
+    IF GeometryType(tmp_partial) = 'POINT' THEN
+      term_edge_partial_geom := ST_MakeLine(tmp_partial, tmp_partial)::geometry(LineString,4326);
+    ELSE
+      term_edge_partial_geom := tmp_partial::geometry(LineString,4326);
+    END IF;
+  ELSE
+    term_edge_partial_geom := NULL; -- no partial segment distinct from base path
   END IF;
 
   -- Reconstruct base path to chosen endpoint vertex
@@ -566,7 +639,7 @@ BEGIN
   role := 'boundary_point'; geom := chosen_boundary_point; site := p_site; event_id := v_event_id;
   distance_m := NULL; from_cost_m := NULL; partial_edge_m := NULL; fraction := NULL; edge_id := NULL; orientation := NULL; RETURN NEXT;
 
-  role := 'pour_point'; geom := (SELECT geometry FROM firearea.pour_points WHERE usgs_site = p_site LIMIT 1); site := p_site; event_id := v_event_id;
+  role := 'pour_point'; geom := (SELECT geometry FROM firearea.pour_points_all WHERE usgs_site = p_site LIMIT 1); site := p_site; event_id := v_event_id;
   distance_m := NULL; from_cost_m := NULL; partial_edge_m := NULL; fraction := NULL; edge_id := NULL; orientation := NULL; RETURN NEXT;
 
   role := 'fire_boundary'; geom := fire_boundary; site := p_site; event_id := v_event_id;

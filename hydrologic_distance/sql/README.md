@@ -137,6 +137,85 @@ https://docs.pgrouting.org/latest/en/pgRouting-concepts.html
    - Increase the near-distance tolerance in the function (constant `near_meters`)
       if boundaries nearly touch but do not intersect.
 
+   ### pour point snapping vs true along-edge start distance
+   Current implementation snaps each pour point to the nearest existing routing
+   vertex (an endpoint of a flow edge) and then routes from that vertex. If a pour
+   point actually lies mid-edge on a long flowline segment, the reported
+   `min_distance_m` excludes the along-edge portion from the true pour point
+   location to the snapped endpoint. This produces a constant per-site undercount
+   equal to the shorter along-edge distance from the pour point to one of the edge
+   endpoints (in an undirected graph). Relative ordering of fire event distances
+   is preserved, but absolute distances can be biased low by meters to (in rare
+   cases) hundreds of meters for very long segments.
+
+   How to assess magnitude for a site:
+   ```
+   WITH pp AS (
+      SELECT p.usgs_site, p.geometry AS geom
+      FROM firearea.pour_points_all p
+      WHERE usgs_site='YOUR_SITE'
+   ), nearest_edge AS (
+      SELECT e.id, e.geom, ST_LineLocatePoint(e.geom, pp.geom) AS frac
+      FROM pp
+      JOIN LATERAL (
+          SELECT e.* FROM firearea.flow_edges_in_catchment e
+          WHERE e.usgs_site=pp.usgs_site
+          ORDER BY e.geom <-> pp.geom LIMIT 1
+      ) e ON TRUE
+   )
+   SELECT id AS edge_id,
+             frac,
+             ST_Length(ST_LineSubstring(geom,0,frac)::geography) AS dist_from_start_m,
+             ST_Length(geom::geography) - ST_Length(ST_LineSubstring(geom,0,frac)::geography) AS dist_to_end_m
+   FROM nearest_edge;
+   ```
+
+   Mitigation options (not yet implemented here):
+   - Add a stored per-site offset and adjust final distances (`raw + offset`).
+   - Compute and add an along-edge offset during the function run (no schema change).
+   - Split the edge at the pour point (synthetic vertex) and route from that exact
+      position for true network distance (most accurate, more code & per-site temp graph).
+   - Store both raw and adjusted distances for transparency.
+
+   If precision of initial along-edge distance matters for your analysis, choose
+   one of the mitigation strategies and update the compute function accordingly.
+
+    ### zero-distance events (pour point inside fire polygon)
+    The compute function now explicitly detects fire events whose polygon contains the
+    catchment pour point and records a hydrologic distance of 0 for those events.
+
+    Implementation details:
+    - Before enumerating boundary candidates the function builds a temporary table `_inside_zero`:
+       `SELECT event_id FROM firearea.fires_catchments WHERE usgs_site = :site AND ST_Contains(ST_MakeValid(geometry), pp_geom);`
+    - Each matching `event_id` is upserted into:
+       - `firearea.hydro_fire_min_distance (min_distance_m = 0)`
+       - `firearea.hydro_fire_min_distance_detail` with
+          - `edge_id = 0` (sentinel meaning “no network traversal required”),
+          - `orientation = 'inside'`,
+          - `fraction = 0.0`,
+          - `boundary_point = pour point geometry`,
+          - all distance component columns = 0.
+    - These events are excluded from subsequent candidate edge processing to avoid redundant work.
+    - If every fire event for a site is zero-distance, the function returns early after the upserts.
+
+    Practical notes:
+    - This records containment strictly with `ST_Contains` (boundary points are not considered inside). If you want boundary‑touching points also to yield distance 0, switch to `ST_Covers` in the function.
+    - The sentinel `edge_id = 0` is chosen to avoid colliding with any real edge (since `flow_edges_base.id` is a `bigserial` starting at 1). Do not treat 0 as a valid edge foreign key.
+    - Downstream analyses can quickly separate zero-distance events: `WHERE edge_id = 0 OR orientation = 'inside'`.
+    - The detail row still stores the pour point geometry in `boundary_point` so a consumer can map it using a single table.
+
+    Example query listing zero-distance events for a site:
+    ```sql
+    SELECT d.usgs_site, d.event_id, d.min_distance_m
+    FROM firearea.hydro_fire_min_distance d
+    JOIN firearea.hydro_fire_min_distance_detail det USING (usgs_site, event_id)
+    WHERE d.usgs_site = 'USGS-09404900'
+       AND det.orientation = 'inside'
+    ORDER BY d.event_id;
+    ```
+
+    To include boundary‑touch cases (if you later swap to `ST_Covers`) you'd only modify the detection expression; the persisted pattern stays identical.
+
 ## design change: on-demand boundary intersections
 Previously the workflow materialized a global table
 `firearea.fire_boundary_points` containing every (site,event,edge) intersection
