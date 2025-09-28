@@ -112,6 +112,7 @@ CREATE TABLE firearea.hydro_fire_min_distance_detail (
   min_distance_m double precision NOT NULL,
   zero_reason text,                        -- NULL unless zero-distance classification applied
   pp_edge_length_m double precision,       -- length of nearest pour point edge (for zero-distance provenance)
+  contact_type text,                       -- 'zero','intersect_or_near','intersects_unreachable'
   PRIMARY KEY (usgs_site, event_id)
 );
 
@@ -242,6 +243,10 @@ BEGIN
     min_distance_m = 0.0,
     zero_reason = EXCLUDED.zero_reason,
     pp_edge_length_m = EXCLUDED.pp_edge_length_m;
+  -- Tag zero events with contact_type
+  UPDATE firearea.hydro_fire_min_distance_detail d
+    SET contact_type = 'zero'
+  WHERE d.usgs_site = site AND d.event_id IN (SELECT event_id FROM _inside_zero);
 
   -- If ALL events are zero-distance, we can return early
   IF total_events = zero_events THEN
@@ -288,6 +293,12 @@ BEGIN
   IF NOT FOUND THEN
     EXECUTE 'ALTER TABLE firearea.hydro_fire_min_distance_detail ADD COLUMN pp_edge_length_m double precision';
   END IF;
+  -- Migration: add contact_type if missing
+  PERFORM 1 FROM information_schema.columns
+    WHERE table_schema='firearea' AND table_name='hydro_fire_min_distance_detail' AND column_name='contact_type';
+  IF NOT FOUND THEN
+    EXECUTE 'ALTER TABLE firearea.hydro_fire_min_distance_detail ADD COLUMN contact_type text';
+  END IF;
 
   -- (Vertex costs already computed above in _tc; reuse for downstream logic.)
 
@@ -304,6 +315,21 @@ BEGIN
   JOIN _tc tc_s ON tc_s.end_vid = e.source
   JOIN _tc tc_t ON tc_t.end_vid = e.target
   WHERE e.usgs_site = site;
+
+  -- All hit edges (including those whose endpoints are not both reachable) for unreachable classification
+  DROP TABLE IF EXISTS _all_hit_edges;
+  CREATE TEMP TABLE _all_hit_edges AS
+  WITH site_fires AS (
+    SELECT event_id, ST_Boundary(ST_MakeValid(geometry)) AS boundary
+    FROM firearea.fires_catchments
+    WHERE usgs_site = site
+      AND event_id NOT IN (SELECT event_id FROM _inside_zero)
+  )
+  SELECT DISTINCT sf.event_id, e.id AS edge_id
+  FROM firearea.flow_edges_in_catchment e
+  JOIN site_fires sf ON TRUE
+  WHERE e.usgs_site = site
+    AND (ST_Intersects(e.geom, sf.boundary) OR ST_DWithin(e.geom::geography, sf.boundary::geography, near_meters));
 
   -- Enumerate all intersection / near-boundary candidate points (multi-cross aware)
   DROP TABLE IF EXISTS _event_candidates;
@@ -400,6 +426,38 @@ BEGIN
   FROM _event_candidates
   ORDER BY event_id, candidate_distance;
 
+  -- Identify intersects_unreachable events: events with any hit edge but no reachable candidates
+  DROP TABLE IF EXISTS _events_with_candidates;
+  CREATE TEMP TABLE _events_with_candidates AS
+    SELECT DISTINCT event_id FROM _event_candidates;
+
+  DROP TABLE IF EXISTS _intersects_unreachable;
+  CREATE TEMP TABLE _intersects_unreachable AS
+    WITH hit_events AS (
+      SELECT DISTINCT event_id FROM _all_hit_edges
+    )
+    SELECT he.event_id,
+           -- pick a representative boundary point (PointOnSurface of boundary)
+           ST_PointOnSurface(ST_Boundary(ST_MakeValid(f.geometry))) AS boundary_point
+    FROM hit_events he
+    LEFT JOIN _events_with_candidates ec ON ec.event_id = he.event_id
+    JOIN firearea.fires_catchments f ON f.usgs_site = site AND f.event_id = he.event_id
+    WHERE ec.event_id IS NULL;  -- no reachable candidates
+
+  -- Insert unreachable placeholders into summary (NaN distance) unless zero already handled
+  INSERT INTO firearea.hydro_fire_min_distance (usgs_site, event_id, min_distance_m)
+  SELECT site, event_id, 'NaN'::float8 FROM _intersects_unreachable
+  ON CONFLICT (usgs_site, event_id) DO NOTHING; -- zero events already inserted
+
+  -- Insert unreachable placeholders into detail
+  INSERT INTO firearea.hydro_fire_min_distance_detail (
+      usgs_site, event_id, edge_id, orientation, fraction, boundary_point,
+      from_cost_m, partial_edge_m, min_distance_m, zero_reason, pp_edge_length_m, contact_type)
+  SELECT site, event_id, 0::bigint, 'unreachable', 0.0, boundary_point,
+         'NaN'::float8, 'NaN'::float8, 'NaN'::float8, NULL, NULL, 'intersects_unreachable'
+  FROM _intersects_unreachable
+  ON CONFLICT (usgs_site, event_id) DO NOTHING;
+
   -- Upsert summary distances
   INSERT INTO firearea.hydro_fire_min_distance (usgs_site, event_id, min_distance_m)
   SELECT site, event_id, min_distance_m FROM _event_min
@@ -417,6 +475,13 @@ BEGIN
     from_cost_m = EXCLUDED.from_cost_m,
     partial_edge_m = EXCLUDED.partial_edge_m,
     min_distance_m = EXCLUDED.min_distance_m;
+  -- Tag intersect/near events (reachable) that are not already zero or unreachable
+  UPDATE firearea.hydro_fire_min_distance_detail d
+    SET contact_type = 'intersect_or_near'
+  WHERE d.usgs_site = site
+    AND d.event_id IN (SELECT event_id FROM _event_min)
+    AND d.contact_type IS DISTINCT FROM 'zero';
+
 
   DROP TABLE IF EXISTS _tc; DROP TABLE IF EXISTS _edge_cost; DROP TABLE IF EXISTS _event_candidates; DROP TABLE IF EXISTS _event_min;
 END;
