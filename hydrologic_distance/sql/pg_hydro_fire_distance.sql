@@ -136,59 +136,89 @@ BEGIN
 
   -- Pour point geometry
   SELECT geometry INTO pp_geom FROM firearea.pour_points_all WHERE usgs_site = site LIMIT 1;
+  
+  -- Prepare edge SQL and pre-compute directed vertex costs (for upstream determination and later routing)
+  edges_sql := format('SELECT id, source, target, cost, reverse_cost FROM firearea.flow_edges_in_catchment WHERE usgs_site = %L', site);
+
+  DROP TABLE IF EXISTS _tc;  -- vertex total costs from pour point (directed)
+  CREATE TEMP TABLE _tc AS
+  SELECT end_vid, agg_cost AS total_cost
+  FROM pgr_dijkstraCost(
+    edges_sql,
+    src_node,
+    ARRAY(SELECT DISTINCT v.id
+          FROM firearea.flow_edges_base_vertices_pgr v
+          JOIN firearea.flow_edges_in_catchment e ON v.id IN (e.source, e.target)
+          WHERE e.usgs_site = site),
+    directed := true);
+  CREATE INDEX ON _tc(end_vid);
+
+  -- Safeguard: any non-source vertex with distance 0 indicates a logic or data issue
+  PERFORM 1 FROM _tc WHERE end_vid <> src_node AND total_cost = 0;
+  IF FOUND THEN
+    RAISE EXCEPTION 'Unexpected zero total_cost for non-source vertex(es) at site % (early cost build)', site;
+  END IF;
 
   -- Identify fire events with zero hydrologic distance.
-  -- Criteria (any satisfied):
+  -- Expanded Criteria (any satisfied):
   --   (a) Fire polygon covers the original pour point geometry (zero_reason='pour_point')
-  --   (b) Fire polygon covers the upstream vertex of the nearest flow edge to the pour point (zero_reason='upstream_vertex')
-  --       Upstream vertex derivation hardened: pick the endpoint of the nearest edge that is FARTHER (network-proxy) from the pour point,
-  --       approximated here by choosing the endpoint that is NOT the closest in Euclidean distance to the pour point.
-  --       (Improvement opportunity: replace with true network distance comparison if direction metadata becomes available.)
-  -- If both are covered, we prioritize 'pour_point'.
+  --   (b) Fire polygon covers ANY upstream vertex among all edges in the catchment (zero_reason='upstream_vertex').
+  --       Upstream vertex per edge is the endpoint with the higher network cost from pour point (directed),
+  --       falling back to farther Euclidean endpoint only if one/both costs are NULL or equal.
+  -- Pour point classification has priority; duplicates are collapsed by DISTINCT.
   DROP TABLE IF EXISTS _inside_zero;
   CREATE TEMP TABLE _inside_zero AS
-  WITH nearest_edge_raw AS (
-    SELECT e.id AS edge_id, e.source, e.target, e.cost AS edge_length_m,
-           e.geom
+  WITH fire_events AS (
+    SELECT event_id, ST_MakeValid(geometry) AS geom
+    FROM firearea.fires_catchments
+    WHERE usgs_site = site
+  ), nearest_edge_len AS (
+    SELECT e.cost AS pp_edge_length_m
     FROM firearea.flow_edges_in_catchment e
     WHERE e.usgs_site = site
     ORDER BY e.geom <-> pp_geom
     LIMIT 1
-  ), endpoint_coords AS (
-    SELECT ner.edge_id,
-           ner.edge_length_m,
-           ner.source,
-           ner.target,
+  ), edge_endpoints AS (
+    SELECT e.id AS edge_id,
+           e.source,
+           e.target,
            vs.the_geom AS source_geom,
            vt.the_geom AS target_geom,
-           ST_Distance(vs.the_geom::geography, pp_geom::geography) AS dist_source_m,
-           ST_Distance(vt.the_geom::geography, pp_geom::geography) AS dist_target_m
-    FROM nearest_edge_raw ner
-    JOIN firearea.flow_edges_base_vertices_pgr vs ON vs.id = ner.source
-    JOIN firearea.flow_edges_base_vertices_pgr vt ON vt.id = ner.target
-  ), classified_edge AS (
+           tcs.total_cost AS cost_source,
+           tct.total_cost AS cost_target
+    FROM firearea.flow_edges_in_catchment e
+    JOIN firearea.flow_edges_base_vertices_pgr vs ON vs.id = e.source
+    JOIN firearea.flow_edges_base_vertices_pgr vt ON vt.id = e.target
+    LEFT JOIN _tc tcs ON tcs.end_vid = e.source
+    LEFT JOIN _tc tct ON tct.end_vid = e.target
+    WHERE e.usgs_site = site
+  ), per_edge_upstream AS (
     SELECT edge_id,
-           edge_length_m,
-           CASE WHEN dist_source_m <= dist_target_m THEN target ELSE source END AS upstream_node,
-           CASE WHEN dist_source_m <= dist_target_m THEN source ELSE target END AS downstream_node,
-           CASE WHEN dist_source_m <= dist_target_m THEN target_geom ELSE source_geom END AS upstream_geom,
-           CASE WHEN dist_source_m <= dist_target_m THEN source_geom ELSE target_geom END AS downstream_geom
-    FROM endpoint_coords
+           CASE WHEN cost_source IS NOT NULL AND cost_target IS NOT NULL AND cost_source < cost_target THEN target_geom
+                WHEN cost_source IS NOT NULL AND cost_target IS NOT NULL AND cost_source > cost_target THEN source_geom
+                ELSE CASE WHEN ST_Distance(source_geom::geography, pp_geom::geography) <= ST_Distance(target_geom::geography, pp_geom::geography)
+                          THEN target_geom ELSE source_geom END
+           END AS upstream_geom
+    FROM edge_endpoints
+  ), pour_point_zero AS (
+    SELECT fe.event_id,
+           'pour_point'::text AS zero_reason,
+           (SELECT pp_edge_length_m FROM nearest_edge_len) AS pp_edge_length_m
+    FROM fire_events fe
+    WHERE ST_Covers(fe.geom, pp_geom)
+  ), upstream_vertex_zero AS (
+    SELECT DISTINCT fe.event_id,
+           'upstream_vertex'::text AS zero_reason,
+           (SELECT pp_edge_length_m FROM nearest_edge_len) AS pp_edge_length_m
+    FROM fire_events fe
+    JOIN per_edge_upstream pu ON pu.upstream_geom IS NOT NULL AND ST_Covers(fe.geom, pu.upstream_geom)
+    WHERE NOT ST_Covers(fe.geom, pp_geom)  -- exclude those already covered by pour point classification
   )
-  SELECT f.event_id,
-         CASE
-           WHEN ST_Covers(ST_MakeValid(f.geometry), pp_geom) THEN 'pour_point'
-           WHEN (ce.upstream_geom IS NOT NULL AND ST_Covers(ST_MakeValid(f.geometry), ce.upstream_geom)) THEN 'upstream_vertex'
-           ELSE NULL
-         END AS zero_reason,
-         ce.edge_length_m AS pp_edge_length_m
-  FROM firearea.fires_catchments f
-  LEFT JOIN classified_edge ce ON TRUE
-  WHERE f.usgs_site = site
-    AND (
-      ST_Covers(ST_MakeValid(f.geometry), pp_geom)
-      OR (ce.upstream_geom IS NOT NULL AND ST_Covers(ST_MakeValid(f.geometry), ce.upstream_geom))
-    );
+  SELECT * FROM (
+    SELECT * FROM pour_point_zero
+    UNION ALL
+    SELECT * FROM upstream_vertex_zero
+  ) z;
 
   SELECT COUNT(*) INTO total_events FROM firearea.fires_catchments WHERE usgs_site = site;
   SELECT COUNT(*) INTO zero_events FROM _inside_zero;
@@ -259,30 +289,7 @@ BEGIN
     EXECUTE 'ALTER TABLE firearea.hydro_fire_min_distance_detail ADD COLUMN pp_edge_length_m double precision';
   END IF;
 
-  edges_sql := format('SELECT id, source, target, cost, reverse_cost FROM firearea.flow_edges_in_catchment WHERE usgs_site = %L', site);
-
-  -- Direct distance extraction: use pgr_dijkstraCost (one row per destination) instead of
-  -- pgr_dijkstra (which returns path steps requiring MAX aggregation). This is faster and
-  -- eliminates the risk of mistakenly using MIN.
-  DROP TABLE IF EXISTS _tc;
-  CREATE TEMP TABLE _tc AS
-  SELECT end_vid, agg_cost AS total_cost
-  FROM pgr_dijkstraCost(
-    edges_sql,
-    src_node,
-    ARRAY(SELECT DISTINCT v.id
-          FROM firearea.flow_edges_base_vertices_pgr v
-          JOIN firearea.flow_edges_in_catchment e ON v.id IN (e.source, e.target)
-          WHERE e.usgs_site = site),
-    directed := false);
-
-  CREATE INDEX ON _tc(end_vid);
-
-  -- Safeguard: any non-source vertex with distance 0 indicates a logic or data issue
-  PERFORM 1 FROM _tc WHERE end_vid <> src_node AND total_cost = 0;
-  IF FOUND THEN
-    RAISE EXCEPTION 'Unexpected zero total_cost for non-source vertex(es) at site %', site;
-  END IF;
+  -- (Vertex costs already computed above in _tc; reuse for downstream logic.)
 
   -- Costs to both endpoints per edge
   DROP TABLE IF EXISTS _edge_cost;
@@ -482,6 +489,8 @@ BEGIN
   IF src_node IS NULL THEN RAISE NOTICE 'No pour point node for site %', p_site; RETURN; END IF;
 
   edges_sql := format('SELECT id, source, target, cost, reverse_cost FROM firearea.flow_edges_in_catchment WHERE usgs_site = %L', p_site);
+  -- Directional routing (see note in compute_hydro_fire_distances). Currently costs are
+  -- symmetric; changing reverse_cost to NULL/penalty will constrain traversal.
 
   -- Vertex distances via pgr_dijkstraCost
   DROP TABLE IF EXISTS _mr_tc;
@@ -494,7 +503,7 @@ BEGIN
           FROM firearea.flow_edges_base_vertices_pgr v
           JOIN firearea.flow_edges_in_catchment e ON v.id IN (e.source, e.target)
           WHERE e.usgs_site = p_site),
-    directed := false);
+    directed := true);
   CREATE INDEX ON _mr_tc(end_vid);
 
   -- Safeguard
@@ -665,7 +674,7 @@ BEGIN
   -- Reconstruct base path to chosen endpoint vertex
   DROP TABLE IF EXISTS _mr_path;
   CREATE TEMP TABLE _mr_path AS
-  SELECT * FROM pgr_dijkstra(edges_sql, src_node, ARRAY[chosen_node], directed := false);
+  SELECT * FROM pgr_dijkstra(edges_sql, src_node, ARRAY[chosen_node], directed := true);
 
   SELECT ST_LineMerge(ST_Collect(e.geom)) INTO base_path_geo
   FROM _mr_path p
