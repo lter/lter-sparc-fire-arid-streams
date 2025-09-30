@@ -948,6 +948,395 @@ BEGIN
 END;
 $$;
 
+--------------------------------------------------------------------------------
+-- EXPORT FUNCTION: fn_fire_event_paths_lite
+-- Purpose:
+--   Reconstruct (post-hoc) the shortest path geometry used implicitly by
+--   fn_compute_site_fire_distances_lite for each fire event of a site, plus
+--   the specific intersection point (vertex along an event edge) that yielded
+--   the minimal distance. This does NOT modify any existing tables; it derives
+--   everything on-the-fly and therefore can be safely used for ad hoc export.
+--
+-- Rationale:
+--   The lite distance function intentionally omits path reconstruction for
+--   performance and simplicity. For visualization or GIS export (e.g. via
+--   ogr2ogr) we sometimes need the actual flow path polyline(s) from the pour
+--   point to the selected event intersection point. This function repeats a
+--   subset of the lite logic (pour point selection, event intersection
+--   generation, shortest-path to edge endpoints, candidate evaluation) and
+--   then gathers the edge sequence for the chosen endpoint.
+--
+-- Key Points:
+--   * Does NOT depend on prior execution of the lite function (it recomputes).
+--   * Returns one row per wildfire event_id.
+--   * Path is assembled as a merged geometry of all edges in the dijkstra path
+--     (start vertex → chosen endpoint vertex) plus the partial segment along
+--     the event edge from that endpoint to the actual intersection point.
+--   * Distance fields allow cross-check with site_fire_distances (base + offset).
+--
+-- Return Columns:
+--   event_id                Fire event identifier
+--   ig_date                 Event date
+--   pour_point_identifier   Selected pour point id
+--   chosen_endpoint         'source' or 'target' for the event edge endpoint used
+--   fraction                Fraction along the event edge (source→target)
+--   base_distance_m         Distance from pour point start vertex to intersection MINUS pour point mid-edge offset
+--   pour_point_offset_m     Offset along pour point edge from chosen start vertex to actual pour point
+--   total_distance_m        base_distance_m + pour_point_offset_m (should match site_fire_distances.distance_m)
+--   path_edge_count         Number of whole edges in the vertex-to-vertex path (excludes partial event segment)
+--   path_geom               Geometry (LineString or MultiLineString) in SRID 5070
+--   intersection_point      Point geometry (SRID 5070) of selected fire intersection
+--
+-- Notes / Limitations:
+--   * Undirected traversal (same as lite function).
+--   * If multiple intersection edges tie exactly, source endpoint is preferred.
+--   * Geometry merging uses ST_LineMerge(ST_Collect(...)); topology direction
+--     is not explicitly enforced—suitable for visualization & distance display.
+--
+-- Example ogr2ogr Usage:
+--   Export paths:
+--     ogr2ogr -f GeoJSON syca_fire_paths.geojson \
+--       PG:"host=HOST dbname=DB user=USER password=PASS" \
+--       -sql "SELECT event_id, ig_date, total_distance_m, path_geom FROM firearea.fn_fire_event_paths_lite('syca')" \
+--       -nln syca_fire_paths
+--
+--   Export intersection points:
+--     ogr2ogr -f GeoJSON syca_fire_points.geojson \
+--       PG:"host=HOST dbname=DB user=USER password=PASS" \
+--       -sql "SELECT event_id, ig_date, intersection_point FROM firearea.fn_fire_event_paths_lite('syca')" \
+--       -nln syca_fire_points
+--
+DROP FUNCTION IF EXISTS firearea.fn_fire_event_paths_lite(text, double precision);
+CREATE OR REPLACE FUNCTION firearea.fn_fire_event_paths_lite(
+    in_usgs_site text,
+    in_snap_tolerance_m double precision DEFAULT 60.0
+) RETURNS TABLE(
+    event_id text,
+    ig_date date,
+    pour_point_identifier text,
+    chosen_endpoint text,
+    fraction double precision,
+    base_distance_m double precision,
+    pour_point_offset_m double precision,
+    total_distance_m double precision,
+    path_edge_count integer,
+    path_edge_ids bigint[],
+    start_vertex_id bigint,
+    end_vertex_id bigint,
+    end_vertex_geom geometry(Point,5070),
+    path_geom geometry(LineString,5070),
+    intersection_point geometry(Point,5070)
+) LANGUAGE plpgsql AS $$
+DECLARE
+    v_site_lower text := lower(in_usgs_site);
+    v_pp_identifier text;
+    v_pp_comid text;
+    v_pp_edge_id bigint;
+    v_pp_fraction double precision;
+    v_pp_is_vertex boolean;
+    v_pp_snap_distance double precision;
+    v_start_vertex_id bigint;
+    v_offset_m double precision := 0; -- pour point offset along its edge
+    v_edge_len double precision;
+    v_edge_source bigint;
+    v_edge_target bigint;
+BEGIN
+    -- Preconditions (mirror lite function minimal checks)
+    IF NOT EXISTS (SELECT 1 FROM firearea.network_edges WHERE lower(usgs_site)=v_site_lower) THEN
+        RAISE EXCEPTION 'No network edges for site %', v_site_lower; END IF;
+    IF NOT EXISTS (SELECT 1 FROM firearea.fires_catchments WHERE lower(usgs_site)=v_site_lower) THEN
+        RAISE EXCEPTION 'No fire events for site %', v_site_lower; END IF;
+    IF NOT EXISTS (SELECT 1 FROM firearea.pour_point_snaps WHERE lower(usgs_site)=v_site_lower) THEN
+        RAISE EXCEPTION 'No pour point snaps for site %', v_site_lower; END IF;
+    -- Explicit projected geom column presence check (most common hidden cause of failures here)
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='firearea' AND table_name='network_edges' AND column_name='geom_5070'
+    ) THEN
+        RAISE EXCEPTION 'Expected column firearea.network_edges.geom_5070 not found. Rebuild topology with SRID 5070 (fn_build_network_topology) or adjust function to match existing SRID.';
+    END IF;
+
+    -- Select pour point (same ordering rule)
+    SELECT identifier, comid, snap_edge_id, snap_fraction, is_exact_vertex, snap_distance_m
+      INTO v_pp_identifier, v_pp_comid, v_pp_edge_id, v_pp_fraction, v_pp_is_vertex, v_pp_snap_distance
+    FROM firearea.pour_point_snaps
+    WHERE lower(usgs_site)=v_site_lower
+    ORDER BY snap_distance_m, identifier
+    LIMIT 1;
+    IF v_pp_identifier IS NULL THEN
+        RAISE EXCEPTION 'Pour point selection failed for site %', v_site_lower; END IF;
+    IF v_pp_snap_distance IS NULL OR v_pp_snap_distance > in_snap_tolerance_m THEN
+        RAISE EXCEPTION 'Pour point snap distance % exceeds tolerance % for site %', v_pp_snap_distance, in_snap_tolerance_m, v_site_lower; END IF;
+
+    -- Nearest start vertex
+    SELECT v.id INTO v_start_vertex_id
+    FROM firearea.network_edges_vertices_pgr v
+    JOIN firearea.network_edges e ON (e.source=v.id OR e.target=v.id)
+    WHERE lower(e.usgs_site)=v_site_lower
+    ORDER BY v.the_geom <-> (
+        SELECT snap_geom FROM firearea.pour_point_snaps
+        WHERE lower(usgs_site)=v_site_lower AND identifier=v_pp_identifier LIMIT 1)
+    LIMIT 1;
+    IF v_start_vertex_id IS NULL THEN
+        RAISE EXCEPTION 'Start vertex could not be determined for site %', v_site_lower; END IF;
+
+    -- Pour point offset
+    SELECT source, target, length_m INTO v_edge_source, v_edge_target, v_edge_len
+    FROM firearea.network_edges WHERE edge_id = v_pp_edge_id;
+    IF v_edge_len IS NOT NULL AND NOT v_pp_is_vertex THEN
+        IF v_start_vertex_id = v_edge_source THEN
+            v_offset_m := v_edge_len * v_pp_fraction;
+        ELSIF v_start_vertex_id = v_edge_target THEN
+            v_offset_m := v_edge_len * (1 - v_pp_fraction);
+        ELSE
+            v_offset_m := LEAST(v_edge_len * v_pp_fraction, v_edge_len * (1 - v_pp_fraction));
+        END IF;
+    END IF;
+
+    -- Event intersection points & fallback (enhanced robustness)
+    -- Improvements in this revision:
+    --   * Handles point AND line overlaps (boundary following an edge) by deriving a midpoint fraction from overlapping line segments.
+    --   * Processes geometry collections safely (extracts point & line components separately).
+    --   * Produces at most one fraction per (event_id, edge_id, fraction) combination (dedup downstream).
+    --   * Reduces likelihood of NULL fractions causing runtime issues.
+    DROP TABLE IF EXISTS firearea._exp_event_points;
+    CREATE TEMP TABLE firearea._exp_event_points ON COMMIT DROP AS
+    WITH fire_raw AS (
+        SELECT event_id, ig_date,
+               CASE WHEN GeometryType(geometry) LIKE 'Multi%'
+                        THEN ST_CollectionExtract(geometry,3)
+                    ELSE geometry END AS geom_4326
+        FROM firearea.fires_catchments
+        WHERE lower(usgs_site)=v_site_lower
+    ), fire_poly AS (
+        SELECT event_id, ig_date, ST_Transform(geom_4326,5070) AS geom_5070
+        FROM fire_raw
+    ), edge_prepped AS (
+        SELECT edge_id,
+               CASE WHEN ne.geom_5070 IS NULL THEN NULL
+                    WHEN GeometryType(ne.geom_5070) IN ('MULTILINESTRING','MULTICURVE') THEN ST_LineMerge(ne.geom_5070)
+                    ELSE ne.geom_5070 END AS line_geom
+        FROM firearea.network_edges ne
+        WHERE lower(ne.usgs_site)=v_site_lower
+    ), raw_intersections AS (
+        -- Dump all boundary intersections (could be points, lines, or mixed)
+        SELECT f.event_id, f.ig_date, ep.edge_id,
+               (ST_Dump(
+                   ST_Intersection(
+                       ST_Boundary(f.geom_5070),
+                       ep.line_geom
+                   )
+               )).geom AS ig
+        FROM fire_poly f
+        JOIN edge_prepped ep
+          ON ep.line_geom IS NOT NULL
+         AND ST_Intersects(f.geom_5070, ep.line_geom)
+        WHERE ST_Intersects(ST_Boundary(f.geom_5070), ep.line_geom)
+    ), point_geoms AS (
+        SELECT event_id, ig_date, edge_id, (ST_Dump(
+            CASE WHEN GeometryType(ig)='MULTIPOINT' THEN ig ELSE ig END)).geom AS pt
+        FROM raw_intersections
+        WHERE GeometryType(ig) IN ('POINT','MULTIPOINT')
+    ), line_geoms AS (
+        -- Overlapping boundary/edge segments -> take midpoint for representative fraction
+        SELECT event_id, ig_date, edge_id,
+               ST_LineMerge(ig) AS seg
+        FROM raw_intersections
+        WHERE GeometryType(ig) IN ('LINESTRING','MULTILINESTRING')
+    ), line_midpoints AS (
+        SELECT event_id, ig_date, edge_id,
+               -- Use midpoint along the overlapping segment as representative intersection
+               ST_LineInterpolatePoint(seg,0.5) AS pt
+        FROM line_geoms
+        WHERE seg IS NOT NULL AND NOT ST_IsEmpty(seg) AND ST_GeometryType(seg) LIKE '%LINESTRING%'
+    ), all_points AS (
+        SELECT event_id, ig_date, edge_id, pt FROM point_geoms
+        UNION ALL
+        SELECT event_id, ig_date, edge_id, pt FROM line_midpoints
+    ), fractions AS (
+        SELECT ap.event_id, ap.ig_date, ap.edge_id,
+               ST_LineLocatePoint(ep.line_geom, ST_Force2D(ap.pt)) AS fraction
+        FROM all_points ap
+        JOIN edge_prepped ep USING (edge_id)
+        WHERE ap.pt IS NOT NULL AND NOT ST_IsEmpty(ap.pt)
+    )
+    SELECT DISTINCT event_id, ig_date, edge_id, fraction
+    FROM fractions
+    WHERE fraction BETWEEN 0 AND 1;  -- guard against numeric edge cases
+
+    -- Basic diagnostics (NOTICE only; harmless if ignored)
+    BEGIN
+        PERFORM 1;  -- placeholder block to allow EXCEPTION capture if needed later
+        RAISE NOTICE '[paths_lite] intersections: points=% lines=% final_rows=%',
+            (SELECT count(*) FROM raw_intersections WHERE GeometryType(ig) IN ('POINT','MULTIPOINT')),
+            (SELECT count(*) FROM raw_intersections WHERE GeometryType(ig) IN ('LINESTRING','MULTILINESTRING')),
+            (SELECT count(*) FROM firearea._exp_event_points);
+    EXCEPTION WHEN OTHERS THEN
+        -- Swallow any diagnostic errors silently
+        NULL;
+    END;
+
+    -- Fallback midpoint for containment
+    INSERT INTO firearea._exp_event_points(event_id, ig_date, edge_id, fraction)
+    SELECT f.event_id, f.ig_date, ne.edge_id, 0.5
+    FROM firearea.fires_catchments f
+    JOIN firearea.network_edges ne
+      ON lower(ne.usgs_site)=v_site_lower AND lower(f.usgs_site)=v_site_lower
+     AND ST_Contains(ST_Transform(f.geometry,5070), ne.geom_5070)
+    WHERE lower(f.usgs_site)=v_site_lower
+      AND f.event_id NOT IN (SELECT DISTINCT event_id FROM firearea._exp_event_points);
+
+    -- Deduplicate
+    DELETE FROM firearea._exp_event_points a USING firearea._exp_event_points b
+    WHERE a.ctid < b.ctid
+      AND a.event_id=b.event_id AND a.edge_id=b.edge_id AND a.fraction=b.fraction;
+
+    -- Candidate event edges
+    DROP TABLE IF EXISTS firearea._exp_event_edges;
+    CREATE TEMP TABLE firearea._exp_event_edges ON COMMIT DROP AS
+    SELECT DISTINCT ep.event_id, ep.ig_date, ep.edge_id, ep.fraction, e.source, e.target, e.length_m
+    FROM firearea._exp_event_points ep
+    JOIN firearea.network_edges e ON e.edge_id = ep.edge_id;
+
+    -- Needed vertices list
+    DROP TABLE IF EXISTS firearea._exp_vertices_needed;
+    CREATE TEMP TABLE firearea._exp_vertices_needed ON COMMIT DROP AS
+    SELECT DISTINCT unnest(ARRAY[source,target]) AS vertex_id FROM firearea._exp_event_edges;
+
+    -- Dijkstra full path (retain sequences) from single start to all needed vertices
+    DROP TABLE IF EXISTS firearea._exp_paths_raw;
+    CREATE TEMP TABLE firearea._exp_paths_raw ON COMMIT DROP AS
+    SELECT * FROM pgr_dijkstra(
+        format($q$SELECT edge_id AS id, source, target, length_m AS cost, length_m AS reverse_cost FROM firearea.network_edges WHERE lower(usgs_site)=%L$q$, v_site_lower),
+        v_start_vertex_id,
+        ARRAY(SELECT vertex_id FROM firearea._exp_vertices_needed),
+        false
+    );
+
+    -- Minimal distance per vertex_id (distinct on node)
+    DROP TABLE IF EXISTS firearea._exp_vertex_dist;
+    CREATE TEMP TABLE firearea._exp_vertex_dist ON COMMIT DROP AS
+    SELECT DISTINCT ON (node) node AS vertex_id, agg_cost AS dist
+    FROM firearea._exp_paths_raw
+    ORDER BY node, agg_cost;
+
+    -- Event candidate distances (like lite)
+    DROP TABLE IF EXISTS firearea._exp_event_candidate;
+    CREATE TEMP TABLE firearea._exp_event_candidate ON COMMIT DROP AS
+    SELECT e.event_id, e.ig_date, e.edge_id, e.fraction,
+           vdS.dist + e.length_m * e.fraction AS dist_via_source,
+           vdT.dist + e.length_m * (1 - e.fraction) AS dist_via_target,
+           e.source, e.target, e.length_m
+    FROM firearea._exp_event_edges e
+    LEFT JOIN firearea._exp_vertex_dist vdS ON vdS.vertex_id = e.source
+    LEFT JOIN firearea._exp_vertex_dist vdT ON vdT.vertex_id = e.target;
+
+    -- Choose best candidate per event (tie -> source)
+    DROP TABLE IF EXISTS firearea._exp_event_choice;
+    CREATE TEMP TABLE firearea._exp_event_choice ON COMMIT DROP AS
+    SELECT * FROM (
+        SELECT ec.event_id, ec.ig_date, ec.edge_id, ec.fraction,
+               CASE
+                   WHEN ec.dist_via_source IS NULL AND ec.dist_via_target IS NULL THEN NULL
+                   WHEN ec.dist_via_source IS NULL THEN 'target'
+                   WHEN ec.dist_via_target IS NULL THEN 'source'
+                   WHEN ec.dist_via_source <= ec.dist_via_target THEN 'source'
+                   ELSE 'target'
+               END AS chosen_endpoint,
+               CASE
+                   WHEN ec.dist_via_source IS NULL AND ec.dist_via_target IS NULL THEN NULL
+                   WHEN ec.dist_via_source IS NULL THEN ec.dist_via_target
+                   WHEN ec.dist_via_target IS NULL THEN ec.dist_via_source
+                   ELSE LEAST(ec.dist_via_source, ec.dist_via_target)
+               END AS base_distance_m,
+               ec.source, ec.target, ec.length_m,
+               ROW_NUMBER() OVER (PARTITION BY ec.event_id ORDER BY 
+                  COALESCE(LEAST(ec.dist_via_source, ec.dist_via_target), 1e308)) AS rn
+        FROM firearea._exp_event_candidate ec
+    ) s WHERE rn=1;  -- pick minimal
+
+    -- Assemble path edges for chosen endpoint
+    RETURN QUERY
+    WITH chosen AS (
+        SELECT c.*, (c.chosen_endpoint='source')::boolean AS via_source
+        FROM firearea._exp_event_choice c
+        WHERE base_distance_m IS NOT NULL
+    ), endpoint_vertex AS (
+        SELECT event_id, ig_date, via_source,
+               CASE WHEN via_source THEN source ELSE target END AS end_vertex,
+               edge_id, fraction, base_distance_m, chosen_endpoint, length_m
+        FROM chosen
+    ), path_edges AS (
+        SELECT ep.event_id, ep.ig_date, pr.seq, pr.edge, pr.node, pr.agg_cost,
+               ne.geom_5070
+        FROM endpoint_vertex ep
+        JOIN firearea._exp_paths_raw pr ON pr.end_vid = ep.end_vertex
+        JOIN firearea.network_edges ne ON ne.edge_id = pr.edge
+        WHERE pr.edge <> -1  -- exclude virtual rows produced for start vertex sometimes
+          AND pr.edge IS NOT NULL
+    ), path_geom_lines AS (
+        SELECT event_id, ig_date,
+               CASE WHEN COUNT(*) = 0 THEN NULL
+                    ELSE ST_LineMerge(ST_Collect(geom_5070)) END AS core_path_geom,
+               COUNT(*) AS edge_ct,
+               CASE WHEN COUNT(*)=0 THEN ARRAY[]::bigint[]
+                    ELSE ARRAY_AGG(edge ORDER BY seq) END AS edge_ids
+        FROM path_edges
+        GROUP BY event_id, ig_date
+    ), partial_seg AS (
+        SELECT ep.event_id, ep.ig_date,
+               CASE WHEN ep.via_source THEN
+                    ST_LineSubstring(ne.geom_5070, 0, ep.fraction)
+               ELSE
+                    ST_Reverse(ST_LineSubstring(ne.geom_5070, ep.fraction, 1))
+               END AS partial_geom
+        FROM endpoint_vertex ep
+        JOIN firearea.network_edges ne ON ne.edge_id = ep.edge_id
+    ), intersection_point AS (
+        SELECT ep.event_id, ep.ig_date,
+               ST_LineInterpolatePoint(ne.geom_5070, ep.fraction) AS ipt
+        FROM endpoint_vertex ep
+        JOIN firearea.network_edges ne ON ne.edge_id = ep.edge_id
+    ), end_vertex_geom AS (
+        SELECT DISTINCT ep.event_id, ep.ig_date, ev.end_vertex AS end_vertex_id, v.the_geom::geometry(Point,5070) AS end_vertex_geom
+        FROM endpoint_vertex ep
+        JOIN (SELECT event_id, ig_date, via_source, CASE WHEN via_source THEN source ELSE target END AS end_vertex FROM endpoint_vertex) ev USING (event_id, ig_date)
+        JOIN firearea.network_edges_vertices_pgr v ON v.id = ev.end_vertex
+    ), merged AS (
+        SELECT p.event_id, p.ig_date, p.edge_ct, p.edge_ids, ep.fraction, ep.base_distance_m,
+               ep.chosen_endpoint, p.core_path_geom, ps.partial_geom, ip.ipt,
+               ep.via_source, ep.edge_id, ev.end_vertex_id, ev.end_vertex_geom
+        FROM path_geom_lines p
+        JOIN endpoint_vertex ep USING (event_id, ig_date)
+        LEFT JOIN partial_seg ps USING (event_id, ig_date)
+        LEFT JOIN intersection_point ip USING (event_id, ig_date)
+        LEFT JOIN end_vertex_geom ev USING (event_id, ig_date)
+    )
+    SELECT m.event_id,
+           m.ig_date,
+           v_pp_identifier AS pour_point_identifier,
+           m.chosen_endpoint,
+           m.fraction,
+           m.base_distance_m AS base_distance_m,
+           v_offset_m AS pour_point_offset_m,
+           (m.base_distance_m + v_offset_m) AS total_distance_m,
+           m.edge_ct AS path_edge_count,
+           m.edge_ids AS path_edge_ids,
+           v_start_vertex_id AS start_vertex_id,
+           m.end_vertex_id AS end_vertex_id,
+           m.end_vertex_geom,
+           ST_LineMerge(ST_Collect(COALESCE(m.core_path_geom, ST_GeomFromText('LINESTRING EMPTY',5070)), m.partial_geom))::geometry(LineString,5070) AS path_geom,
+           m.ipt AS intersection_point
+    FROM merged m
+    GROUP BY m.event_id, m.ig_date, m.chosen_endpoint, m.fraction,
+             m.base_distance_m, m.edge_ct, m.edge_ids, m.core_path_geom, m.partial_geom, m.ipt,
+             v_pp_identifier, v_offset_m, v_start_vertex_id, m.end_vertex_id, m.end_vertex_geom
+    ORDER BY total_distance_m;
+END;
+$$;
+
+-- Example: SELECT * FROM firearea.fn_fire_event_paths_lite('syca');
+
 -- Example usage:
 -- SELECT * FROM firearea.fn_debug_withpoints('syca');
 
@@ -966,3 +1355,5 @@ $$;
 
 -- SELECT * FROM firearea.fn_compute_site_fire_distances_lite('syca', 60.0, true);
 -- SELECT * FROM firearea.fn_debug_withpoints('syca');
+
+-- SELECT * FROM firearea.fn_fire_event_paths_lite('syca');
