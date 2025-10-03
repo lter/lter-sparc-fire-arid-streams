@@ -38,299 +38,32 @@ SELECT lower(usgs_site) AS usgs_site, geometry FROM firearea.non_usgs_pour_point
 --------------------------------------------------------------------------------
 -- 1. Results & Log Tables
 --------------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS firearea.site_fire_distances (
-    result_id bigserial PRIMARY KEY,
-    usgs_site text NOT NULL,
-    pour_point_identifier text,
-    pour_point_comid text,
-    event_id varchar(254) NOT NULL,
-    ig_date date,
-    distance_m double precision,
-    path_edge_ids bigint[],
-    computed_at timestamptz DEFAULT now(),
-    status text NOT NULL,         -- ok | no_network | no_pour_point | no_fire | unreachable | error
-    message text
-);
-
-CREATE INDEX IF NOT EXISTS site_fire_distances_site_idx ON firearea.site_fire_distances (usgs_site);
-CREATE INDEX IF NOT EXISTS site_fire_distances_event_idx ON firearea.site_fire_distances (event_id);
-CREATE INDEX IF NOT EXISTS site_fire_distances_status_idx ON firearea.site_fire_distances (status);
-
--- Flag column to indicate pour point is inside or touches (within tolerance) a fire polygon.
-ALTER TABLE firearea.site_fire_distances ADD COLUMN IF NOT EXISTS is_pour_point_touch boolean;
--- Chosen network vertex (where applicable) that yielded the minimal distance (split or lite endpoint)
-ALTER TABLE firearea.site_fire_distances ADD COLUMN IF NOT EXISTS chosen_vertex_id bigint;
-
-CREATE TABLE IF NOT EXISTS firearea.site_fire_distance_log (
-    log_id bigserial PRIMARY KEY,
-    usgs_site text,
-    pour_point_identifier text,
-    event_id varchar(254),
-    log_ts timestamptz DEFAULT now(),
-    status text,
-    detail text
-);
-
--- Detailed step logging per function invocation (optional diagnostic)
-CREATE TABLE IF NOT EXISTS firearea.site_fire_distance_run_log (
-    run_id text,
-    usgs_site text,
-    step text,
-    detail text,
-    created_at timestamptz DEFAULT now()
-);
-
---------------------------------------------------------------------------------
--- 1B. Network Topology & Pour Point Snap Preparation Utilities
---     These functions let you (re)build the reusable network topology and
---     refresh snapped pour points outside of the per-site distance function.
---     Run them when flowlines or pour_points change.
---------------------------------------------------------------------------------
-
--- Function: build or rebuild network topology from firearea.flowlines
--- Parameters:
---   in_rebuild    : if true forces drop & full rebuild even if table exists
---   in_tolerance  : snapping tolerance for pgr_createTopology (meters in projected SRID)
---   in_srid       : target projection SRID for metric lengths (default 5070 - Albers)
-CREATE OR REPLACE FUNCTION firearea.fn_build_network_topology(
-    in_rebuild boolean DEFAULT false,
-    in_tolerance double precision DEFAULT 0.5,
-    in_srid integer DEFAULT 5070
-) RETURNS void
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    v_exists boolean;
-BEGIN
-    SELECT to_regclass('firearea.network_edges') IS NOT NULL INTO v_exists;
-
-    IF in_rebuild OR NOT v_exists THEN
-        RAISE NOTICE 'Building network_edges (rebuild=%, existed=%)', in_rebuild, v_exists;
-        -- Drop dependent topology table if present
-        PERFORM 1 FROM pg_class WHERE relname = 'network_edges_vertices_pgr' AND relnamespace = 'firearea'::regnamespace;
-        IF FOUND THEN
-            EXECUTE 'DROP TABLE IF EXISTS firearea.network_edges_vertices_pgr CASCADE';
-        END IF;
-        EXECUTE 'DROP TABLE IF EXISTS firearea.network_edges CASCADE';
-
-        -- Create base edges ensuring single-part LineStrings
-        EXECUTE format($sql$
-            CREATE TABLE firearea.network_edges AS
-            WITH base AS (
-          SELECT lower(f.usgs_site) AS usgs_site,
-                       f.nhdplus_comid,
-                       (ST_Dump(ST_LineMerge(f.geometry))).geom::geometry(LineString,4326) AS geom_4326
-                FROM firearea.flowlines f
-                WHERE f.geometry IS NOT NULL
-            )
-            SELECT row_number() OVER ()::bigint AS edge_id,
-                   usgs_site,
-                   nhdplus_comid,
-                   geom_4326
-            FROM base
-            WHERE NOT ST_IsEmpty(geom_4326);
-        $sql$);
-
-        EXECUTE 'ALTER TABLE firearea.network_edges ADD CONSTRAINT network_edges_pkey PRIMARY KEY (edge_id)';
-        -- Add projected geom & length
-        EXECUTE format('ALTER TABLE firearea.network_edges ADD COLUMN geom_%s geometry(LineString,%s), ADD COLUMN length_m double precision', in_srid, in_srid);
-        EXECUTE format('UPDATE firearea.network_edges SET geom_%1$s = ST_Transform(geom_4326,%1$s), length_m = ST_Length(ST_Transform(geom_4326,%1$s))', in_srid);
-        EXECUTE 'DELETE FROM firearea.network_edges WHERE length_m IS NULL OR length_m = 0';
-
-        -- Cost columns
-        EXECUTE 'ALTER TABLE firearea.network_edges ADD COLUMN cost double precision, ADD COLUMN reverse_cost double precision';
-        EXECUTE 'UPDATE firearea.network_edges SET cost = length_m, reverse_cost = length_m';
-
-        -- Source / target columns for topology
-        EXECUTE 'ALTER TABLE firearea.network_edges ADD COLUMN source bigint, ADD COLUMN target bigint';
-
-        -- Indexes (geom index created after projection populated)
-        EXECUTE 'CREATE INDEX network_edges_site_idx ON firearea.network_edges (usgs_site)';
-        EXECUTE format('CREATE INDEX network_edges_geom_idx ON firearea.network_edges USING GIST (geom_%s)', in_srid);
-
-        -- pgr_createTopology (explicit signature). Using dynamic geom column name.
-        PERFORM pgr_createTopology(
-            'firearea.network_edges',
-            in_tolerance,
-            format('geom_%s', in_srid),
-            'edge_id',
-            'source',
-            'target',
-            rows_where := 'true',
-            clean := false
-        );
-
-        -- Post-topology indexes
-        EXECUTE 'CREATE INDEX network_edges_source_idx ON firearea.network_edges (source)';
-        EXECUTE 'CREATE INDEX network_edges_target_idx ON firearea.network_edges (target)';
-
-        -- Analyze graph (optional; catches dangling edges)
-        PERFORM pgr_analyzeGraph(
-            'firearea.network_edges',
-            in_tolerance,
-            format('geom_%s', in_srid),
-            'edge_id',
-            'source',
-            'target'
-        );
-
-        EXECUTE 'ANALYZE firearea.network_edges';
-    ELSE
-        RAISE NOTICE 'network_edges exists and rebuild not requested; skipping rebuild. Running analyzeGraph only.';
-        PERFORM pgr_analyzeGraph(
-            'firearea.network_edges',
-            in_tolerance,
-            -- Assume existing column geom_5070 or fallback to geom_4326 if not found
-            CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='firearea' AND table_name='network_edges' AND column_name='geom_5070')
-                 THEN 'geom_5070'
-                 ELSE 'geom_4326' END,
-            'edge_id','source','target'
-        );
-    END IF;
-END;
-$$;
-
---------------------------------------------------------------------------------
--- TABLE / REFRESH FUNCTION: pour_point_snaps & fn_refresh_pour_point_snaps
--- Purpose
---   Materialized snapshot of all pour points (USGS + non‑USGS) snapped to the
---   hydrologic network stored in firearea.network_edges. The table is fully
---   (re)generated by fn_refresh_pour_point_snaps and is treated as ephemeral
---   derived data: you can safely TRUNCATE and rebuild at any time.
+-- IMPORTANT: The historical bulk function fn_prepare_all_split_topology was
+-- intentionally removed in the lean design (2025-10) because:
+--   1. It executes inside a single outer transaction (one function call), so
+--      individual site failures could not be isolated/rolled back independently.
+--   2. It performed topology rebuild only once at the end, meaning vertex
+--      snapping during the loop referenced stale topology (risking incorrect
+--      event vertex assignments for newly inserted split segments).
+--   3. Operational control (parallelism, retries, selective reprocessing, logging)
+--      is more transparent and flexible in an external driver script.
+--   4. Your stated requirement: each site MUST run in its own transaction.
 --
--- Creation & Refresh Strategy
---   * If the table does not exist it is created.
---   * If it exists, it is TRUNCATED then repopulated (no incremental logic).
---   * The snapping chooses, per input point, the single nearest edge (within
---     the same usgs_site subgraph) using a site‑filtered KNN (ORDER BY edge_geom <-> point).
---   * A point is labeled is_exact_vertex = true when it lies within the
---     in_vertex_snap_tolerance distance of either endpoint (source/target) of
---     the selected edge (avoids an extra global vertex KNN query for speed).
+-- Instead use the external per‑site driver script added to the repo:
+--   hydrologic_distance/run_multi_site_split.sh
+-- which:
+--   * Fetches distinct sites
+--   * Wraps each site in BEGIN/COMMIT (own transaction)
+--   * Calls fn_prepare_site_split_topology(site)
+--   * Calls fn_compute_site_fire_distances(site,'force_split')
+--   * Logs successes / failures without aborting the whole batch
 --
--- Column Definitions
---   usgs_site        Lower‑cased site identifier (partition key / filter key).
---   identifier       Stable identifier for the pour point. If original metadata
---                    record (firearea.pour_points) supplies one it is reused;
---                    otherwise synthesized as <usgs_site>_idx_<row_number>.
---   comid            Optional NHDPlus COMID carried from original pour_points.
---   sourceName       Metadata passthrough from original pour_points (if any).
---   reachcode        NHD reach code (if present in source data).
---   measure          Linear referencing measure from source (if present).
---   original_geom    Original input geometry (Point, SRID 4326) before snapping.
---   snap_geom        Projected point geometry in target metric SRID (default 5070).
---   snap_edge_id     edge_id in firearea.network_edges to which the point was snapped.
---   snap_fraction    Fractional position along the snapped edge in [0,1] computed via
---                    ST_LineLocatePoint(edge_geom, snap_geom). 0 = source vertex, 1 = target vertex.
---   snap_distance_m  Planar distance (meters in projected SRID) between snap_geom and the
---                    nearest point on the chosen edge (a diagnostic quality metric).
---   is_exact_vertex  Boolean flag true if snap_geom lies within tolerance of an edge endpoint.
---   created_at       Timestamp of insertion during the refresh operation.
---
--- Constraints & Indexes
---   * PRIMARY KEY (usgs_site, identifier) so multiple pour points per site are
---     permitted, but the current downstream "lite" distance function assumes
---     effectively one logical pour point per site (it selects the closest by
---     snap_distance_m if multiple exist).
---   * Index on (usgs_site) added for fast per‑site filtering.
---   * Consider adding a UNIQUE(usgs_site) constraint once the data model guarantees
---     a single pour point per site (remove identifier from PK in that case).
---
--- Performance Notes
---   * The refresh avoids per‑row global vertex nearest searches (uses edge endpoints).
---   * All ST_Transform operations are hoisted into the CTE so each point is projected once.
---   * If snapping becomes a bottleneck, you can (a) simplify network edge geometry for
---     snapping only, or (b) add a spatial index on a simplified geom column, or (c)
---     parameterize the refresh to process a subset of sites.
---
--- Quality / Diagnostics
---   * Large snap_distance_m values may indicate a mismatch in SRID or that the network
---     does not actually pass near the supplied pour point (data QA issue).
---   * A high fraction of is_exact_vertex = false may be acceptable; it simply means
---     points lie interior to edges rather than exactly on vertices.
---
--- Typical Queries
---   * Inspect snap statistics per site:
---       SELECT usgs_site, count(*) AS n, avg(snap_distance_m) AS avg_d, max(snap_distance_m) AS max_d
---       FROM firearea.pour_point_snaps GROUP BY usgs_site ORDER BY max_d DESC;
---   * View fractional distribution along edges:
---       SELECT histogram_width, count(*) FROM (
---           SELECT width_bucket(snap_fraction,0,1,10) AS histogram_width FROM firearea.pour_point_snaps
---       ) s GROUP BY histogram_width ORDER BY histogram_width;
---
--- When to Rebuild
---   * After updating firearea.flowlines (requires rebuilding topology first).
---   * After adding/modifying raw pour points (firearea.pour_points or non_usgs_pour_points).
---
--- Potential Future Enhancements
---   * Incremental refresh (detect and only reprocess changed points).
---   * Store nearest vertex id directly to skip search in downstream functions.
---   * Add geometry validity checks and automatic clipping to a study boundary.
---
--- Returns: The refresh function returns the number of rows inserted.
---------------------------------------------------------------------------------
--- Function: refresh / (re)populate pour_point_snaps from firearea.pour_points & existing network
--- Returns number of rows inserted.
-CREATE OR REPLACE FUNCTION firearea.fn_refresh_pour_point_snaps(
-    in_vertex_snap_tolerance double precision DEFAULT 0.2,
-    in_srid integer DEFAULT 5070
-) RETURNS integer
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    v_cnt integer;
-    v_geom_col text;
-    v_existing_srid integer;
-    v_create_sql text;
-    -- identifier synthesis now handled inline in INSERT CTE
-BEGIN
-    -- Determine projected geom column name
-    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='firearea' AND table_name='network_edges' AND column_name = format('geom_%s', in_srid)) THEN
-        v_geom_col := format('geom_%s', in_srid);
-    ELSE
-        RAISE EXCEPTION 'Projected geometry column geom_% not found in firearea.network_edges', in_srid;
-    END IF;
-
-    -- Ensure network exists
-    IF NOT EXISTS (SELECT 1 FROM firearea.network_edges) THEN
-        RAISE EXCEPTION 'network_edges empty; build topology first (call fn_build_network_topology)';
-    END IF;
-
-    -- Create table if not exists using dynamic SRID
-    IF to_regclass('firearea.pour_point_snaps') IS NULL THEN
-        v_create_sql := 'CREATE TABLE firearea.pour_point_snaps (
-            usgs_site text NOT NULL,
-            identifier text,
-            comid text,
-            sourceName text,
-            reachcode text,
-            measure double precision,
-            original_geom geometry(Point,4326),
-            snap_geom geometry(Point,' || in_srid || '),
-            snap_edge_id bigint,
-            snap_fraction double precision,
-            snap_distance_m double precision,
-            is_exact_vertex boolean,
-            created_at timestamptz DEFAULT now(),
-            PRIMARY KEY (usgs_site, identifier)
-        )';
-        EXECUTE v_create_sql;
-    ELSE
-        -- Validate existing SRID matches requested
-        SELECT Find_SRID('firearea','pour_point_snaps','snap_geom') INTO v_existing_srid;
-        IF v_existing_srid IS DISTINCT FROM in_srid THEN
-            RAISE EXCEPTION 'Existing pour_point_snaps.snap_geom SRID % does not match requested %; drop table or call with matching SRID', v_existing_srid, in_srid;
-        END IF;
-        TRUNCATE firearea.pour_point_snaps;
-    END IF;
-
-    -- No per-row identifier expression needed outside INSERT.
-
-    -- Dynamic SQL to reference projected geom column
-    -- PERFORMANCE OPTIMIZATIONS (2025-09-29):
-    --  * Remove per-row nearest vertex global KNN query against network_edges_vertices_pgr.
-    --    Instead, treat a snap as an "exact vertex" if it lies within tolerance of either
-    --    endpoint of the selected nearest edge. This avoids a full-table KNN for each point.
-    --  * Compute ST_Transform(point) once in the base CTE (geom_proj) instead of 3–4 times.
+-- If you truly need a bulk SQL-only orchestration again, create a new version
+-- that DOES NOT attempt per-site vertex snapping prior to a topology build and
+-- clearly documents that it cannot provide per-site transactional isolation.
+-- For now this comment block intentionally replaces the legacy implementation
+-- to avoid accidental reintroduction of the unsafe pattern.
+-- (Do not remove without considering the above constraints.)
     --  * Drop lower(usgs_site) on the network_edges filter so the plain btree index on
     --    (usgs_site) is usable (network_edges.usgs_site is already stored lowercased).
     --  * Keep fast KNN edge selection per point with ORDER BY geom <-> point restricted
@@ -429,6 +162,9 @@ $$;
 --   * Idempotent per (site, pour_point_identifier): previous rows for that pair are deleted first.
 --------------------------------------------------------------------------------
 -- (Revised) Lite function now assumes exactly one pour point per site; identifier parameter removed.
+-- DEPRECATED (2025-10): fn_compute_site_fire_distances_lite removed.
+-- Rationale: Split topology + vertex workflow supersedes fraction/offset approach.
+-- Any prior calls should migrate to: SELECT firearea.fn_compute_site_fire_distances(site,'force_split');
 DROP FUNCTION IF EXISTS firearea.fn_compute_site_fire_distances_lite(text, text, double precision);
 DROP FUNCTION IF EXISTS firearea.fn_compute_site_fire_distances_lite(text, text, double precision, boolean);
 DROP FUNCTION IF EXISTS firearea.fn_compute_site_fire_distances_lite(text, double precision, boolean);
@@ -804,6 +540,7 @@ $$;
 --         issue is environmental (installation/signature) or data isolation
 --         rather than the big function's assembly logic.
 --------------------------------------------------------------------------------
+-- DEPRECATED (2025-10): fn_debug_withpoints removed. Kept only as DROP for cleanliness.
 DROP FUNCTION IF EXISTS firearea.fn_debug_withpoints(text);
 CREATE OR REPLACE FUNCTION firearea.fn_debug_withpoints(in_site text)
 RETURNS TABLE(step text, detail text)
@@ -1022,6 +759,7 @@ $$;
 --       -sql "SELECT event_id, ig_date, intersection_point FROM firearea.fn_fire_event_paths_lite('syca')" \
 --       -nln syca_fire_points
 --
+-- DEPRECATED (2025-10): fn_fire_event_paths_lite removed. Use fn_fire_event_paths_split for path export.
 DROP FUNCTION IF EXISTS firearea.fn_fire_event_paths_lite(text, double precision);
 CREATE OR REPLACE FUNCTION firearea.fn_fire_event_paths_lite(
     in_usgs_site text,
@@ -1394,7 +1132,7 @@ $$;
 --   * Table firearea.network_edges_vertices_pgr_split  (topology vertices)
 --   * Table firearea.fire_event_vertices               (event -> vertex mapping)
 --   * Function firearea.fn_prepare_site_split_topology (per-site splitting)
---   * Function firearea.fn_compute_site_fire_distances_vertex (distance calc)
+--   * (Archived 2025-10) firearea.fn_compute_site_fire_distances_vertex (logic inlined; see git history if needed)
 --
 -- Design Notes:
 --   1. Rebuild Strategy: For simplicity & determinism the prepare function
@@ -1750,61 +1488,91 @@ $$;
 -- Simplified: no pour point offset, no mid-edge fractions. Distances are
 -- shortest path costs between pour point vertex & event vertices.
 --------------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION firearea.fn_compute_site_fire_distances_vertex(
+-- Archived: function firearea.fn_compute_site_fire_distances_vertex removed (logic inlined below, 2025-10)
+DROP FUNCTION IF EXISTS firearea.fn_compute_site_fire_distances_vertex(text, boolean);
+
+--------------------------------------------------------------------------------
+-- END PERMANENT SPLIT TOPOLOGY SECTION
+--------------------------------------------------------------------------------
+
+-- SIMPLIFIED DISTANCE FUNCTION (Split-only, 2025-10)
+-- Purpose: Compute network distances using the split topology only.
+-- Removed: mode selection, lite fallback, legacy parameter 'in_mode'.
+-- Parameters:
+--   in_usgs_site             Site identifier (text)
+--   in_include_unreachable   Whether to record unreachable events (default true)
+--   in_touch_tolerance_m     Buffer tolerance (m) to coerce zero-distance for pour point touching fire polygon
+-- Behavior:
+--   * Ensures split topology/event vertices exist (auto-prepares if absent)
+--   * Computes distances directly (inlined former vertex function logic)
+--   * Applies zero-touch override
+--   * Logs summary row in site_fire_distance_run_log
+DROP FUNCTION IF EXISTS firearea.fn_compute_site_fire_distances(text, text, boolean, double precision);
+DROP FUNCTION IF EXISTS firearea.fn_compute_site_fire_distances(text, boolean, double precision);
+CREATE OR REPLACE FUNCTION firearea.fn_compute_site_fire_distances(
     in_usgs_site text,
-    in_include_unreachable boolean DEFAULT true
+    in_include_unreachable boolean DEFAULT true,
+    in_touch_tolerance_m double precision DEFAULT 5.0
 ) RETURNS void
 LANGUAGE plpgsql AS $$
 DECLARE
     v_site_lower text := lower(in_usgs_site);
-    v_start_vertex_id bigint;
+    v_pp_identifier text;
+    v_pp_comid text;
     v_pp_geom geometry(Point,5070);
+    v_start_vertex_id bigint;
     v_run_id text := to_char(clock_timestamp(),'YYYYMMDDHH24MISSMS') || '_' || lpad((floor(random()*1000000))::int::text,6,'0');
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM firearea.network_edges_split LIMIT 1) THEN
-        RAISE EXCEPTION 'network_edges_split empty; run fn_prepare_site_split_topology first.'; END IF;
-    IF NOT EXISTS (SELECT 1 FROM firearea.fire_event_vertices WHERE lower(usgs_site)=v_site_lower) THEN
-        -- Attempt an automatic preparation for convenience (may be expensive: rebuilds split table)
-        PERFORM firearea.fn_prepare_site_split_topology(v_site_lower);
-        -- Re-check after preparation
-        IF NOT EXISTS (SELECT 1 FROM firearea.fire_event_vertices WHERE lower(usgs_site)=v_site_lower) THEN
-            RAISE EXCEPTION 'fire_event_vertices still empty for site % after attempted auto prep; verify fires_catchments and pour_point_snaps.', v_site_lower;
-        END IF;
-    END IF;
+    -- Basic prerequisites
     IF NOT EXISTS (SELECT 1 FROM firearea.pour_point_snaps WHERE lower(usgs_site)=v_site_lower) THEN
-        RAISE EXCEPTION 'pour_point_snaps missing for site %', v_site_lower; END IF;
+        RAISE EXCEPTION 'No pour point snaps for site %', v_site_lower; END IF;
+    IF NOT EXISTS (SELECT 1 FROM firearea.fires_catchments WHERE lower(usgs_site)=v_site_lower) THEN
+        RAISE EXCEPTION 'No fire polygons for site %', v_site_lower; END IF;
 
-    -- Schema guard: ensure chosen_vertex_id column exists (migration safety)
-    PERFORM 1 FROM information_schema.columns
-     WHERE table_schema='firearea' AND table_name='site_fire_distances' AND column_name='chosen_vertex_id';
-    IF NOT FOUND THEN
-        BEGIN
-            EXECUTE 'ALTER TABLE firearea.site_fire_distances ADD COLUMN chosen_vertex_id bigint';
-        EXCEPTION WHEN duplicate_column THEN
-            NULL; -- race or already added
-        END;
+    -- Auto prepare split topology if event vertices or split edges absent
+    IF NOT EXISTS (SELECT 1 FROM firearea.network_edges_split WHERE lower(usgs_site)=v_site_lower)
+       OR NOT EXISTS (SELECT 1 FROM firearea.fire_event_vertices WHERE lower(usgs_site)=v_site_lower) THEN
+        PERFORM firearea.fn_prepare_site_split_topology(v_site_lower);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM firearea.network_edges_split WHERE lower(usgs_site)=v_site_lower)
+       OR NOT EXISTS (SELECT 1 FROM firearea.fire_event_vertices WHERE lower(usgs_site)=v_site_lower) THEN
+        RAISE EXCEPTION 'Split topology preparation failed or produced no event vertices for site %', v_site_lower;
     END IF;
 
-    -- Derive pour point geometry (projected) & start vertex
-    SELECT snap_geom INTO v_pp_geom
+    -- Ensure chosen_vertex_id column exists (idempotent)
+    PERFORM 1 FROM information_schema.columns
+      WHERE table_schema='firearea' AND table_name='site_fire_distances' AND column_name='chosen_vertex_id';
+    IF NOT FOUND THEN
+        BEGIN EXECUTE 'ALTER TABLE firearea.site_fire_distances ADD COLUMN chosen_vertex_id bigint'; EXCEPTION WHEN duplicate_column THEN NULL; END;
+    END IF;
+
+    -- Pour point selection
+    SELECT identifier, comid, snap_geom
+      INTO v_pp_identifier, v_pp_comid, v_pp_geom
     FROM firearea.pour_point_snaps
     WHERE lower(usgs_site)=v_site_lower
-    ORDER BY snap_distance_m, identifier LIMIT 1;
-    IF v_pp_geom IS NULL THEN
-        RAISE EXCEPTION 'Could not find pour point geometry for site %', v_site_lower; END IF;
+    ORDER BY snap_distance_m, identifier
+    LIMIT 1;
+    IF v_pp_identifier IS NULL THEN
+        RAISE EXCEPTION 'Failed to select pour point for site %', v_site_lower; END IF;
 
+    ----------------------------------------------------------------------
+    -- Inlined vertex-distance computation (was fn_compute_site_fire_distances_vertex)
+    ----------------------------------------------------------------------
+    -- Identify start vertex (nearest to pour point limited to site's subgraph)
     SELECT v.id INTO v_start_vertex_id
     FROM firearea.network_edges_vertices_pgr_split v
     JOIN firearea.network_edges_split e ON (v.id = e.source OR v.id = e.target)
     WHERE lower(e.usgs_site)=v_site_lower
-    ORDER BY v.the_geom <-> v_pp_geom LIMIT 1;  -- restrict start vertex to site's subgraph
+    ORDER BY v.the_geom <-> v_pp_geom
+    LIMIT 1;
     IF v_start_vertex_id IS NULL THEN
         RAISE EXCEPTION 'Failed to locate start vertex for site %', v_site_lower; END IF;
 
-    -- Clean previous results for site (single logical pour point assumption)
+    -- Clean previous results for site
     DELETE FROM firearea.site_fire_distances WHERE usgs_site = v_site_lower;
 
-    -- Run multi-target Dijkstra
+    -- Multi-target Dijkstra across site's split subgraph
     DROP TABLE IF EXISTS _vx_paths_raw;
     CREATE TEMP TABLE _vx_paths_raw ON COMMIT DROP AS
     SELECT * FROM pgr_dijkstra(
@@ -1813,15 +1581,15 @@ BEGIN
         ARRAY(SELECT DISTINCT vertex_id FROM firearea.fire_event_vertices WHERE lower(usgs_site)=v_site_lower),
         false
     );
-    
-    -- Derive minimal distance per reachable vertex (distinct on node)
+
+    -- Minimal distance per reachable vertex
     DROP TABLE IF EXISTS _vx_vertex_dist;
     CREATE TEMP TABLE _vx_vertex_dist ON COMMIT DROP AS
     SELECT DISTINCT ON (node) node AS vertex_id, agg_cost AS dist
     FROM _vx_paths_raw
     ORDER BY node, agg_cost;
 
-    -- Insert reachable (aggregate MIN distance across vertices per event)
+    -- Insert reachable distances (best vertex per event)
     WITH per_vertex AS (
         SELECT fev.event_id, fev.ig_date, fev.vertex_id, vd.dist
         FROM firearea.fire_event_vertices fev
@@ -1835,22 +1603,18 @@ BEGIN
         usgs_site, pour_point_identifier, pour_point_comid,
         event_id, ig_date, distance_m, path_edge_ids, status, message, chosen_vertex_id
     )
-    SELECT v_site_lower,
-           (SELECT identifier FROM firearea.pour_point_snaps WHERE lower(usgs_site)=v_site_lower ORDER BY snap_distance_m, identifier LIMIT 1) AS pour_point_identifier,
-           (SELECT comid FROM firearea.pour_point_snaps WHERE lower(usgs_site)=v_site_lower ORDER BY snap_distance_m, identifier LIMIT 1) AS pour_point_comid,
+    SELECT v_site_lower, v_pp_identifier, v_pp_comid,
            r.event_id, r.ig_date, r.dist AS distance_m, NULL, 'ok', 'split_vertex', r.vertex_id
     FROM ranked r
     WHERE r.rn=1;
 
-    -- Unreachable events: all vertices missed
+    -- Insert unreachable events if requested
     IF in_include_unreachable THEN
         INSERT INTO firearea.site_fire_distances(
             usgs_site, pour_point_identifier, pour_point_comid,
             event_id, ig_date, status, message, chosen_vertex_id
         )
-        SELECT v_site_lower,
-               (SELECT identifier FROM firearea.pour_point_snaps WHERE lower(usgs_site)=v_site_lower ORDER BY snap_distance_m, identifier LIMIT 1),
-               (SELECT comid FROM firearea.pour_point_snaps WHERE lower(usgs_site)=v_site_lower ORDER BY snap_distance_m, identifier LIMIT 1),
+        SELECT v_site_lower, v_pp_identifier, v_pp_comid,
                x.event_id, x.ig_date, 'unreachable', 'split_vertex_no_path', NULL
         FROM (
             SELECT fev.event_id, fev.ig_date,
@@ -1863,124 +1627,9 @@ BEGIN
         WHERE x.any_reached = 0;
     END IF;
 
-    -- Log summary
-    INSERT INTO firearea.site_fire_distance_run_log(run_id, usgs_site, step, detail)
-    VALUES (v_run_id, v_site_lower, 'done_vertex', format('reachable=%s unreachable=%s',
-        (SELECT count(*) FROM firearea.site_fire_distances WHERE usgs_site=v_site_lower AND status='ok'),
-        (SELECT count(*) FROM firearea.site_fire_distances WHERE usgs_site=v_site_lower AND status='unreachable')));
-END;
-$$;
-
--- Usage Examples:
---   SELECT firearea.fn_prepare_site_split_topology('syca');
---   SELECT firearea.fn_compute_site_fire_distances_vertex('syca');
---   -- Compare with existing lite implementation distances.
-
---   SELECT firearea.fn_prepare_site_split_topology('sbc_lter_rat');
---   SELECT firearea.fn_compute_site_fire_distances_vertex('sbc_lter_rat');
---   -- Compare with existing lite implementation distances.
-
---------------------------------------------------------------------------------
--- END PERMANENT SPLIT TOPOLOGY SECTION
---------------------------------------------------------------------------------
-
---------------------------------------------------------------------------------
--- UNIFIED DISTANCE FUNCTION
--- Provides a single entry point to compute distances using either the legacy
--- lite (fraction + offset) approach or the split-vertex approach if prepared.
--- Adds zero-distance detection (pour point inside / within tolerance of fire).
--- PARAMETERS:
---   in_usgs_site            Site identifier
---   in_mode                 'auto' | 'force_lite' | 'force_split'
---   in_include_unreachable  Include unreachable events in output
---   in_touch_tolerance_m    Distance (meters, SRID 5070) for pour point proximity to fire polygon
--- NOTES:
---   * In 'auto', split mode is used only if prerequisite split tables populated for site.
---   * Zero-distance events get distance_m=0, status='ok', is_pour_point_touch=true,
---     message overwritten with '<mode>_zero_touch'.
---------------------------------------------------------------------------------
-DROP FUNCTION IF EXISTS firearea.fn_compute_site_fire_distances(text, text, boolean, double precision);
-CREATE OR REPLACE FUNCTION firearea.fn_compute_site_fire_distances(
-    in_usgs_site text,
-    in_mode text DEFAULT 'auto',
-    in_include_unreachable boolean DEFAULT true,
-    in_touch_tolerance_m double precision DEFAULT 5.0
-) RETURNS void
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_site_lower text := lower(in_usgs_site);
-    v_mode text := lower(in_mode);
-    v_has_split boolean;
-    v_pp_identifier text;
-    v_pp_comid text;
-    v_pp_geom geometry(Point,5070);
-    v_msg_prefix text;
-    v_run_id text := to_char(clock_timestamp(),'YYYYMMDDHH24MISSMS') || '_' || lpad((floor(random()*1000000))::int::text,6,'0');
-BEGIN
-    -- Basic prerequisites common to both modes
-    IF NOT EXISTS (SELECT 1 FROM firearea.pour_point_snaps WHERE lower(usgs_site)=v_site_lower) THEN
-        RAISE EXCEPTION 'No pour point snaps for site %', v_site_lower; END IF;
-    IF NOT EXISTS (SELECT 1 FROM firearea.fires_catchments WHERE lower(usgs_site)=v_site_lower) THEN
-        RAISE EXCEPTION 'No fire polygons for site %', v_site_lower; END IF;
-
-    -- Schema guard (idempotent) for chosen_vertex_id so downstream inserts don't fail
-    PERFORM 1 FROM information_schema.columns
-      WHERE table_schema='firearea' AND table_name='site_fire_distances' AND column_name='chosen_vertex_id';
-    IF NOT FOUND THEN
-        BEGIN
-            EXECUTE 'ALTER TABLE firearea.site_fire_distances ADD COLUMN chosen_vertex_id bigint';
-        EXCEPTION WHEN duplicate_column THEN
-            NULL;
-        END;
-    END IF;
-
-    -- Pour point selection
-    SELECT identifier, comid, snap_geom
-      INTO v_pp_identifier, v_pp_comid, v_pp_geom
-    FROM firearea.pour_point_snaps
-    WHERE lower(usgs_site)=v_site_lower
-    ORDER BY snap_distance_m, identifier
-    LIMIT 1;
-    IF v_pp_identifier IS NULL THEN
-        RAISE EXCEPTION 'Failed to select pour point for site %', v_site_lower; END IF;
-
-    -- Detect split readiness
-    v_has_split := (
-        EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='firearea' AND table_name='network_edges_split') AND
-        EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='firearea' AND table_name='network_edges_vertices_pgr_split') AND
-        EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='firearea' AND table_name='fire_event_vertices') AND
-        EXISTS (SELECT 1 FROM firearea.network_edges_split WHERE lower(usgs_site)=v_site_lower) AND
-        EXISTS (SELECT 1 FROM firearea.fire_event_vertices WHERE lower(usgs_site)=v_site_lower)
-    );
-
-    IF v_mode NOT IN ('auto','force_lite','force_split') THEN
-        RAISE EXCEPTION 'Invalid mode % (use auto|force_lite|force_split)', in_mode; END IF;
-
-    IF v_mode='auto' THEN
-        v_mode := CASE WHEN v_has_split THEN 'force_split' ELSE 'force_lite' END;
-    END IF;
-
-    IF v_mode='force_split' AND NOT v_has_split THEN
-        RAISE EXCEPTION 'Split mode requested but split topology not prepared for site %', v_site_lower; END IF;
-    IF v_mode='force_lite' AND NOT EXISTS (SELECT 1 FROM firearea.network_edges WHERE lower(usgs_site)=v_site_lower) THEN
-        RAISE EXCEPTION 'Lite mode requested but base network missing for site %', v_site_lower; END IF;
-
-    INSERT INTO firearea.site_fire_distance_run_log(run_id, usgs_site, step, detail)
-    VALUES (v_run_id, v_site_lower, 'unified_start', format('mode=%s has_split=%s', v_mode, v_has_split));
-
-    IF v_mode='force_split' THEN
-        -- Use existing vertex-based function (already wipes previous rows for site)
-        PERFORM firearea.fn_compute_site_fire_distances_vertex(v_site_lower, in_include_unreachable);
-        v_msg_prefix := 'split';
-    ELSE
-        -- Use existing lite function
-        PERFORM firearea.fn_compute_site_fire_distances_lite(v_site_lower, 60.0, in_include_unreachable);
-        v_msg_prefix := 'lite';
-    END IF;
-
-    -- Zero-distance detection (pour point inside or within tolerance)
-    DROP TABLE IF EXISTS _unified_zero_events;
-    CREATE TEMP TABLE _unified_zero_events AS
+    -- Zero-distance detection (touch / within tolerance)
+    DROP TABLE IF EXISTS _split_zero_events;
+    CREATE TEMP TABLE _split_zero_events AS
     WITH fires AS (
         SELECT event_id, ig_date, ST_Transform(geometry,5070) AS geom_5070
         FROM firearea.fires_catchments
@@ -1988,35 +1637,35 @@ BEGIN
     )
     SELECT f.event_id, f.ig_date
     FROM fires f
-    WHERE ST_Covers(f.geom_5070, v_pp_geom)  -- includes boundary
+    WHERE ST_Covers(f.geom_5070, v_pp_geom)
        OR ST_Intersects(f.geom_5070, v_pp_geom)
        OR (in_touch_tolerance_m > 0 AND ST_DWithin(f.geom_5070, v_pp_geom, in_touch_tolerance_m));
 
-    -- Update existing rows (reachable or unreachable) to zero distance
+    -- Update existing rows to zero
     UPDATE firearea.site_fire_distances d
-    SET distance_m = 0,
-        status = 'ok',
-        is_pour_point_touch = true,
-        message = v_msg_prefix || '_zero_touch'
-    FROM _unified_zero_events z
+       SET distance_m = 0,
+           status = 'ok',
+           is_pour_point_touch = true,
+           message = 'split_zero_touch'
+    FROM _split_zero_events z
     WHERE d.usgs_site = v_site_lower AND d.event_id = z.event_id;
 
-    -- Insert any zero events missing from current rows
+    -- Insert missing zero rows
     INSERT INTO firearea.site_fire_distances(
         usgs_site, pour_point_identifier, pour_point_comid,
         event_id, ig_date, distance_m, path_edge_ids, status, message, is_pour_point_touch
     )
     SELECT v_site_lower, v_pp_identifier, v_pp_comid,
-           z.event_id, z.ig_date, 0, NULL, 'ok', v_msg_prefix || '_zero_touch', true
-    FROM _unified_zero_events z
+           z.event_id, z.ig_date, 0, NULL, 'ok', 'split_zero_touch', true
+    FROM _split_zero_events z
     WHERE NOT EXISTS (
         SELECT 1 FROM firearea.site_fire_distances d
         WHERE d.usgs_site=v_site_lower AND d.event_id=z.event_id
     );
 
+    -- Log summary
     INSERT INTO firearea.site_fire_distance_run_log(run_id, usgs_site, step, detail)
-    VALUES (v_run_id, v_site_lower, 'unified_done', format('mode=%s zero_touch=%s total_ok=%s unreachable=%s',
-        v_mode,
+    VALUES (v_run_id, v_site_lower, 'split_done', format('zero_touch=%s total_ok=%s unreachable=%s',
         (SELECT count(*) FROM firearea.site_fire_distances WHERE usgs_site=v_site_lower AND is_pour_point_touch),
         (SELECT count(*) FROM firearea.site_fire_distances WHERE usgs_site=v_site_lower AND status='ok'),
         (SELECT count(*) FROM firearea.site_fire_distances WHERE usgs_site=v_site_lower AND status='unreachable')));
@@ -2024,7 +1673,16 @@ END;
 $$;
 
 -- Convenience wrappers (optional future addition): could alias old names to unified.
--- For now, users call: SELECT firearea.fn_compute_site_fire_distances('syca');
+-- For now, users call:
+
+-- SELECT firearea.fn_prepare_site_split_topology('syca');
+-- SELECT firearea.fn_compute_site_fire_distances('syca');
+
+-- SELECT firearea.fn_prepare_site_split_topology('sbc_lter_mis');
+-- SELECT firearea.fn_compute_site_fire_distances('sbc_lter_mis');
+
+-- SELECT firearea.fn_prepare_site_split_topology('sbc_lter_rat');
+-- SELECT firearea.fn_compute_site_fire_distances('sbc_lter_rat');
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
