@@ -56,6 +56,11 @@ CREATE INDEX IF NOT EXISTS site_fire_distances_site_idx ON firearea.site_fire_di
 CREATE INDEX IF NOT EXISTS site_fire_distances_event_idx ON firearea.site_fire_distances (event_id);
 CREATE INDEX IF NOT EXISTS site_fire_distances_status_idx ON firearea.site_fire_distances (status);
 
+-- Flag column to indicate pour point is inside or touches (within tolerance) a fire polygon.
+ALTER TABLE firearea.site_fire_distances ADD COLUMN IF NOT EXISTS is_pour_point_touch boolean;
+-- Chosen network vertex (where applicable) that yielded the minimal distance (split or lite endpoint)
+ALTER TABLE firearea.site_fire_distances ADD COLUMN IF NOT EXISTS chosen_vertex_id bigint;
+
 CREATE TABLE IF NOT EXISTS firearea.site_fire_distance_log (
     log_id bigserial PRIMARY KEY,
     usgs_site text,
@@ -700,8 +705,9 @@ BEGIN
     DROP TABLE IF EXISTS firearea._lite_event_candidate;
     CREATE UNLOGGED TABLE firearea._lite_event_candidate AS
     SELECT e.event_id, e.ig_date, e.edge_id, e.fraction,
-           vs.dist + e.length_m * e.fraction AS dist_via_source,
-           vt.dist + e.length_m * (1 - e.fraction) AS dist_via_target
+        e.source, e.target,
+        vs.dist + e.length_m * e.fraction AS dist_via_source,
+        vt.dist + e.length_m * (1 - e.fraction) AS dist_via_target
     FROM firearea._lite_event_edges e
     LEFT JOIN firearea._lite_vertex_sp vs ON vs.vertex_id = e.source
     LEFT JOIN firearea._lite_vertex_sp vt ON vt.vertex_id = e.target;
@@ -709,19 +715,29 @@ BEGIN
     -- Minimal distance per event (base + pour point offset) ----------------
     DROP TABLE IF EXISTS firearea._lite_event_min;
     CREATE UNLOGGED TABLE firearea._lite_event_min AS
-    WITH per_edge AS (
+    WITH per_row AS (
         SELECT event_id, ig_date,
                CASE
                    WHEN dist_via_source IS NULL AND dist_via_target IS NULL THEN NULL
                    WHEN dist_via_source IS NULL THEN dist_via_target
                    WHEN dist_via_target IS NULL THEN dist_via_source
                    ELSE LEAST(dist_via_source, dist_via_target)
-               END AS candidate_min
+               END AS candidate_min,
+               CASE
+                   WHEN dist_via_source IS NULL AND dist_via_target IS NULL THEN NULL
+                   WHEN dist_via_source IS NULL THEN target
+                   WHEN dist_via_target IS NULL THEN source
+                   WHEN dist_via_source <= dist_via_target THEN source
+                   ELSE target
+               END AS candidate_vertex
         FROM firearea._lite_event_candidate
+    ), ranked AS (
+        SELECT *, ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY candidate_min NULLS LAST) AS rn
+        FROM per_row
     )
-    SELECT event_id, ig_date, MIN(candidate_min) AS base_distance
-    FROM per_edge
-    GROUP BY event_id, ig_date;
+    SELECT event_id, ig_date, candidate_min AS base_distance, candidate_vertex AS chosen_vertex_id
+    FROM ranked
+    WHERE rn=1;
 
     SELECT COUNT(*) INTO v_cnt_event_min FROM firearea._lite_event_min;
     RAISE NOTICE '[lite] event_min rows=%', v_cnt_event_min;
@@ -736,29 +752,29 @@ BEGIN
     -- Reachable events ------------------------------------------------------
     INSERT INTO firearea.site_fire_distances(
         usgs_site, pour_point_identifier, pour_point_comid,
-        event_id, ig_date, distance_m, path_edge_ids, status, message
+        event_id, ig_date, distance_m, path_edge_ids, status, message, chosen_vertex_id
     )
     SELECT v_site_lower, v_pp_identifier, v_pp_comid,
            em.event_id, em.ig_date,
            (em.base_distance + v_offset_m) AS distance_m,
-           NULL, 'ok', 'lite'
+           NULL, 'ok', 'lite', em.chosen_vertex_id
     FROM firearea._lite_event_min em
     WHERE em.base_distance IS NOT NULL;
 
     -- Unreachable events ----------------------------------------------------
     IF in_include_unreachable THEN
-        INSERT INTO firearea.site_fire_distances(
-            usgs_site, pour_point_identifier, pour_point_comid,
-            event_id, ig_date, status, message
-        )
-        SELECT v_site_lower, v_pp_identifier, v_pp_comid,
-               f.event_id, f.ig_date, 'unreachable', 'lite_no_path'
-        FROM firearea.fires_catchments f
-        WHERE lower(f.usgs_site)=v_site_lower
-          AND NOT EXISTS (
-                SELECT 1 FROM firearea._lite_event_min em
-                WHERE em.event_id = f.event_id AND em.base_distance IS NOT NULL
-          );
+                INSERT INTO firearea.site_fire_distances(
+                        usgs_site, pour_point_identifier, pour_point_comid,
+                        event_id, ig_date, status, message, chosen_vertex_id
+                )
+                SELECT v_site_lower, v_pp_identifier, v_pp_comid,
+                             f.event_id, f.ig_date, 'unreachable', 'lite_no_path', NULL
+                FROM firearea.fires_catchments f
+                WHERE lower(f.usgs_site)=v_site_lower
+                    AND NOT EXISTS (
+                                SELECT 1 FROM firearea._lite_event_min em
+                                WHERE em.event_id = f.event_id AND em.base_distance IS NOT NULL
+                    );
     END IF;
 
     INSERT INTO firearea.site_fire_distance_run_log(run_id, usgs_site, step, detail)
@@ -1358,7 +1374,1161 @@ $$;
 -- select * from firearea.site_fire_distance_run_log ;
 -- select * from firearea.site_fire_distances ;
 
--- SELECT * FROM firearea.fn_compute_site_fire_distances_lite('syca', 60.0, true);
+-- SELECT * FROM firearea.fn_compute_site_fire_distances_lite('sbc_lter_rat', 60.0, true);
 -- SELECT * FROM firearea.fn_debug_withpoints('syca');
 
 -- SELECT * FROM firearea.fn_fire_event_paths_lite('syca');
+
+--------------------------------------------------------------------------------
+-- PERMANENT CLIPPED + SPLIT TOPOLOGY WORKFLOW (Modular Additions)
+-- Goal:
+--   Provide a preprocessing pipeline that (a) splits network edges at pour
+--   point and fire event boundary intersection locations so those positions
+--   become actual graph vertices (eliminating mid‑edge fraction logic & pour
+--   point offset) and (b) enables an even simpler vertex‑only shortest path
+--   distance function. These additions are intentionally separate from the
+--   existing lite workflow so we can A/B validate results before migrating.
+--
+-- Overview of New Artifacts:
+--   * Table firearea.network_edges_split               (fully rebuilt per invocation)
+--   * Table firearea.network_edges_vertices_pgr_split  (topology vertices)
+--   * Table firearea.fire_event_vertices               (event -> vertex mapping)
+--   * Function firearea.fn_prepare_site_split_topology (per-site splitting)
+--   * Function firearea.fn_compute_site_fire_distances_vertex (distance calc)
+--
+-- Design Notes:
+--   1. Rebuild Strategy: For simplicity & determinism the prepare function
+--      (re)creates the entire split edge table from the current canonical
+--      network (firearea.network_edges) on each call, then applies splitting
+--      only to the target site. Non‑target site edges pass through unmodified.
+--      This avoids complexity of incremental topology edits but means the
+--      operation is O(total edges). Optimize later if needed.
+--   2. Splitting Logic: For the target site gather fractions per edge from:
+--        - Pour point snap fraction (if not already ~0 or ~1)
+--        - Fire polygon boundary intersection points
+--        - Fire containment fallback midpoint (0.5) where no boundary points
+--      Fractions are deduped & sorted; consecutive pairs produce segments via
+--      ST_LineSubstring. Endpoints (0,1) always included.
+--   3. Vertex Promotion: After splitting, all former intersection positions
+--      correspond to edge endpoints (graph vertices). We then re‑derive the
+--      precise event vertices by snapping original intersection points to the
+--      nearest new vertex within a small tolerance.
+--   4. Distance Simplification: New function runs a single pgr_dijkstra from
+--      the pour point vertex to all event vertices. No offset, no per‑edge
+--      candidate evaluation, no fraction arithmetic.
+--   5. Future Optimization: If rebuild cost becomes large, introduce a site‑
+--      scoped split table (e.g. network_edges_split_site) or incremental edge
+--      replacement, or maintain a precomputed global intersection cache.
+--
+-- Assumptions:
+--   * Existing tables: network_edges (with geom_5070, length_m, cost) and
+--     pour_point_snaps, fires_catchments.
+--   * SRID 5070 is the routing SRID (adjust param if different).
+--
+-- Caveats:
+--   * Directionality / upstream constraints are NOT enforced (same as lite).
+--   * Fire polygons updated after a split require a rerun of prepare function.
+--   * Multi‑site concurrent usage will cause entire table rebuild each call.
+--
+--------------------------------------------------------------------------------
+
+-- (A) Tables (created lazily if absent)
+DO $$
+BEGIN
+    IF to_regclass('firearea.network_edges_split') IS NULL THEN
+        -- Use direct DDL; no need for EXECUTE with dollar quotes (avoids parser confusion)
+        CREATE TABLE firearea.network_edges_split (
+            edge_id bigserial PRIMARY KEY,
+            usgs_site text NOT NULL,
+            original_edge_id bigint,
+            segment_index integer,
+            start_fraction double precision,
+            end_fraction double precision,
+            geom_5070 geometry(LineString,5070) NOT NULL,
+            length_m double precision,
+            cost double precision,
+            reverse_cost double precision,
+            source bigint,
+            target bigint
+        );
+        CREATE INDEX network_edges_split_site_idx ON firearea.network_edges_split (usgs_site);
+        CREATE INDEX network_edges_split_geom_idx ON firearea.network_edges_split USING GIST (geom_5070);
+    END IF;
+    IF to_regclass('firearea.fire_event_vertices') IS NULL THEN
+        -- New multi-vertex schema: multiple vertices per (site,event)
+        CREATE TABLE firearea.fire_event_vertices (
+            usgs_site text NOT NULL,
+            event_id varchar(254) NOT NULL,
+            ig_date date,
+            vertex_id bigint NOT NULL,
+            geom_5070 geometry(Point,5070),
+            PRIMARY KEY (usgs_site, event_id, vertex_id)
+        );
+        CREATE INDEX fire_event_vertices_vertex_idx ON firearea.fire_event_vertices (vertex_id);
+        CREATE INDEX fire_event_vertices_event_idx ON firearea.fire_event_vertices (usgs_site, event_id);
+    ELSE
+        -- If legacy single-vertex PK exists, upgrade it in-place (idempotent)
+        PERFORM 1 FROM pg_constraint c
+          JOIN pg_class t ON t.oid=c.conrelid
+          JOIN pg_namespace n ON n.oid=t.relnamespace
+        WHERE n.nspname='firearea' AND t.relname='fire_event_vertices'
+          AND c.contype='p'
+          AND pg_get_constraintdef(c.oid) LIKE 'PRIMARY KEY (usgs_site, event_id)';
+        IF FOUND THEN
+            BEGIN
+                ALTER TABLE firearea.fire_event_vertices DROP CONSTRAINT fire_event_vertices_pkey;
+            EXCEPTION WHEN OTHERS THEN
+                -- Constraint name might differ; try generic lookup
+                PERFORM 1; -- swallow
+            END;
+            -- Add new composite PK if not already present
+            BEGIN
+                ALTER TABLE firearea.fire_event_vertices ADD PRIMARY KEY (usgs_site, event_id, vertex_id);
+            EXCEPTION WHEN duplicate_table THEN
+                NULL; -- already exists
+            WHEN duplicate_object THEN
+                NULL;
+            WHEN others THEN
+                -- Ignore if already adjusted manually
+                NULL;
+            END;
+        END IF;
+        -- Ensure helpful indexes exist
+        -- Ensure helpful indexes exist (cannot nest a DO inside plpgsql block)
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes WHERE schemaname='firearea' AND indexname='fire_event_vertices_vertex_idx'
+        ) THEN
+            EXECUTE 'CREATE INDEX fire_event_vertices_vertex_idx ON firearea.fire_event_vertices (vertex_id)';
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes WHERE schemaname='firearea' AND indexname='fire_event_vertices_event_idx'
+        ) THEN
+            EXECUTE 'CREATE INDEX fire_event_vertices_event_idx ON firearea.fire_event_vertices (usgs_site, event_id)';
+        END IF;
+    END IF;
+END;
+$$;
+
+--------------------------------------------------------------------------------
+-- (B) Function: fn_prepare_site_split_topology
+-- Purpose: Rebuild network_edges_split (global) and split edges for the target
+--          site at pour point & fire boundary intersection fractions so those
+--          positions become graph vertices. Populates fire_event_vertices.
+--------------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION firearea.fn_prepare_site_split_topology(
+    in_usgs_site text,
+    in_srid integer DEFAULT 5070,
+    in_network_tolerance double precision DEFAULT 0.5,
+    in_vertex_snap_tolerance double precision DEFAULT 0.25,
+    in_fraction_merge_epsilon double precision DEFAULT 1e-7
+) RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_site_lower text := lower(in_usgs_site);
+    v_pp_edge_id bigint;
+    v_pp_fraction double precision;
+    v_exists boolean;
+    v_geom_col text := format('geom_%s', in_srid);
+BEGIN
+    -- Preconditions
+    IF NOT EXISTS (SELECT 1 FROM firearea.network_edges LIMIT 1) THEN
+        RAISE EXCEPTION 'Base network_edges empty; build topology first.'; END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='firearea' AND table_name='network_edges' AND column_name=v_geom_col) THEN
+        RAISE EXCEPTION 'Projected geom column % for SRID %s missing in network_edges', v_geom_col, in_srid; END IF;
+    IF NOT EXISTS (SELECT 1 FROM firearea.pour_point_snaps WHERE lower(usgs_site)=v_site_lower) THEN
+        RAISE EXCEPTION 'Pour point snaps missing for site %', v_site_lower; END IF;
+    IF NOT EXISTS (SELECT 1 FROM firearea.fires_catchments WHERE lower(usgs_site)=v_site_lower) THEN
+        RAISE NOTICE 'No fires for site %; will split only at pour point (if needed).', v_site_lower; END IF;
+
+    -- Select pour point (first / closest) for fraction
+    SELECT snap_edge_id, snap_fraction
+      INTO v_pp_edge_id, v_pp_fraction
+    FROM firearea.pour_point_snaps
+    WHERE lower(usgs_site)=v_site_lower
+    ORDER BY snap_distance_m, identifier
+    LIMIT 1;
+    IF v_pp_edge_id IS NULL THEN
+        RAISE EXCEPTION 'Could not determine pour point edge for site %', v_site_lower; END IF;
+
+    -- Rebuild entire split table from base as pass-through copy first
+    TRUNCATE firearea.network_edges_split RESTART IDENTITY;
+    EXECUTE format('INSERT INTO firearea.network_edges_split(
+          usgs_site, original_edge_id, segment_index,
+          start_fraction, end_fraction, geom_5070,
+          length_m, cost, reverse_cost)
+         SELECT ne.usgs_site, ne.edge_id, NULL, NULL, NULL, ne.geom_%s,
+             ne.length_m, ne.length_m, ne.length_m
+         FROM firearea.network_edges ne', in_srid);
+
+    -- Remove unsplit edges for the target site (we will replace with split segments)
+    DELETE FROM firearea.network_edges_split WHERE lower(usgs_site)=v_site_lower;
+
+    -- Gather fractions for target site edges
+    DROP TABLE IF EXISTS tmp_site_edges;
+    CREATE TEMP TABLE tmp_site_edges AS
+    SELECT edge_id, usgs_site, geom_5070, length_m
+    FROM firearea.network_edges
+    WHERE lower(usgs_site)=v_site_lower;
+
+    -- Boundary intersection points
+    DROP TABLE IF EXISTS tmp_fire_intersections;
+    CREATE TEMP TABLE tmp_fire_intersections AS
+    WITH fire_poly AS (
+        SELECT event_id, ig_date,
+               CASE WHEN GeometryType(geometry) LIKE 'Multi%'
+                        THEN ST_CollectionExtract(geometry,3)
+                    ELSE geometry END AS geom
+        FROM firearea.fires_catchments
+        WHERE lower(usgs_site)=v_site_lower
+    ), fire_5070 AS (
+        SELECT event_id, ig_date, ST_Transform(geom, in_srid) AS geom_5070 FROM fire_poly
+    ), raw_int AS (
+        SELECT f.event_id, f.ig_date, e.edge_id,
+               (ST_Dump(ST_Intersection(ST_Boundary(f.geom_5070), e.geom_5070))).geom AS ig
+        FROM fire_5070 f
+        JOIN tmp_site_edges e ON ST_Intersects(f.geom_5070, e.geom_5070)
+        WHERE ST_Intersects(ST_Boundary(f.geom_5070), e.geom_5070)
+    ), pts AS (
+        SELECT event_id, ig_date, edge_id, ig AS pt
+        FROM raw_int WHERE GeometryType(ig) IN ('POINT','MULTIPOINT')
+    ), line_mid AS (
+        SELECT event_id, ig_date, edge_id, ST_LineInterpolatePoint(ST_LineMerge(ig),0.5) AS pt
+        FROM raw_int WHERE GeometryType(ig) IN ('LINESTRING','MULTILINESTRING')
+    ), all_pts AS (
+        SELECT * FROM pts
+        UNION ALL
+        SELECT * FROM line_mid
+    )
+    SELECT event_id, ig_date, edge_id,
+           ST_LineLocatePoint(e.geom_5070, ST_Force2D(pt)) AS fraction,
+           ST_Force2D(pt) AS pt_geom
+    FROM all_pts ap
+    JOIN tmp_site_edges e USING(edge_id)
+    WHERE pt IS NOT NULL;
+
+    -- Containment fallback midpoint for fires lacking boundary points
+    INSERT INTO tmp_fire_intersections(event_id, ig_date, edge_id, fraction, pt_geom)
+    SELECT f.event_id, f.ig_date, e.edge_id, 0.5,
+           ST_LineInterpolatePoint(e.geom_5070,0.5)
+    FROM firearea.fires_catchments f
+    JOIN tmp_site_edges e ON ST_Contains(ST_Transform(f.geometry,in_srid), e.geom_5070)
+    WHERE lower(f.usgs_site)=v_site_lower
+      AND f.event_id NOT IN (SELECT DISTINCT event_id FROM tmp_fire_intersections);
+
+    -- Primary fractions (fire + pour point if interior)
+    DROP TABLE IF EXISTS tmp_edge_fractions_raw;
+    CREATE TEMP TABLE tmp_edge_fractions_raw AS
+    SELECT edge_id, fraction FROM tmp_fire_intersections
+    UNION ALL
+    SELECT v_pp_edge_id AS edge_id, v_pp_fraction AS fraction;
+
+    -- Retain only interior pour point fraction if meaningfully distinct
+    DELETE FROM tmp_edge_fractions_raw
+    WHERE edge_id = v_pp_edge_id AND (fraction <= in_fraction_merge_epsilon OR (1 - fraction) <= in_fraction_merge_epsilon);
+
+    -- Add 0 & 1 for each site edge, merge & deduplicate with tolerance
+    DROP TABLE IF EXISTS tmp_edge_fractions;
+    CREATE TEMP TABLE tmp_edge_fractions AS
+    WITH base AS (
+        SELECT edge_id, 0::double precision AS fraction FROM tmp_site_edges
+        UNION ALL
+        SELECT edge_id, 1::double precision FROM tmp_site_edges
+        UNION ALL
+        SELECT edge_id, fraction FROM tmp_edge_fractions_raw
+    ), ordered AS (
+        SELECT edge_id, fraction
+        FROM (
+            SELECT edge_id,
+                   /* snap fractions very close together to a representative */
+                   ROUND(fraction::numeric, 7) AS fraction
+            FROM base
+        ) s
+        GROUP BY edge_id, fraction
+    )
+    SELECT * FROM ordered;
+
+    -- Generate segments (consecutive fraction pairs)
+    DROP TABLE IF EXISTS tmp_segments;
+    CREATE TEMP TABLE tmp_segments AS
+    WITH ord AS (
+        SELECT ef.edge_id, ef.fraction,
+               LEAD(ef.fraction) OVER (PARTITION BY ef.edge_id ORDER BY ef.fraction) AS next_fraction,
+               ROW_NUMBER() OVER (PARTITION BY ef.edge_id ORDER BY ef.fraction) AS rn
+        FROM tmp_edge_fractions ef
+    )
+    SELECT o.edge_id, o.fraction AS start_fraction, o.next_fraction AS end_fraction, o.rn
+    FROM ord o
+    WHERE o.next_fraction IS NOT NULL AND o.next_fraction > o.fraction + in_fraction_merge_epsilon;
+
+    -- Insert split segments
+    INSERT INTO firearea.network_edges_split(
+        usgs_site, original_edge_id, segment_index, start_fraction, end_fraction,
+        geom_5070, length_m, cost, reverse_cost
+    )
+    SELECT v_site_lower, s.edge_id AS original_edge_id, s.rn AS segment_index,
+           s.start_fraction, s.end_fraction,
+           ST_LineSubstring(e.geom_5070, s.start_fraction, s.end_fraction) AS geom_5070,
+           ST_Length(ST_LineSubstring(e.geom_5070, s.start_fraction, s.end_fraction)) AS length_m,
+           ST_Length(ST_LineSubstring(e.geom_5070, s.start_fraction, s.end_fraction)) AS cost,
+           ST_Length(ST_LineSubstring(e.geom_5070, s.start_fraction, s.end_fraction)) AS reverse_cost
+    FROM tmp_segments s
+    JOIN tmp_site_edges e ON e.edge_id = s.edge_id
+    WHERE NOT ST_IsEmpty(ST_LineSubstring(e.geom_5070, s.start_fraction, s.end_fraction));
+
+    -- Rebuild topology on split table (global); cleans stale source/target
+    PERFORM pgr_createTopology(
+        'firearea.network_edges_split',
+        in_network_tolerance,
+        'geom_5070',
+        'edge_id',
+        'source',
+        'target',
+        rows_where := 'true',
+        clean := false
+    );
+
+    -- Build vertices table (drop & recreate)
+    PERFORM 1 FROM pg_class WHERE relname='network_edges_vertices_pgr_split' AND relnamespace='firearea'::regnamespace;
+    IF FOUND THEN
+        EXECUTE 'DROP TABLE firearea.network_edges_vertices_pgr_split CASCADE';
+    END IF;
+    -- pgr_createTopology already created a *_vertices_pgr table if absent; rename if needed
+    -- We create explicitly for clarity.
+    CREATE TABLE firearea.network_edges_vertices_pgr_split AS
+        SELECT * FROM firearea.network_edges_split_vertices_pgr;
+    -- Add index for performance
+    EXECUTE 'CREATE INDEX IF NOT EXISTS network_edges_vertices_pgr_split_geom_idx ON firearea.network_edges_vertices_pgr_split USING GIST(the_geom)';
+
+    -- Refresh fire_event_vertices for site (multi-vertex). For each intersection
+    -- point we snap to nearest split vertex. Then deduplicate on (event,vertex).
+    DELETE FROM firearea.fire_event_vertices WHERE lower(usgs_site)=v_site_lower;
+    WITH raw_pts AS (
+        SELECT event_id, ig_date, pt_geom
+        FROM tmp_fire_intersections
+        UNION ALL
+        -- Include midpoint fallback geometries used for containment-only events
+        SELECT f.event_id, f.ig_date, ST_LineInterpolatePoint(ne.geom_5070,0.5) AS pt_geom
+        FROM firearea.fires_catchments f
+        JOIN firearea.network_edges_split ne ON lower(ne.usgs_site)=v_site_lower
+        WHERE lower(f.usgs_site)=v_site_lower
+          AND f.event_id NOT IN (SELECT DISTINCT event_id FROM tmp_fire_intersections)
+        GROUP BY f.event_id, f.ig_date, ne.geom_5070
+    ), snapped AS (
+        SELECT
+            v_site_lower AS usgs_site,
+            r.event_id,
+            r.ig_date,
+            (
+                SELECT v.id
+                FROM firearea.network_edges_vertices_pgr_split v
+                JOIN firearea.network_edges_split e ON (v.id = e.source OR v.id = e.target)
+                WHERE lower(e.usgs_site)=v_site_lower
+                ORDER BY v.the_geom <-> r.pt_geom
+                LIMIT 1
+            ) AS vertex_id,
+            r.pt_geom AS geom_5070
+        FROM raw_pts r
+    ), ranked AS (
+        SELECT *, row_number() OVER (PARTITION BY usgs_site, event_id, vertex_id ORDER BY event_id) AS rn
+        FROM snapped
+        WHERE vertex_id IS NOT NULL
+    )
+    INSERT INTO firearea.fire_event_vertices(usgs_site, event_id, ig_date, vertex_id, geom_5070)
+    SELECT usgs_site, event_id, ig_date, vertex_id, geom_5070
+    FROM ranked
+    WHERE rn=1;  -- one geometry exemplar per (event,vertex)
+
+    RAISE NOTICE '[split_topology] site=% edges_split=% event_vertices(raw_unique)=% events=%', v_site_lower,
+        (SELECT count(*) FROM firearea.network_edges_split WHERE lower(usgs_site)=v_site_lower),
+        (SELECT count(*) FROM firearea.fire_event_vertices WHERE lower(usgs_site)=v_site_lower),
+        (SELECT count(DISTINCT event_id) FROM firearea.fire_event_vertices WHERE lower(usgs_site)=v_site_lower);
+END;
+$$;
+
+--------------------------------------------------------------------------------
+-- (C) Distance Function Using Split Topology (Vertex Targets)
+-- Simplified: no pour point offset, no mid-edge fractions. Distances are
+-- shortest path costs between pour point vertex & event vertices.
+--------------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION firearea.fn_compute_site_fire_distances_vertex(
+    in_usgs_site text,
+    in_include_unreachable boolean DEFAULT true
+) RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_site_lower text := lower(in_usgs_site);
+    v_start_vertex_id bigint;
+    v_pp_geom geometry(Point,5070);
+    v_run_id text := to_char(clock_timestamp(),'YYYYMMDDHH24MISSMS') || '_' || lpad((floor(random()*1000000))::int::text,6,'0');
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM firearea.network_edges_split LIMIT 1) THEN
+        RAISE EXCEPTION 'network_edges_split empty; run fn_prepare_site_split_topology first.'; END IF;
+    IF NOT EXISTS (SELECT 1 FROM firearea.fire_event_vertices WHERE lower(usgs_site)=v_site_lower) THEN
+        -- Attempt an automatic preparation for convenience (may be expensive: rebuilds split table)
+        PERFORM firearea.fn_prepare_site_split_topology(v_site_lower);
+        -- Re-check after preparation
+        IF NOT EXISTS (SELECT 1 FROM firearea.fire_event_vertices WHERE lower(usgs_site)=v_site_lower) THEN
+            RAISE EXCEPTION 'fire_event_vertices still empty for site % after attempted auto prep; verify fires_catchments and pour_point_snaps.', v_site_lower;
+        END IF;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM firearea.pour_point_snaps WHERE lower(usgs_site)=v_site_lower) THEN
+        RAISE EXCEPTION 'pour_point_snaps missing for site %', v_site_lower; END IF;
+
+    -- Schema guard: ensure chosen_vertex_id column exists (migration safety)
+    PERFORM 1 FROM information_schema.columns
+     WHERE table_schema='firearea' AND table_name='site_fire_distances' AND column_name='chosen_vertex_id';
+    IF NOT FOUND THEN
+        BEGIN
+            EXECUTE 'ALTER TABLE firearea.site_fire_distances ADD COLUMN chosen_vertex_id bigint';
+        EXCEPTION WHEN duplicate_column THEN
+            NULL; -- race or already added
+        END;
+    END IF;
+
+    -- Derive pour point geometry (projected) & start vertex
+    SELECT snap_geom INTO v_pp_geom
+    FROM firearea.pour_point_snaps
+    WHERE lower(usgs_site)=v_site_lower
+    ORDER BY snap_distance_m, identifier LIMIT 1;
+    IF v_pp_geom IS NULL THEN
+        RAISE EXCEPTION 'Could not find pour point geometry for site %', v_site_lower; END IF;
+
+    SELECT v.id INTO v_start_vertex_id
+    FROM firearea.network_edges_vertices_pgr_split v
+    JOIN firearea.network_edges_split e ON (v.id = e.source OR v.id = e.target)
+    WHERE lower(e.usgs_site)=v_site_lower
+    ORDER BY v.the_geom <-> v_pp_geom LIMIT 1;  -- restrict start vertex to site's subgraph
+    IF v_start_vertex_id IS NULL THEN
+        RAISE EXCEPTION 'Failed to locate start vertex for site %', v_site_lower; END IF;
+
+    -- Clean previous results for site (single logical pour point assumption)
+    DELETE FROM firearea.site_fire_distances WHERE usgs_site = v_site_lower;
+
+    -- Run multi-target Dijkstra
+    DROP TABLE IF EXISTS _vx_paths_raw;
+    CREATE TEMP TABLE _vx_paths_raw ON COMMIT DROP AS
+    SELECT * FROM pgr_dijkstra(
+        format($q$SELECT edge_id AS id, source, target, cost, reverse_cost FROM firearea.network_edges_split WHERE lower(usgs_site)=%L$q$, v_site_lower),
+        v_start_vertex_id,
+        ARRAY(SELECT DISTINCT vertex_id FROM firearea.fire_event_vertices WHERE lower(usgs_site)=v_site_lower),
+        false
+    );
+    
+    -- Derive minimal distance per reachable vertex (distinct on node)
+    DROP TABLE IF EXISTS _vx_vertex_dist;
+    CREATE TEMP TABLE _vx_vertex_dist ON COMMIT DROP AS
+    SELECT DISTINCT ON (node) node AS vertex_id, agg_cost AS dist
+    FROM _vx_paths_raw
+    ORDER BY node, agg_cost;
+
+    -- Insert reachable (aggregate MIN distance across vertices per event)
+    WITH per_vertex AS (
+        SELECT fev.event_id, fev.ig_date, fev.vertex_id, vd.dist
+        FROM firearea.fire_event_vertices fev
+        JOIN _vx_vertex_dist vd ON vd.vertex_id = fev.vertex_id
+        WHERE lower(fev.usgs_site)=v_site_lower
+    ), ranked AS (
+        SELECT *, ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY dist) AS rn
+        FROM per_vertex
+    )
+    INSERT INTO firearea.site_fire_distances(
+        usgs_site, pour_point_identifier, pour_point_comid,
+        event_id, ig_date, distance_m, path_edge_ids, status, message, chosen_vertex_id
+    )
+    SELECT v_site_lower,
+           (SELECT identifier FROM firearea.pour_point_snaps WHERE lower(usgs_site)=v_site_lower ORDER BY snap_distance_m, identifier LIMIT 1) AS pour_point_identifier,
+           (SELECT comid FROM firearea.pour_point_snaps WHERE lower(usgs_site)=v_site_lower ORDER BY snap_distance_m, identifier LIMIT 1) AS pour_point_comid,
+           r.event_id, r.ig_date, r.dist AS distance_m, NULL, 'ok', 'split_vertex', r.vertex_id
+    FROM ranked r
+    WHERE r.rn=1;
+
+    -- Unreachable events: all vertices missed
+    IF in_include_unreachable THEN
+        INSERT INTO firearea.site_fire_distances(
+            usgs_site, pour_point_identifier, pour_point_comid,
+            event_id, ig_date, status, message, chosen_vertex_id
+        )
+        SELECT v_site_lower,
+               (SELECT identifier FROM firearea.pour_point_snaps WHERE lower(usgs_site)=v_site_lower ORDER BY snap_distance_m, identifier LIMIT 1),
+               (SELECT comid FROM firearea.pour_point_snaps WHERE lower(usgs_site)=v_site_lower ORDER BY snap_distance_m, identifier LIMIT 1),
+               x.event_id, x.ig_date, 'unreachable', 'split_vertex_no_path', NULL
+        FROM (
+            SELECT fev.event_id, fev.ig_date,
+                   MAX(CASE WHEN vd.vertex_id IS NOT NULL THEN 1 ELSE 0 END) AS any_reached
+            FROM firearea.fire_event_vertices fev
+            LEFT JOIN _vx_vertex_dist vd ON vd.vertex_id = fev.vertex_id
+            WHERE lower(fev.usgs_site)=v_site_lower
+            GROUP BY fev.event_id, fev.ig_date
+        ) x
+        WHERE x.any_reached = 0;
+    END IF;
+
+    -- Log summary
+    INSERT INTO firearea.site_fire_distance_run_log(run_id, usgs_site, step, detail)
+    VALUES (v_run_id, v_site_lower, 'done_vertex', format('reachable=%s unreachable=%s',
+        (SELECT count(*) FROM firearea.site_fire_distances WHERE usgs_site=v_site_lower AND status='ok'),
+        (SELECT count(*) FROM firearea.site_fire_distances WHERE usgs_site=v_site_lower AND status='unreachable')));
+END;
+$$;
+
+-- Usage Examples:
+--   SELECT firearea.fn_prepare_site_split_topology('syca');
+--   SELECT firearea.fn_compute_site_fire_distances_vertex('syca');
+--   -- Compare with existing lite implementation distances.
+
+--   SELECT firearea.fn_prepare_site_split_topology('sbc_lter_rat');
+--   SELECT firearea.fn_compute_site_fire_distances_vertex('sbc_lter_rat');
+--   -- Compare with existing lite implementation distances.
+
+--------------------------------------------------------------------------------
+-- END PERMANENT SPLIT TOPOLOGY SECTION
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+-- UNIFIED DISTANCE FUNCTION
+-- Provides a single entry point to compute distances using either the legacy
+-- lite (fraction + offset) approach or the split-vertex approach if prepared.
+-- Adds zero-distance detection (pour point inside / within tolerance of fire).
+-- PARAMETERS:
+--   in_usgs_site            Site identifier
+--   in_mode                 'auto' | 'force_lite' | 'force_split'
+--   in_include_unreachable  Include unreachable events in output
+--   in_touch_tolerance_m    Distance (meters, SRID 5070) for pour point proximity to fire polygon
+-- NOTES:
+--   * In 'auto', split mode is used only if prerequisite split tables populated for site.
+--   * Zero-distance events get distance_m=0, status='ok', is_pour_point_touch=true,
+--     message overwritten with '<mode>_zero_touch'.
+--------------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS firearea.fn_compute_site_fire_distances(text, text, boolean, double precision);
+CREATE OR REPLACE FUNCTION firearea.fn_compute_site_fire_distances(
+    in_usgs_site text,
+    in_mode text DEFAULT 'auto',
+    in_include_unreachable boolean DEFAULT true,
+    in_touch_tolerance_m double precision DEFAULT 5.0
+) RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_site_lower text := lower(in_usgs_site);
+    v_mode text := lower(in_mode);
+    v_has_split boolean;
+    v_pp_identifier text;
+    v_pp_comid text;
+    v_pp_geom geometry(Point,5070);
+    v_msg_prefix text;
+    v_run_id text := to_char(clock_timestamp(),'YYYYMMDDHH24MISSMS') || '_' || lpad((floor(random()*1000000))::int::text,6,'0');
+BEGIN
+    -- Basic prerequisites common to both modes
+    IF NOT EXISTS (SELECT 1 FROM firearea.pour_point_snaps WHERE lower(usgs_site)=v_site_lower) THEN
+        RAISE EXCEPTION 'No pour point snaps for site %', v_site_lower; END IF;
+    IF NOT EXISTS (SELECT 1 FROM firearea.fires_catchments WHERE lower(usgs_site)=v_site_lower) THEN
+        RAISE EXCEPTION 'No fire polygons for site %', v_site_lower; END IF;
+
+    -- Schema guard (idempotent) for chosen_vertex_id so downstream inserts don't fail
+    PERFORM 1 FROM information_schema.columns
+      WHERE table_schema='firearea' AND table_name='site_fire_distances' AND column_name='chosen_vertex_id';
+    IF NOT FOUND THEN
+        BEGIN
+            EXECUTE 'ALTER TABLE firearea.site_fire_distances ADD COLUMN chosen_vertex_id bigint';
+        EXCEPTION WHEN duplicate_column THEN
+            NULL;
+        END;
+    END IF;
+
+    -- Pour point selection
+    SELECT identifier, comid, snap_geom
+      INTO v_pp_identifier, v_pp_comid, v_pp_geom
+    FROM firearea.pour_point_snaps
+    WHERE lower(usgs_site)=v_site_lower
+    ORDER BY snap_distance_m, identifier
+    LIMIT 1;
+    IF v_pp_identifier IS NULL THEN
+        RAISE EXCEPTION 'Failed to select pour point for site %', v_site_lower; END IF;
+
+    -- Detect split readiness
+    v_has_split := (
+        EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='firearea' AND table_name='network_edges_split') AND
+        EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='firearea' AND table_name='network_edges_vertices_pgr_split') AND
+        EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='firearea' AND table_name='fire_event_vertices') AND
+        EXISTS (SELECT 1 FROM firearea.network_edges_split WHERE lower(usgs_site)=v_site_lower) AND
+        EXISTS (SELECT 1 FROM firearea.fire_event_vertices WHERE lower(usgs_site)=v_site_lower)
+    );
+
+    IF v_mode NOT IN ('auto','force_lite','force_split') THEN
+        RAISE EXCEPTION 'Invalid mode % (use auto|force_lite|force_split)', in_mode; END IF;
+
+    IF v_mode='auto' THEN
+        v_mode := CASE WHEN v_has_split THEN 'force_split' ELSE 'force_lite' END;
+    END IF;
+
+    IF v_mode='force_split' AND NOT v_has_split THEN
+        RAISE EXCEPTION 'Split mode requested but split topology not prepared for site %', v_site_lower; END IF;
+    IF v_mode='force_lite' AND NOT EXISTS (SELECT 1 FROM firearea.network_edges WHERE lower(usgs_site)=v_site_lower) THEN
+        RAISE EXCEPTION 'Lite mode requested but base network missing for site %', v_site_lower; END IF;
+
+    INSERT INTO firearea.site_fire_distance_run_log(run_id, usgs_site, step, detail)
+    VALUES (v_run_id, v_site_lower, 'unified_start', format('mode=%s has_split=%s', v_mode, v_has_split));
+
+    IF v_mode='force_split' THEN
+        -- Use existing vertex-based function (already wipes previous rows for site)
+        PERFORM firearea.fn_compute_site_fire_distances_vertex(v_site_lower, in_include_unreachable);
+        v_msg_prefix := 'split';
+    ELSE
+        -- Use existing lite function
+        PERFORM firearea.fn_compute_site_fire_distances_lite(v_site_lower, 60.0, in_include_unreachable);
+        v_msg_prefix := 'lite';
+    END IF;
+
+    -- Zero-distance detection (pour point inside or within tolerance)
+    DROP TABLE IF EXISTS _unified_zero_events;
+    CREATE TEMP TABLE _unified_zero_events AS
+    WITH fires AS (
+        SELECT event_id, ig_date, ST_Transform(geometry,5070) AS geom_5070
+        FROM firearea.fires_catchments
+        WHERE lower(usgs_site)=v_site_lower
+    )
+    SELECT f.event_id, f.ig_date
+    FROM fires f
+    WHERE ST_Covers(f.geom_5070, v_pp_geom)  -- includes boundary
+       OR ST_Intersects(f.geom_5070, v_pp_geom)
+       OR (in_touch_tolerance_m > 0 AND ST_DWithin(f.geom_5070, v_pp_geom, in_touch_tolerance_m));
+
+    -- Update existing rows (reachable or unreachable) to zero distance
+    UPDATE firearea.site_fire_distances d
+    SET distance_m = 0,
+        status = 'ok',
+        is_pour_point_touch = true,
+        message = v_msg_prefix || '_zero_touch'
+    FROM _unified_zero_events z
+    WHERE d.usgs_site = v_site_lower AND d.event_id = z.event_id;
+
+    -- Insert any zero events missing from current rows
+    INSERT INTO firearea.site_fire_distances(
+        usgs_site, pour_point_identifier, pour_point_comid,
+        event_id, ig_date, distance_m, path_edge_ids, status, message, is_pour_point_touch
+    )
+    SELECT v_site_lower, v_pp_identifier, v_pp_comid,
+           z.event_id, z.ig_date, 0, NULL, 'ok', v_msg_prefix || '_zero_touch', true
+    FROM _unified_zero_events z
+    WHERE NOT EXISTS (
+        SELECT 1 FROM firearea.site_fire_distances d
+        WHERE d.usgs_site=v_site_lower AND d.event_id=z.event_id
+    );
+
+    INSERT INTO firearea.site_fire_distance_run_log(run_id, usgs_site, step, detail)
+    VALUES (v_run_id, v_site_lower, 'unified_done', format('mode=%s zero_touch=%s total_ok=%s unreachable=%s',
+        v_mode,
+        (SELECT count(*) FROM firearea.site_fire_distances WHERE usgs_site=v_site_lower AND is_pour_point_touch),
+        (SELECT count(*) FROM firearea.site_fire_distances WHERE usgs_site=v_site_lower AND status='ok'),
+        (SELECT count(*) FROM firearea.site_fire_distances WHERE usgs_site=v_site_lower AND status='unreachable')));
+END;
+$$;
+
+-- Convenience wrappers (optional future addition): could alias old names to unified.
+-- For now, users call: SELECT firearea.fn_compute_site_fire_distances('syca');
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+-- SPLIT MODE PATH EXPORT: fn_fire_event_paths_split
+-- Purpose:
+--   Reconstruct shortest path geometries (split topology) from pour point
+--   vertex to the chosen event vertex (chosen_vertex_id) for each fire event
+--   with status='ok' in site_fire_distances. Includes zero-touch events with
+--   NULL path (distance 0) and their chosen vertex (possibly NULL).
+-- Use cases:
+--   * GIS export via ogr2ogr (analogous to lite path export function)
+--   * QA comparisons / visualization
+-- Requirements:
+--   * fn_prepare_site_split_topology (or bulk prep) already executed
+--   * Distances computed via split mode (vertex or unified selecting split)
+-- Return Columns:
+--   event_id, ig_date, distance_m, pour_point_identifier, start_vertex_id,
+--   pour_point_geom, chosen_vertex_id, chosen_vertex_geom, is_pour_point_touch,
+--   path_edge_count, path_edge_ids, path_geom
+--------------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS firearea.fn_fire_event_paths_split(text);
+CREATE OR REPLACE FUNCTION firearea.fn_fire_event_paths_split(
+    in_usgs_site text
+) RETURNS TABLE(
+    event_id text,
+    ig_date date,
+    distance_m double precision,
+    pour_point_identifier text,
+    start_vertex_id bigint,
+    pour_point_geom geometry(Point,5070),
+    chosen_vertex_id bigint,
+    chosen_vertex_geom geometry(Point,5070),
+    is_pour_point_touch boolean,
+    path_edge_count integer,
+    path_edge_ids bigint[],
+    path_geom geometry(LineString,5070)
+) LANGUAGE plpgsql AS $$
+DECLARE
+    v_site_lower text := lower(in_usgs_site);
+    v_pp_identifier text;
+    v_pp_geom geometry(Point,5070);
+    v_start_vertex_id bigint;
+    v_has_rows boolean;
+BEGIN
+    -- Preconditions
+    IF NOT EXISTS (SELECT 1 FROM firearea.network_edges_split LIMIT 1) THEN
+        RAISE EXCEPTION 'network_edges_split empty; run split prep first.'; END IF;
+    IF NOT EXISTS (SELECT 1 FROM firearea.network_edges_vertices_pgr_split LIMIT 1) THEN
+        RAISE EXCEPTION 'network_edges_vertices_pgr_split missing; run split prep.'; END IF;
+    IF NOT EXISTS (SELECT 1 FROM firearea.site_fire_distances WHERE lower(usgs_site)=v_site_lower) THEN
+        RAISE EXCEPTION 'No site_fire_distances rows for site % (compute distances first)', v_site_lower; END IF;
+
+    -- Schema guard for is_pour_point_touch (older deployments may lack it)
+    PERFORM 1 FROM information_schema.columns
+     WHERE table_schema='firearea' AND table_name='site_fire_distances' AND column_name='is_pour_point_touch';
+    IF NOT FOUND THEN
+        BEGIN
+            EXECUTE 'ALTER TABLE firearea.site_fire_distances ADD COLUMN is_pour_point_touch boolean DEFAULT false';
+        EXCEPTION WHEN duplicate_column THEN NULL; END;
+    END IF;
+
+    -- Pour point selection
+    SELECT identifier, snap_geom INTO v_pp_identifier, v_pp_geom
+    FROM firearea.pour_point_snaps
+    WHERE lower(usgs_site)=v_site_lower
+    ORDER BY snap_distance_m, identifier
+    LIMIT 1;
+    IF v_pp_identifier IS NULL THEN
+        RAISE EXCEPTION 'Pour point not found for site %', v_site_lower; END IF;
+
+    -- Start vertex (nearest split vertex)
+    SELECT v.id INTO v_start_vertex_id
+    FROM firearea.network_edges_vertices_pgr_split v
+    JOIN firearea.network_edges_split e ON (v.id=e.source OR v.id=e.target)
+    WHERE lower(e.usgs_site)=v_site_lower
+    ORDER BY v.the_geom <-> v_pp_geom LIMIT 1;  -- restrict start vertex to site
+    IF v_start_vertex_id IS NULL THEN
+        RAISE EXCEPTION 'Start vertex not located (split vertices missing)'; END IF;
+
+    -- Candidate events (only status ok) keep chosen_vertex_id / zero-touch flag
+    DROP TABLE IF EXISTS _split_path_events;
+    CREATE TEMP TABLE _split_path_events ON COMMIT DROP AS
+    SELECT d.event_id, d.ig_date, d.distance_m, d.chosen_vertex_id,
+        d.is_pour_point_touch
+    FROM firearea.site_fire_distances d
+    WHERE lower(d.usgs_site)=v_site_lower
+      AND d.status='ok';
+
+    SELECT COUNT(*)>0 INTO v_has_rows FROM _split_path_events;
+    IF NOT v_has_rows THEN
+        RETURN; -- nothing to return
+    END IF;
+
+    -- Non-zero events for which we need path reconstruction
+    DROP TABLE IF EXISTS _split_path_targets;
+    CREATE TEMP TABLE _split_path_targets ON COMMIT DROP AS
+    -- Qualify chosen_vertex_id to avoid ambiguity with OUT table column variable
+    SELECT DISTINCT e.chosen_vertex_id AS vertex_id
+    FROM _split_path_events e
+    WHERE e.chosen_vertex_id IS NOT NULL AND (e.distance_m IS NULL OR e.distance_m > 0);
+
+    -- If there are path targets run Dijkstra
+    IF EXISTS (SELECT 1 FROM _split_path_targets) THEN
+        DROP TABLE IF EXISTS _split_paths_raw;
+        CREATE TEMP TABLE _split_paths_raw ON COMMIT DROP AS
+        SELECT * FROM pgr_dijkstra(
+            format($q$SELECT edge_id AS id, source, target, cost, reverse_cost FROM firearea.network_edges_split WHERE lower(usgs_site)=%L$q$, v_site_lower),
+            v_start_vertex_id,
+            ARRAY(SELECT vertex_id FROM _split_path_targets),
+            false
+        );
+    ELSE
+        -- Create empty table with expected columns to simplify joins
+        DROP TABLE IF EXISTS _split_paths_raw;
+        CREATE TEMP TABLE _split_paths_raw(
+            seq int, path_seq int, start_vid bigint, end_vid bigint, node bigint,
+            edge bigint, cost double precision, agg_cost double precision
+        ) ON COMMIT DROP;
+    END IF;
+
+    -- Aggregate edges per event
+    RETURN QUERY
+    WITH evt AS (
+        SELECT e.event_id, e.ig_date, e.distance_m, e.chosen_vertex_id, e.is_pour_point_touch
+        FROM _split_path_events e
+    ), path_edges AS (
+        SELECT p.end_vid AS vertex_id, p.seq, p.edge, p.agg_cost
+        FROM _split_paths_raw p
+        WHERE p.edge <> -1 AND p.edge IS NOT NULL
+    ), edges_join AS (
+        SELECT pe.vertex_id, pe.seq, pe.edge, ne.geom_5070
+        FROM path_edges pe
+        JOIN firearea.network_edges_split ne ON ne.edge_id = pe.edge
+    ), edge_aggs AS (
+        SELECT v.event_id, v.ig_date, v.distance_m, v.chosen_vertex_id, v.is_pour_point_touch,
+            COUNT(ej.edge)::int AS path_edge_count,
+               CASE WHEN COUNT(ej.edge)=0 THEN ARRAY[]::bigint[]
+                    ELSE ARRAY_AGG(ej.edge ORDER BY ej.seq) END AS path_edge_ids,
+               CASE WHEN COUNT(ej.edge)=0 THEN NULL
+                    ELSE ST_LineMerge(ST_Collect(ej.geom_5070)) END AS path_geom
+        FROM evt v
+        LEFT JOIN edges_join ej ON ej.vertex_id = v.chosen_vertex_id
+        GROUP BY v.event_id, v.ig_date, v.distance_m, v.chosen_vertex_id, v.is_pour_point_touch
+    ), chosen_geom AS (
+        SELECT d.event_id, d.chosen_vertex_id, v.the_geom::geometry(Point,5070) AS chosen_vertex_geom
+        FROM firearea.site_fire_distances d
+        LEFT JOIN firearea.network_edges_vertices_pgr_split v ON v.id = d.chosen_vertex_id
+        WHERE lower(d.usgs_site)=v_site_lower AND d.status='ok'
+    )
+    SELECT ea.event_id::text,
+           ea.ig_date,
+           ea.distance_m,
+           v_pp_identifier::text AS pour_point_identifier,
+           v_start_vertex_id,
+           v_pp_geom AS pour_point_geom,
+           ea.chosen_vertex_id,
+           cg.chosen_vertex_geom,
+           ea.is_pour_point_touch,
+           ea.path_edge_count,
+           ea.path_edge_ids,
+           ea.path_geom::geometry(LineString,5070)
+    FROM edge_aggs ea
+    LEFT JOIN chosen_geom cg USING (event_id, chosen_vertex_id)
+    ORDER BY ea.distance_m NULLS LAST, ea.event_id;
+END;
+$$;
+
+-- Example ogr2ogr export (paths):
+-- ogr2ogr -f GeoJSON syca_split_paths.geojson \
+--   PG:"host=HOST dbname=DB user=USER password=PASS" \
+--   -sql "SELECT event_id, ig_date, distance_m, path_geom FROM firearea.fn_fire_event_paths_split('syca')" \
+--   -nln syca_split_paths
+-- Example points (chosen vertices):
+-- ogr2ogr -f GeoJSON syca_split_vertices.geojson \
+--   PG:"host=HOST dbname=DB user=USER password=PASS" \
+--   -sql "SELECT event_id, ig_date, chosen_vertex_geom FROM firearea.fn_fire_event_paths_split('syca') WHERE chosen_vertex_geom IS NOT NULL" \
+--   -nln syca_split_vertices
+
+
+--------------------------------------------------------------------------------
+-- BULK PRECOMPUTE: fn_prepare_all_split_topology
+-- Purpose:
+--   Pre-split network edges and populate fire_event_vertices for ALL (or a
+--   specified subset of) sites in one pass so downstream distance calls in
+--   split mode become fast, avoiding repeated per-site rebuild cost.
+-- Features:
+--   * Optional site list filter (text[])
+--   * Optional reuse of existing base pass-through edges (skip full rebuild)
+--   * Metadata tracking per site (prepared_at, counts) for monitoring
+-- Notes:
+--   * This function intentionally does NOT drop/recreate the single-site
+--     function; they can coexist.
+--   * Safe to re-run; will replace split segments & fire_event_vertices for
+--     processed sites.
+--   * Assumes network_edges is authoritative. If that table changes, run with
+--     in_rebuild_base := true.
+--------------------------------------------------------------------------------
+DO $$
+BEGIN
+    IF to_regclass('firearea.split_topology_metadata') IS NULL THEN
+        CREATE TABLE firearea.split_topology_metadata (
+            usgs_site text PRIMARY KEY,
+            prepared_at timestamptz NOT NULL,
+            split_edge_count integer NOT NULL,
+            event_vertex_count integer NOT NULL,
+            notes text
+        );
+        CREATE INDEX split_topology_metadata_prepared_idx ON firearea.split_topology_metadata (prepared_at DESC);
+    END IF;
+END;$$;
+
+CREATE OR REPLACE FUNCTION firearea.fn_prepare_all_split_topology(
+    in_srid integer DEFAULT 5070,
+    in_network_tolerance double precision DEFAULT 0.5,
+    in_vertex_snap_tolerance double precision DEFAULT 0.25,
+    in_fraction_merge_epsilon double precision DEFAULT 1e-7,
+    in_sites text[] DEFAULT NULL,              -- restrict to these (case-insensitive)
+    in_rebuild_base boolean DEFAULT true       -- if true rebuild pass-through base first
+) RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_geom_col text := format('geom_%s', in_srid);
+    v_site text;
+    v_site_lower text;
+    v_pp_edge_id bigint;
+    v_pp_fraction double precision;
+    v_edge_pass_through_deleted int;
+    v_edge_split_count int;
+    v_event_vertex_count int;
+    v_total_sites int;
+    v_site_index int := 0;
+BEGIN
+    -- Preconditions
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='firearea' AND table_name='network_edges' AND column_name=v_geom_col
+    ) THEN
+        RAISE EXCEPTION 'Projected geom column % missing in network_edges; build topology first.', v_geom_col; END IF;
+    IF NOT EXISTS (SELECT 1 FROM firearea.network_edges LIMIT 1) THEN
+        RAISE EXCEPTION 'network_edges empty.'; END IF;
+
+    -- Ensure target tables exist (reuse prior lazy DDL block logic)
+    PERFORM 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='firearea' AND c.relname='network_edges_split';
+    IF NOT FOUND THEN
+        CREATE TABLE firearea.network_edges_split (
+            edge_id bigserial PRIMARY KEY,
+            usgs_site text NOT NULL,
+            original_edge_id bigint,
+            segment_index integer,
+            start_fraction double precision,
+            end_fraction double precision,
+            geom_5070 geometry(LineString,5070) NOT NULL,
+            length_m double precision,
+            cost double precision,
+            reverse_cost double precision,
+            source bigint,
+            target bigint
+        );
+        CREATE INDEX network_edges_split_site_idx ON firearea.network_edges_split (usgs_site);
+        CREATE INDEX network_edges_split_geom_idx ON firearea.network_edges_split USING GIST (geom_5070);
+    END IF;
+    PERFORM 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='firearea' AND c.relname='fire_event_vertices';
+    IF NOT FOUND THEN
+        CREATE TABLE firearea.fire_event_vertices (
+            usgs_site text NOT NULL,
+            event_id varchar(254) NOT NULL,
+            ig_date date,
+            vertex_id bigint NOT NULL,
+            geom_5070 geometry(Point,5070),
+            PRIMARY KEY (usgs_site, event_id, vertex_id)
+        );
+        CREATE INDEX fire_event_vertices_vertex_idx ON firearea.fire_event_vertices (vertex_id);
+        CREATE INDEX fire_event_vertices_event_idx  ON firearea.fire_event_vertices (usgs_site, event_id);
+    END IF;
+
+    -- Optionally rebuild base pass-through (one row per original edge)
+    IF in_rebuild_base THEN
+        TRUNCATE firearea.network_edges_split RESTART IDENTITY;
+        EXECUTE format('INSERT INTO firearea.network_edges_split(
+              usgs_site, original_edge_id, segment_index,
+              start_fraction, end_fraction, geom_5070,
+              length_m, cost, reverse_cost)
+             SELECT ne.usgs_site, ne.edge_id, NULL, NULL, NULL, ne.%s,
+                    ne.length_m, ne.length_m, ne.length_m
+             FROM firearea.network_edges ne', v_geom_col);
+    END IF;
+
+    -- Determine site list
+    WITH base_sites AS (
+        SELECT DISTINCT lower(p.usgs_site) AS usgs_site
+        FROM firearea.pour_point_snaps p
+        WHERE EXISTS (
+            SELECT 1 FROM firearea.network_edges ne WHERE lower(ne.usgs_site)=lower(p.usgs_site)
+        )
+    )
+    SELECT count(*) INTO v_total_sites FROM base_sites
+    WHERE in_sites IS NULL OR lower(usgs_site)=ANY(SELECT lower(s) FROM unnest(in_sites) s);
+
+    FOR v_site IN
+        SELECT usgs_site FROM (
+            SELECT DISTINCT lower(p.usgs_site) AS usgs_site
+            FROM firearea.pour_point_snaps p
+            WHERE EXISTS (SELECT 1 FROM firearea.network_edges ne WHERE lower(ne.usgs_site)=lower(p.usgs_site))
+        ) s
+        WHERE in_sites IS NULL OR usgs_site = ANY(SELECT lower(x) FROM unnest(in_sites) x)
+        ORDER BY usgs_site
+    LOOP
+        v_site_lower := v_site;
+        v_site_index := v_site_index + 1;
+
+        -- Skip if no fires (still split pour point edge if we want consistency)
+        IF NOT EXISTS (SELECT 1 FROM firearea.pour_point_snaps WHERE lower(usgs_site)=v_site_lower) THEN
+            RAISE NOTICE '[all_split] (%/% %) skipping (no pour point snaps)', v_site_index, v_total_sites, v_site_lower;
+            CONTINUE;
+        END IF;
+
+        -- Pour point selection
+        SELECT snap_edge_id, snap_fraction INTO v_pp_edge_id, v_pp_fraction
+        FROM firearea.pour_point_snaps
+        WHERE lower(usgs_site)=v_site_lower
+        ORDER BY snap_distance_m, identifier LIMIT 1;
+        IF v_pp_edge_id IS NULL THEN
+            RAISE NOTICE '[all_split] (%/% %) skipping (no pour point edge)', v_site_index, v_total_sites, v_site_lower;
+            CONTINUE;
+        END IF;
+
+        -- Remove prior split segments for this site (retain other sites)
+        DELETE FROM firearea.network_edges_split
+        WHERE lower(usgs_site)=v_site_lower;
+
+        -- Site edges temp
+        DROP TABLE IF EXISTS tmp_all_site_edges;
+        CREATE TEMP TABLE tmp_all_site_edges AS
+        SELECT edge_id, usgs_site, geom_5070, length_m
+        FROM firearea.network_edges
+        WHERE lower(usgs_site)=v_site_lower;
+
+        -- Fire boundary intersections (can be zero)
+        DROP TABLE IF EXISTS tmp_all_fire_intersections;
+        CREATE TEMP TABLE tmp_all_fire_intersections AS
+        WITH fire_poly AS (
+            SELECT event_id, ig_date,
+                   CASE WHEN GeometryType(geometry) LIKE 'Multi%'
+                            THEN ST_CollectionExtract(geometry,3)
+                        ELSE geometry END AS geom
+            FROM firearea.fires_catchments
+            WHERE lower(usgs_site)=v_site_lower
+        ), fire_5070 AS (
+            SELECT event_id, ig_date, ST_Transform(geom, in_srid) AS geom_5070 FROM fire_poly
+        ), raw_int AS (
+            SELECT f.event_id, f.ig_date, e.edge_id,
+                   (ST_Dump(ST_Intersection(ST_Boundary(f.geom_5070), e.geom_5070))).geom AS ig
+            FROM fire_5070 f
+            JOIN tmp_all_site_edges e ON ST_Intersects(f.geom_5070, e.geom_5070)
+            WHERE ST_Intersects(ST_Boundary(f.geom_5070), e.geom_5070)
+        ), pts AS (
+            SELECT event_id, ig_date, edge_id, ig AS pt FROM raw_int WHERE GeometryType(ig) IN ('POINT','MULTIPOINT')
+        ), line_mid AS (
+            SELECT event_id, ig_date, edge_id, ST_LineInterpolatePoint(ST_LineMerge(ig),0.5) AS pt
+            FROM raw_int WHERE GeometryType(ig) IN ('LINESTRING','MULTILINESTRING')
+        ), all_pts AS (
+            SELECT * FROM pts UNION ALL SELECT * FROM line_mid
+        )
+        SELECT event_id, ig_date, edge_id,
+               ST_LineLocatePoint(e.geom_5070, ST_Force2D(pt)) AS fraction,
+               ST_Force2D(pt) AS pt_geom
+        FROM all_pts ap
+        JOIN tmp_all_site_edges e USING(edge_id)
+        WHERE pt IS NOT NULL;
+
+        -- Containment midpoint fallback
+        INSERT INTO tmp_all_fire_intersections(event_id, ig_date, edge_id, fraction, pt_geom)
+        SELECT f.event_id, f.ig_date, e.edge_id, 0.5, ST_LineInterpolatePoint(e.geom_5070,0.5)
+        FROM firearea.fires_catchments f
+        JOIN tmp_all_site_edges e ON ST_Contains(ST_Transform(f.geometry,in_srid), e.geom_5070)
+        WHERE lower(f.usgs_site)=v_site_lower
+          AND f.event_id NOT IN (SELECT DISTINCT event_id FROM tmp_all_fire_intersections);
+
+        -- Fractions union with pour point
+        DROP TABLE IF EXISTS tmp_all_edge_fractions_raw;
+        CREATE TEMP TABLE tmp_all_edge_fractions_raw AS
+        SELECT edge_id, fraction FROM tmp_all_fire_intersections
+        UNION ALL SELECT v_pp_edge_id AS edge_id, v_pp_fraction AS fraction;
+
+        DELETE FROM tmp_all_edge_fractions_raw
+        WHERE edge_id = v_pp_edge_id AND (fraction <= in_fraction_merge_epsilon OR (1 - fraction) <= in_fraction_merge_epsilon);
+
+        DROP TABLE IF EXISTS tmp_all_edge_fractions;
+        CREATE TEMP TABLE tmp_all_edge_fractions AS
+        WITH base AS (
+            SELECT edge_id, 0::double precision AS fraction FROM tmp_all_site_edges
+            UNION ALL SELECT edge_id, 1::double precision FROM tmp_all_site_edges
+            UNION ALL SELECT edge_id, fraction FROM tmp_all_edge_fractions_raw
+        ), dedup AS (
+            SELECT edge_id, ROUND(fraction::numeric,7) AS fraction FROM base GROUP BY edge_id, ROUND(fraction::numeric,7)
+        )
+        SELECT * FROM dedup;
+
+        DROP TABLE IF EXISTS tmp_all_segments;
+        CREATE TEMP TABLE tmp_all_segments AS
+        WITH ord AS (
+            SELECT ef.edge_id, ef.fraction,
+                   LEAD(ef.fraction) OVER (PARTITION BY ef.edge_id ORDER BY ef.fraction) AS next_fraction,
+                   ROW_NUMBER() OVER (PARTITION BY ef.edge_id ORDER BY ef.fraction) AS rn
+            FROM tmp_all_edge_fractions ef
+        )
+        SELECT edge_id, fraction AS start_fraction, next_fraction AS end_fraction, rn
+        FROM ord
+        WHERE next_fraction IS NOT NULL AND next_fraction > fraction + in_fraction_merge_epsilon;
+
+        -- Insert split segments for site
+        INSERT INTO firearea.network_edges_split(
+            usgs_site, original_edge_id, segment_index, start_fraction, end_fraction,
+            geom_5070, length_m, cost, reverse_cost
+        )
+        SELECT v_site_lower, s.edge_id, s.rn, s.start_fraction, s.end_fraction,
+               ST_LineSubstring(e.geom_5070, s.start_fraction, s.end_fraction) AS geom_5070,
+               ST_Length(ST_LineSubstring(e.geom_5070, s.start_fraction, s.end_fraction)),
+               ST_Length(ST_LineSubstring(e.geom_5070, s.start_fraction, s.end_fraction)),
+               ST_Length(ST_LineSubstring(e.geom_5070, s.start_fraction, s.end_fraction))
+        FROM tmp_all_segments s
+        JOIN tmp_all_site_edges e ON e.edge_id = s.edge_id
+        WHERE NOT ST_IsEmpty(ST_LineSubstring(e.geom_5070, s.start_fraction, s.end_fraction));
+
+        -- Rebuild topology for just inserted site's edges: cheaper to re-run full global pgr_createTopology
+        -- only after all sites IF rebuilding base. Simplicity: run once after loop.
+
+        -- Refresh event vertices for site
+        DELETE FROM firearea.fire_event_vertices WHERE lower(usgs_site)=v_site_lower;
+        WITH raw_pts AS (
+            SELECT event_id, ig_date, pt_geom FROM tmp_all_fire_intersections
+            UNION ALL
+            SELECT f.event_id, f.ig_date, ST_LineInterpolatePoint(ne.geom_5070,0.5) AS pt_geom
+            FROM firearea.fires_catchments f
+            JOIN firearea.network_edges_split ne ON lower(ne.usgs_site)=v_site_lower
+            WHERE lower(f.usgs_site)=v_site_lower
+              AND f.event_id NOT IN (SELECT DISTINCT event_id FROM tmp_all_fire_intersections)
+            GROUP BY f.event_id, f.ig_date, ne.geom_5070
+        ), snapped AS (
+            SELECT v_site_lower AS usgs_site, r.event_id, r.ig_date,
+                (
+                    SELECT v.id FROM firearea.network_edges_split_vertices_pgr v
+                    JOIN firearea.network_edges_split e ON (v.id=e.source OR v.id=e.target)
+                    WHERE lower(e.usgs_site)=v_site_lower
+                    ORDER BY v.the_geom <-> r.pt_geom LIMIT 1
+                ) AS vertex_id,
+                   r.pt_geom AS geom_5070
+            FROM raw_pts r
+        ), ranked AS (
+            SELECT *, row_number() OVER (PARTITION BY usgs_site, event_id, vertex_id ORDER BY event_id) AS rn
+            FROM snapped WHERE vertex_id IS NOT NULL
+        )
+        INSERT INTO firearea.fire_event_vertices(usgs_site, event_id, ig_date, vertex_id, geom_5070)
+        SELECT usgs_site, event_id, ig_date, vertex_id, geom_5070
+        FROM ranked WHERE rn=1;
+
+        -- Counts for metadata (source/target not yet assigned until topology build below; lengths ok)
+        SELECT count(*) INTO v_edge_split_count FROM firearea.network_edges_split WHERE lower(usgs_site)=v_site_lower;
+        SELECT count(*) INTO v_event_vertex_count FROM firearea.fire_event_vertices WHERE lower(usgs_site)=v_site_lower;
+
+        INSERT INTO firearea.split_topology_metadata(usgs_site, prepared_at, split_edge_count, event_vertex_count, notes)
+        VALUES (v_site_lower, now(), v_edge_split_count, v_event_vertex_count, 'pre-topology build')
+        ON CONFLICT (usgs_site) DO UPDATE SET
+            prepared_at = EXCLUDED.prepared_at,
+            split_edge_count = EXCLUDED.split_edge_count,
+            event_vertex_count = EXCLUDED.event_vertex_count,
+            notes = EXCLUDED.notes;
+
+        RAISE NOTICE '[all_split] (%/% %) edges_split=% event_vertices=%',
+            v_site_index, v_total_sites, v_site_lower, v_edge_split_count, v_event_vertex_count;
+    END LOOP;
+
+    -- (Re)build topology (global) once at end for all accumulated segments
+    PERFORM pgr_createTopology(
+        'firearea.network_edges_split',
+        in_network_tolerance,
+        'geom_5070',
+        'edge_id',
+        'source',
+        'target',
+        rows_where := 'true',
+        clean := false
+    );
+
+    -- Recreate vertices table from pgr output for split (global refresh)
+    PERFORM 1 FROM pg_class WHERE relname='network_edges_vertices_pgr_split' AND relnamespace='firearea'::regnamespace;
+    IF FOUND THEN
+        EXECUTE 'DROP TABLE firearea.network_edges_vertices_pgr_split CASCADE';
+    END IF;
+    CREATE TABLE firearea.network_edges_vertices_pgr_split AS
+        SELECT * FROM firearea.network_edges_split_vertices_pgr;
+    CREATE INDEX IF NOT EXISTS network_edges_vertices_pgr_split_geom_idx ON firearea.network_edges_vertices_pgr_split USING GIST(the_geom);
+
+    -- Post-topology: event vertices may reference nearest vertices; resnap could refine, but optional.
+    UPDATE firearea.split_topology_metadata SET notes='ready'
+    WHERE notes='pre-topology build';
+
+    RAISE NOTICE '[all_split] completed: sites=%', v_total_sites;
+END;
+$$;
+
+-- Example usage:
+-- SELECT firearea.fn_prepare_all_split_topology();                -- all sites full rebuild
+-- SELECT firearea.fn_prepare_all_split_topology(in_sites=>ARRAY['syca','sbc_lter_rat']);
+-- After bulk prep: SELECT firearea.fn_compute_site_fire_distances('syca','force_split');
