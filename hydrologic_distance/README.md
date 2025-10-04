@@ -2,6 +2,90 @@
 
 Unified, split‑only workflow for computing along‑network distances from a site's pour point to wildfire event polygons. Legacy "lite" (fraction + offset) logic is deprecated; distances now rely purely on vertex shortest paths after splitting edges at pour point and fire boundary intersections.
 
+### 1. one-time setup
+
+Initial, one-time set up to create required tables if they do not already exist, or upgrade existing tables if needed. This block is idempotent and safe to run multiple times; it will only create or modify what is necessary.
+
+```sql:
+
+DO $$
+BEGIN
+    IF to_regclass('firearea.network_edges_split') IS NULL THEN
+        -- Use direct DDL; no need for EXECUTE with dollar quotes (avoids parser confusion)
+        CREATE TABLE firearea.network_edges_split (
+            edge_id bigserial PRIMARY KEY,
+            usgs_site text NOT NULL,
+            original_edge_id bigint,
+            segment_index integer,
+            start_fraction double precision,
+            end_fraction double precision,
+            geom_5070 geometry(LineString,5070) NOT NULL,
+            length_m double precision,
+            cost double precision,
+            reverse_cost double precision,
+            source bigint,
+            target bigint
+        );
+    CREATE INDEX IF NOT EXISTS network_edges_split_site_idx ON firearea.network_edges_split (usgs_site);
+    CREATE INDEX IF NOT EXISTS network_edges_split_geom_idx ON firearea.network_edges_split USING GIST (geom_5070);
+    END IF;
+    IF to_regclass('firearea.fire_event_vertices') IS NULL THEN
+        -- New multi-vertex schema: multiple vertices per (site,event)
+        CREATE TABLE firearea.fire_event_vertices (
+            usgs_site text NOT NULL,
+            event_id varchar(254) NOT NULL,
+            ig_date date,
+            vertex_id bigint NOT NULL,
+            geom_5070 geometry(Point,5070),
+            PRIMARY KEY (usgs_site, event_id, vertex_id)
+        );
+    CREATE INDEX IF NOT EXISTS fire_event_vertices_vertex_idx ON firearea.fire_event_vertices (vertex_id);
+    CREATE INDEX IF NOT EXISTS fire_event_vertices_event_idx ON firearea.fire_event_vertices (usgs_site, event_id);
+    ELSE
+        -- If legacy single-vertex PK exists, upgrade it in-place (idempotent)
+        PERFORM 1 FROM pg_constraint c
+          JOIN pg_class t ON t.oid=c.conrelid
+          JOIN pg_namespace n ON n.oid=t.relnamespace
+        WHERE n.nspname='firearea' AND t.relname='fire_event_vertices'
+          AND c.contype='p'
+          AND pg_get_constraintdef(c.oid) LIKE 'PRIMARY KEY (usgs_site, event_id)';
+        IF FOUND THEN
+            BEGIN
+                ALTER TABLE firearea.fire_event_vertices DROP CONSTRAINT fire_event_vertices_pkey;
+            EXCEPTION WHEN OTHERS THEN
+                -- Constraint name might differ; try generic lookup
+                PERFORM 1; -- swallow
+            END;
+            -- Add new composite PK if not already present
+            BEGIN
+                ALTER TABLE firearea.fire_event_vertices ADD PRIMARY KEY (usgs_site, event_id, vertex_id);
+            EXCEPTION WHEN duplicate_table THEN
+                NULL; -- already exists
+            WHEN duplicate_object THEN
+                NULL;
+            WHEN others THEN
+                -- Ignore if already adjusted manually
+                NULL;
+            END;
+        END IF;
+        -- Ensure helpful indexes exist
+        -- Ensure helpful indexes exist (cannot nest a DO inside plpgsql block)
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes WHERE schemaname='firearea' AND indexname='fire_event_vertices_vertex_idx'
+        ) THEN
+            EXECUTE 'CREATE INDEX fire_event_vertices_vertex_idx ON firearea.fire_event_vertices (vertex_id)';
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes WHERE schemaname='firearea' AND indexname='fire_event_vertices_event_idx'
+        ) THEN
+            EXECUTE 'CREATE INDEX fire_event_vertices_event_idx ON firearea.fire_event_vertices (usgs_site, event_id)';
+        END IF;
+    END IF;
+END;
+$$;
+
+```
+
 ---
 ### 1. End‑to‑End Quick Start (Clean Rebuild)
 ```sql
@@ -219,6 +303,33 @@ Any fire polygon covering, intersecting, or within `in_touch_tolerance_m` (defau
 | Exception: no event vertices after prep | Geometry/SRID mismatch or fires not touching network | Confirm SRIDs and spatial overlap. |
 | All unreachable | Pour point isolated component | Inspect `fire_event_vertices` vs pour point vertex; rebuild topology with tolerance tweak. |
 | Large `network_edges_split` size | Full rebuild per site (expected) | Optimize later (site-scoped split table) if performance issue. |
+
+---
+### 9a. Schema Bootstrap (Lazy DDL / In-Place Migration)
+On first load of `fire_distance_functions.sql`, a DO block (lines ~1200–1274 in that file) runs immediately to ensure required split-mode tables exist or are upgraded. This is intentionally silent so you can deploy the functions without a separate migration step.
+
+What it creates if missing:
+- `firearea.network_edges_split` plus indexes on `(usgs_site)` and GiST on `(geom_5070)`.
+- `firearea.fire_event_vertices` (multi-vertex design) with PK `(usgs_site, event_id, vertex_id)` and supporting indexes.
+
+What it upgrades:
+- If an older two-column primary key `(usgs_site, event_id)` is detected on `fire_event_vertices`, it drops it and adds the new three-column PK to allow multiple vertices per fire event.
+
+Idempotency & Safety:
+- Uses `to_regclass` and catalog checks; reruns do nothing destructive.
+- Index creation guarded by `IF NOT EXISTS` or explicit catalog checks.
+
+Why not highlighted earlier:
+- The main workflow sections assume schema already exists; this block bridges fresh vs. upgraded environments automatically.
+
+Operational Note:
+- If you prefer controlled migrations, you can comment out or remove this block after the first successful deployment and manage schema changes via a separate migration script.
+
+Audit Tip:
+- If you want visibility when an in-place PK upgrade occurs, add a `RAISE NOTICE` inside that branch (currently silent by design).
+
+Removal Option:
+- Safe to remove once the tables exist everywhere with the new composite PK; future function execution does not rely on the bootstrap block.
 
 ---
 ### 10. Suggested Indexes
