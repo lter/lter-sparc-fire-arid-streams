@@ -27,8 +27,8 @@ SELECT lower(usgs_site) AS usgs_site, geometry FROM firearea.catchments
 UNION ALL
 SELECT lower(usgs_site) AS usgs_site, geometry FROM firearea.non_usgs_catchments;
 
--- Minimal unified pour points view (only site id & geometry). Metadata for USGS
--- pour points is still obtained directly from firearea.pour_points during snapping.
+-- Minimal unified pour points view (only site id & geometry). Metadata (identifier, comid, etc.)
+-- is now sourced from the unified view aliasing both USGS and non‑USGS records.
 DROP VIEW IF EXISTS firearea.pour_points_all CASCADE;
 CREATE VIEW firearea.pour_points_all AS
 SELECT lower(usgs_site) AS usgs_site, geometry FROM firearea.pour_points
@@ -64,27 +64,98 @@ SELECT lower(usgs_site) AS usgs_site, geometry FROM firearea.non_usgs_pour_point
 -- For now this comment block intentionally replaces the legacy implementation
 -- to avoid accidental reintroduction of the unsafe pattern.
 -- (Do not remove without considering the above constraints.)
+--
+-- FUNCTION: fn_refresh_pour_point_snaps
+-- Rebuilds firearea.pour_point_snaps from unified pour_points_all view.
+-- Returns: number of rows inserted.
+DROP FUNCTION IF EXISTS firearea.fn_refresh_pour_point_snaps(double precision, integer);
+CREATE OR REPLACE FUNCTION firearea.fn_refresh_pour_point_snaps(
+    in_vertex_snap_tolerance double precision DEFAULT 0.2,
+    in_srid integer DEFAULT 5070
+) RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_geom_col text := format('geom_%s', in_srid);  -- projected geometry column expected on network_edges
+    v_cnt integer := 0;
+    v_has_lower_idx boolean := false;
+    v_pour_point_sites int := 0;
+BEGIN
+    -- Preconditions
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='firearea' AND table_name='network_edges' AND column_name=v_geom_col
+    ) THEN
+        RAISE EXCEPTION 'Expected projected geometry column % not found in firearea.network_edges', v_geom_col;
+    END IF;
+
+    -- Guard: unified pour points view must exist
+    IF to_regclass('firearea.pour_points_all') IS NULL THEN
+        RAISE EXCEPTION 'Required view firearea.pour_points_all not found. Ensure schema bootstrap section executed.';
+    END IF;
+
+    -- Guard: target snaps table should exist; if not, create minimal structure (no data alteration elsewhere)
+    PERFORM 1 FROM information_schema.tables WHERE table_schema='firearea' AND table_name='pour_point_snaps';
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Expected table firearea.pour_point_snaps not found.';
+    END IF;
+
+    -- Performance: ensure functional index for case-insensitive join if absent (no data mutation)
+    SELECT EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname='firearea' AND indexname='network_edges_usgs_site_lower_idx'
+    ) INTO v_has_lower_idx;
+    IF NOT v_has_lower_idx THEN
+        -- Creating inside function; if you prefer a concurrent build do it manually outside a transaction.
+        BEGIN
+            EXECUTE 'CREATE INDEX IF NOT EXISTS network_edges_usgs_site_lower_idx ON firearea.network_edges (lower(usgs_site))';
+            RAISE NOTICE 'Created index network_edges_usgs_site_lower_idx (lower(usgs_site)).';
+        EXCEPTION WHEN OTHERS THEN
+            RAISE NOTICE 'Skipped creating functional index (lower(usgs_site)): %', SQLERRM;
+        END;
+    END IF;
+
+    -- Early exit: if no pour points at all, return 0 (avoid TRUNCATE churn)
+    SELECT COUNT(*) INTO v_pour_point_sites FROM firearea.pour_points_all;
+    IF v_pour_point_sites = 0 THEN
+        RAISE NOTICE 'No rows in firearea.pour_points_all; nothing to snap.';
+        RETURN 0;
+    END IF;
+
+    -- Clear existing snaps (full rebuild semantics)
+    TRUNCATE firearea.pour_point_snaps;
+
     --  * Drop lower(usgs_site) on the network_edges filter so the plain btree index on
     --    (usgs_site) is usable (network_edges.usgs_site is already stored lowercased).
     --  * Keep fast KNN edge selection per point with ORDER BY geom <-> point restricted
     --    by site equality to prune candidates early.
     --  * Simplify identifier synthesis logic.
     EXECUTE format($ins$
+        /*
+         Simplified base selection: removed self-join that referenced alias "up"
+         with columns (identifier, comid, sourceName, reachcode, measure). Some
+         deployments of pour_points_all do not expose an "identifier" column,
+         so we synthesize one when NULL. Expected (optional) columns now:
+           usgs_site (text), geometry (Point,4326), identifier (text, nullable),
+           comid (text), sourceName (text), reachcode (text), measure (numeric)
+         Any missing optional column will implicitly come through as NULL and
+         the COALESCE below will still generate a stable identifier.
+        */
         WITH base AS (
             SELECT
                 ppa.usgs_site,
                 ppa.geometry,
                 ST_Transform(ppa.geometry,%1$s) AS geom_proj,
-                up.identifier,
-                up.comid,
-                up."sourceName" AS sourceName,
-                up.reachcode,
-                up.measure,
+                /* The unified view pour_points_all currently exposes ONLY (usgs_site, geometry).
+                   Provide NULL placeholders for optional legacy metadata fields so the
+                   downstream INSERT remains stable across environments. */
+                NULL::text AS identifier,
+                NULL::text AS comid,
+                NULL::text AS sourceName,
+                NULL::text AS reachcode,
+                NULL::double precision AS measure,
                 row_number() OVER (PARTITION BY ppa.usgs_site ORDER BY ST_X(ppa.geometry), ST_Y(ppa.geometry)) AS rn
             FROM firearea.pour_points_all ppa
-            LEFT JOIN firearea.pour_points up
-              ON up.usgs_site = ppa.usgs_site
-             AND ST_Equals(up.geometry, ppa.geometry)
         )
         INSERT INTO firearea.pour_point_snaps(
             usgs_site, identifier, comid, sourceName, reachcode, measure,
@@ -110,11 +181,37 @@ SELECT lower(usgs_site) AS usgs_site, geometry FROM firearea.non_usgs_pour_point
         JOIN LATERAL (
             SELECT edge_id, %2$I
             FROM firearea.network_edges
-            WHERE usgs_site = b.usgs_site
+            /* Case-insensitive match: some network_edges.usgs_site values are uppercased (e.g. 'USGS-06230190')
+               while pour_points_all provides lowercase ('usgs-06230190'). Using lower(ne.usgs_site)=b.usgs_site
+               restores matches for USGS sites. Consider normalizing network_edges.usgs_site upstream or adding
+               an index: CREATE INDEX IF NOT EXISTS network_edges_usgs_site_lower_idx ON firearea.network_edges (lower(usgs_site)); */
+            WHERE lower(usgs_site) = b.usgs_site
             ORDER BY %2$I <-> b.geom_proj
             LIMIT 1
         ) ne ON TRUE
     $ins$, in_srid, v_geom_col, in_vertex_snap_tolerance);
+
+    -- Diagnostics: list sites that had pour points but no matching network edges after case-insensitive join
+    BEGIN
+        PERFORM 1 FROM firearea.pour_points_all p
+        LEFT JOIN firearea.network_edges ne ON lower(ne.usgs_site)=p.usgs_site
+        WHERE ne.usgs_site IS NULL;
+        IF FOUND THEN
+            RAISE NOTICE 'Sites skipped (no network edges): %', (
+                SELECT string_agg(p.usgs_site, ', ' ORDER BY p.usgs_site)
+                FROM (
+                    SELECT DISTINCT p.usgs_site
+                    FROM firearea.pour_points_all p
+                    LEFT JOIN firearea.network_edges ne ON lower(ne.usgs_site)=p.usgs_site
+                    WHERE ne.usgs_site IS NULL
+                    LIMIT 30  -- cap notice size
+                ) s
+            );
+        END IF;
+    EXCEPTION WHEN OTHERS THEN
+        -- Ignore diagnostic failures
+        NULL;
+    END;
 
     GET DIAGNOSTICS v_cnt = ROW_COUNT;
 
@@ -1189,8 +1286,8 @@ BEGIN
             source bigint,
             target bigint
         );
-        CREATE INDEX network_edges_split_site_idx ON firearea.network_edges_split (usgs_site);
-        CREATE INDEX network_edges_split_geom_idx ON firearea.network_edges_split USING GIST (geom_5070);
+    CREATE INDEX IF NOT EXISTS network_edges_split_site_idx ON firearea.network_edges_split (usgs_site);
+    CREATE INDEX IF NOT EXISTS network_edges_split_geom_idx ON firearea.network_edges_split USING GIST (geom_5070);
     END IF;
     IF to_regclass('firearea.fire_event_vertices') IS NULL THEN
         -- New multi-vertex schema: multiple vertices per (site,event)
@@ -1202,8 +1299,8 @@ BEGIN
             geom_5070 geometry(Point,5070),
             PRIMARY KEY (usgs_site, event_id, vertex_id)
         );
-        CREATE INDEX fire_event_vertices_vertex_idx ON firearea.fire_event_vertices (vertex_id);
-        CREATE INDEX fire_event_vertices_event_idx ON firearea.fire_event_vertices (usgs_site, event_id);
+    CREATE INDEX IF NOT EXISTS fire_event_vertices_vertex_idx ON firearea.fire_event_vertices (vertex_id);
+    CREATE INDEX IF NOT EXISTS fire_event_vertices_event_idx ON firearea.fire_event_vertices (usgs_site, event_id);
     ELSE
         -- If legacy single-vertex PK exists, upgrade it in-place (idempotent)
         PERFORM 1 FROM pg_constraint c
@@ -1414,6 +1511,10 @@ BEGIN
     WHERE NOT ST_IsEmpty(ST_LineSubstring(e.geom_5070, s.start_fraction, s.end_fraction));
 
     -- Rebuild topology on split table (global); cleans stale source/target
+    -- NOTE: pgRouting 3.8 deprecation: current signature of pgr_createTopology emits
+    -- a NOTICE about future removal of some parameters. Safe to ignore for now.
+    -- When upgrading beyond 3.8, revisit arguments (rows_where, clean) if the
+    -- signature changes. This comment documents intentional retention.
     PERFORM pgr_createTopology(
         'firearea.network_edges_split',
         in_network_tolerance,
@@ -1683,6 +1784,10 @@ $$;
 
 -- SELECT firearea.fn_prepare_site_split_topology('sbc_lter_rat');
 -- SELECT firearea.fn_compute_site_fire_distances('sbc_lter_rat');
+
+-- SELECT firearea.fn_prepare_site_split_topology('USGS-11060400');
+-- SELECT firearea.fn_compute_site_fire_distances('USGS-11060400');
+
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
@@ -1890,7 +1995,7 @@ BEGIN
             event_vertex_count integer NOT NULL,
             notes text
         );
-        CREATE INDEX split_topology_metadata_prepared_idx ON firearea.split_topology_metadata (prepared_at DESC);
+    CREATE INDEX IF NOT EXISTS split_topology_metadata_prepared_idx ON firearea.split_topology_metadata (prepared_at DESC);
     END IF;
 END;$$;
 
@@ -1942,8 +2047,8 @@ BEGIN
             source bigint,
             target bigint
         );
-        CREATE INDEX network_edges_split_site_idx ON firearea.network_edges_split (usgs_site);
-        CREATE INDEX network_edges_split_geom_idx ON firearea.network_edges_split USING GIST (geom_5070);
+    CREATE INDEX IF NOT EXISTS network_edges_split_site_idx ON firearea.network_edges_split (usgs_site);
+    CREATE INDEX IF NOT EXISTS network_edges_split_geom_idx ON firearea.network_edges_split USING GIST (geom_5070);
     END IF;
     PERFORM 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
       WHERE n.nspname='firearea' AND c.relname='fire_event_vertices';
@@ -1956,8 +2061,8 @@ BEGIN
             geom_5070 geometry(Point,5070),
             PRIMARY KEY (usgs_site, event_id, vertex_id)
         );
-        CREATE INDEX fire_event_vertices_vertex_idx ON firearea.fire_event_vertices (vertex_id);
-        CREATE INDEX fire_event_vertices_event_idx  ON firearea.fire_event_vertices (usgs_site, event_id);
+    CREATE INDEX IF NOT EXISTS fire_event_vertices_vertex_idx ON firearea.fire_event_vertices (vertex_id);
+    CREATE INDEX IF NOT EXISTS fire_event_vertices_event_idx  ON firearea.fire_event_vertices (usgs_site, event_id);
     END IF;
 
     -- Optionally rebuild base pass-through (one row per original edge)
@@ -2158,6 +2263,7 @@ BEGIN
     END LOOP;
 
     -- (Re)build topology (global) once at end for all accumulated segments
+    -- NOTE: pgRouting 3.8 deprecation: see earlier comment re signature change.
     PERFORM pgr_createTopology(
         'firearea.network_edges_split',
         in_network_tolerance,

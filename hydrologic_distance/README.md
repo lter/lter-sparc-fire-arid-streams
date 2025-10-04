@@ -1,317 +1,282 @@
-# Hydrologic Distance (Wildfire → Stream Pour Point) Module
+## Hydrologic Distance (Split Topology Vertex Workflow)
 
-This directory contains the lightweight along‐network distance workflow used to compute hydrologic (flowline) distances from a site’s single pour point to historical wildfire event catchments. It is a streamlined, dependency‐minimal alternative to earlier, heavier pgRouting + point‑insertion logic.
-
----
-## Core Objectives
-1. Build a routable river/flowline graph (per `usgs_site`).
-2. Snap each site’s pour point(s) to the network, retaining fractional edge position & diagnostic quality metrics.
-3. Intersect wildfire event polygons with the network to derive edge/fraction pairs that represent a fire’s contact point(s) with the flow network.
-4. Compute shortest undirected network distances from the pour point to each fire event (one row per event), including offset adjustment when the pour point lies mid‑edge.
-5. Persist results and rich run‑time diagnostics for reproducibility & troubleshooting.
+Unified, split‑only workflow for computing along‑network distances from a site's pour point to wildfire event polygons. Legacy "lite" (fraction + offset) logic is deprecated; distances now rely purely on vertex shortest paths after splitting edges at pour point and fire boundary intersections.
 
 ---
-## High‑Level Workflow
-```
-(fn_build_network_topology) → network_edges (+ vertices) →
-(fn_refresh_pour_point_snaps) → pour_point_snaps →
-(fn_compute_site_fire_distances_lite) → site_fire_distances (+ logs)
-```
-Optional debug: `fn_debug_withpoints` (tests environment pgRouting behavior).
-
----
-## Functions Overview
-
-### 1. `firearea.fn_build_network_topology(rebuild boolean DEFAULT true, in_tolerance double precision DEFAULT 0.5, in_srid integer DEFAULT 5070)`
-Builds or rebuilds the graph from base flowlines (not shown in this repo excerpt). Produces:
-- `firearea.network_edges`: Directed edges with source/target vertex ids & length.
-- `firearea.network_edges_vertices_pgr`: Vertex table required by pgRouting.
-
-Key responsibilities:
-- Snap & clean raw flowline geometry.
-- Generate source/target vertex ids (using `pgr_createTopology`).
-- Create projected geometry column (e.g. `geom_5070`) for meter‑based distances.
-
-### 2. `firearea.fn_refresh_pour_point_snaps(in_vertex_snap_tolerance double precision DEFAULT 0.2, in_srid integer DEFAULT 5070)`
-Rebuilds `pour_point_snaps` from raw pour point sources.
-
-Highlights:
-- Site‑filtered nearest‐edge KNN; no global vertex KNN (performance).
-- Flags `is_exact_vertex` when point lies within `in_vertex_snap_tolerance` of an endpoint.
-- Produces fractional position along edge (`snap_fraction`) and planar snap distance.
-
-### 3. `firearea.fn_rebuild_network_and_snaps(in_network_tolerance double precision DEFAULT 0.5, in_vertex_snap_tolerance double precision DEFAULT 0.2, in_srid integer DEFAULT 5070)`
-Convenience orchestrator calling (2) & (3) sequentially.
-
-### 4. `firearea.fn_compute_site_fire_distances_lite(in_usgs_site text, in_snap_tolerance_m double precision DEFAULT 60.0, in_include_unreachable boolean DEFAULT true)`
-Computes one distance per wildfire `event_id` for the site. Removes upstream enforcement, path materialization, and `pgr_withPoints` reliance.
-
-Steps (internally):
-1. Select pour point (closest snap if more than one).
-2. Build intersection points: boundary intersections + midpoint fallback for contained edges.
-3. Distill unique fire event edges + vertex endpoints.
-4. Run `pgr_dijkstra` once from starting vertex to all needed vertices (undirected).
-5. Resolve per event: `min( source_path + edge.len * fraction, target_path + edge.len * (1-fraction) ) + pour_point_offset`.
-6. Insert reachable rows; optionally tag unreachable events.
-7. Emit detailed step log to `site_fire_distance_run_log`.
-
-### 5. `firearea.fn_debug_withpoints(in_site text)`
-Minimal environment probe for `pgr_withPoints`. Used only to prove local pgRouting installation characteristics (since the lite function avoids it entirely).
-
----
-## Persistent Tables & Columns
-
-### `firearea.network_edges`
-| Column | Meaning |
-|--------|---------|
-| edge_id (bigint) | Unique edge identifier (stable per rebuild cycle). |
-| usgs_site (text) | Site partition key (lowercased). |
-| source (bigint) | Start vertex id (FK to `network_edges_vertices_pgr.id`). |
-| target (bigint) | End vertex id. |
-| length_m (double precision) | Edge length (meters in projected SRID). |
-| cost, reverse_cost (double precision) | Routing weights (normally = length_m for undirected use). |
-| geom_5070 (geometry(LineString,5070)) | Projected geometry for distance work. |
-| (Other raw attributes) | Derived from base flowlines (not fully enumerated here). |
-
-### `firearea.network_edges_vertices_pgr`
-| Column | Meaning |
-|--------|---------|
-| id (bigint) | Vertex identifier. |
-| the_geom (geometry(Point, 5070 or base SRID)) | Vertex geometry. |
-
-### `firearea.pour_point_snaps`
-| Column | Meaning |
-|--------|---------|
-| usgs_site | Lowercase site id. |
-| identifier | Stable pour point logical id (synthesized if missing). |
-| comid | Optional NHDPlus COMID. |
-| sourceName | Metadata passthrough. |
-| reachcode | NHD reach code if provided. |
-| measure | Linear referencing measure if present. |
-| original_geom (Point,4326) | Input geometry before projection/snapping. |
-| snap_geom (Point,5070) | Projected working geometry. |
-| snap_edge_id (bigint) | Edge chosen via site KNN. |
-| snap_fraction (double precision [0,1]) | Fraction from edge source→target. |
-| snap_distance_m (double precision) | Planar point‑to‑edge distance. |
-| is_exact_vertex (boolean) | True if within tolerance of endpoint. |
-| created_at (timestamptz) | Insertion timestamp. |
-
-### `firearea.fires_catchments`
-(Reference wildfire polygons; only columns used here are listed.)
-| Column | Meaning |
-|--------|---------|
-| usgs_site | Site id filtered on. |
-| event_id | Unique wildfire event identifier. |
-| ig_date (date) | Ignition (or representative) date. |
-| geometry (Multi/Poly) | Fire boundary geometry (SRID 4326). |
-
-### `firearea.site_fire_distances`
-| Column | Meaning |
-|--------|---------|
-| result_id (serial/bigint) | Primary key. |
-| usgs_site | Site id. |
-| pour_point_identifier | Pour point used (from snaps). |
-| pour_point_comid | COMID (if any). |
-| event_id | Fire event id. |
-| ig_date | Event date. |
-| distance_m (double precision) | Along‑network distance (meters) including pour point offset. |
-| path_edge_ids (text / NULL) | Placeholder (NULL in lite version). |
-| status (text) | 'ok', 'unreachable', or other codes. |
-| message (text) | Implementation tag ('lite', 'lite_no_path'). |
-| created_at (timestamptz default) | Insertion timestamp (if table has default). |
-
-### `firearea.site_fire_distance_log`
-| Column | Meaning |
-|--------|---------|
-| usgs_site | Site id. |
-| pour_point_identifier | (Nullable) When available. |
-| status | High‑level status ('no_network','no_fire','error', etc.). |
-| detail | Human readable explanation / error. |
-| created_at | Timestamp. |
-
-### `firearea.site_fire_distance_run_log`
-| Column | Meaning |
-|--------|---------|
-| run_id | Unique id for a run (timestamp + random). |
-| usgs_site | Site id. |
-| step | Step label (start_lite, event_points_lite, done_lite, etc.). |
-| detail | Step diagnostics (counts, component info, reachable stats). |
-| created_at | Timestamp. |
-
-### Ephemeral (Session / Debug) Tables
-Created inside `fn_compute_site_fire_distances_lite` (UNLOGGED, dropped per run):
-- `_lite_event_points` (event_id, ig_date, edge_id, fraction)
-- `_lite_event_edges` (distinct event edges with source/target/length)
-- `_lite_vertices_needed` (list of vertex ids needed for Dijkstra targets)
-- `_lite_components` (component diagnostics from `pgr_connectedComponents`)
-- `_lite_vertex_sp` (shortest path distances per vertex_id)
-- `_lite_event_candidate` (per event edge candidate distances via source/target)
-- `_lite_event_min` (per event minimal distance before pour point offset)
-
-These persist only for the session; querying them immediately after a function call (within the same session/connection) is allowed for debugging.
-
----
-## Typical Usage Sequence
+### 1. End‑to‑End Quick Start (Clean Rebuild)
 ```sql
--- 1. (Re)build network & vertex topology (only when flowlines change)
-SELECT firearea.fn_build_network_topology(true);  -- or fn_rebuild_network_and_snaps
+-- Rebuild base network (only if underlying flowlines changed)
+SELECT firearea.fn_build_network_topology(true);
 
--- 2. Refresh pour points (after network or pour point edits)
+-- Refresh pour point snaps
 SELECT firearea.fn_refresh_pour_point_snaps();
 
--- 3. Compute distances for one site
-SELECT firearea.fn_compute_site_fire_distances_lite('syca');
+-- Prepare + compute for a site (explicit prepare preferred for validation)
+SELECT firearea.fn_prepare_site_split_topology('syca');
+SELECT firearea.fn_compute_site_fire_distances('syca');
 
--- 4. Inspect results
-SELECT * FROM firearea.site_fire_distances WHERE usgs_site='syca' ORDER BY distance_m;
-
--- 5. Examine run diagnostics (latest first)
-SELECT step, detail
-FROM firearea.site_fire_distance_run_log
-WHERE usgs_site='syca'
-ORDER BY created_at DESC;
+-- Inspect results
+SELECT event_id, distance_m, is_pour_point_touch, status
+FROM firearea.site_fire_distances WHERE usgs_site='syca' ORDER BY distance_m;
 ```
 
-### Batch over all sites
+---
+### 2. Function Catalogue
+| Function | Purpose | Key Output / Side Effects |
+|----------|---------|---------------------------|
+| `fn_build_network_topology(rebuild, in_tolerance, in_srid)` | Build / rebuild base routable network. | `network_edges`, `network_edges_vertices_pgr` |
+| `fn_refresh_pour_point_snaps(in_vertex_snap_tolerance, in_srid)` | Snap pour points to edges. | `pour_point_snaps` |
+| `fn_rebuild_network_and_snaps(...)` | Convenience wrapper (topology + snaps). | Both above |
+| `fn_prepare_site_split_topology(in_usgs_site, ...)` | Split target site's edges & promote event vertices. | `network_edges_split`, `network_edges_vertices_pgr_split`, `fire_event_vertices` |
+| `fn_compute_site_fire_distances(in_usgs_site, in_include_unreachable DEFAULT true, in_touch_tolerance_m DEFAULT 5.0)` | Shortest path distances + zero‑touch override. | `site_fire_distances`, `site_fire_distance_run_log` |
+| `fn_fire_event_paths_split(in_usgs_site)` | Path reconstruction for status='ok'. | Returns path rows (no persistence) |
+
+---
+### 3. Persistent Tables (Split Workflow)
+Below each permanent table created/maintained by the workflow is documented with columns and descriptions. (Virtual / returned-only structures are listed last.)
+
+#### 3.1 `firearea.network_edges`
+| Column | Type | Description |
+|--------|------|-------------|
+| edge_id | bigint (PK) | Unique edge identifier. Reassigned on full rebuilds. |
+| usgs_site | text | Site / watershed grouping key (lowercased). |
+| source | bigint | Start vertex id (FK to `network_edges_vertices_pgr.id`). |
+| target | bigint | End vertex id. |
+| length_m | double precision | Edge length in meters (projected SRID). |
+| cost | double precision | Forward traversal cost (normally = length_m). |
+| reverse_cost | double precision | Reverse traversal cost (normally = length_m). |
+| geom_5070 | geometry(LineString,5070) | Projected line geometry used for routing & splitting. |
+| (other attrs) | various | Any additional flowline attributes preserved from source data. |
+
+#### 3.2 `firearea.network_edges_vertices_pgr`
+| Column | Type | Description |
+|--------|------|-------------|
+| id | bigint (PK) | Vertex identifier used by pgRouting. |
+| the_geom | geometry(Point,5070) | Projected point location of the vertex. |
+
+#### 3.3 `firearea.pour_point_snaps`
+| Column | Type | Description |
+|--------|------|-------------|
+| usgs_site | text | Site identifier (lowercase). |
+| identifier | text | Logical pour point id (first/closest chosen if multiple). |
+| comid | text | NHDPlus COMID when available. |
+| original_geom | geometry(Point,4326) | Original input location (geographic). |
+| snap_geom | geometry(Point,5070) | Projected snapped geometry used for routing. |
+| snap_edge_id | bigint | Edge id to which the pour point was snapped. |
+| snap_fraction | double precision | Fraction along edge from source→target (0→1). |
+| snap_distance_m | double precision | Planar distance from original to snapped position. |
+| is_exact_vertex | boolean | True if within vertex snap tolerance of an endpoint. |
+| created_at | timestamptz | Insertion timestamp. |
+
+#### 3.4 `firearea.fires_catchments`
+| Column | Type | Description |
+|--------|------|-------------|
+| usgs_site | text | Site identifier used to partition analysis. |
+| event_id | text | Wildfire event unique key. |
+| ig_date | date | Ignition or representative date. |
+| geometry | geometry(Polygon/MultiPolygon,4326) | Fire perimeter geometry in geographic SRID. |
+
+#### 3.5 `firearea.network_edges_split`
+| Column | Type | Description |
+|--------|------|-------------|
+| edge_id | bigserial (PK) | New edge id for split segment (auto increment). |
+| usgs_site | text | Site identifier (segments only for processed site are split). |
+| original_edge_id | bigint | Reference back to original `network_edges.edge_id`. |
+| segment_index | integer | Ordinal of segment along original edge (1..n). |
+| start_fraction | double precision | Start fraction along original edge geometry. |
+| end_fraction | double precision | End fraction along original edge geometry. |
+| geom_5070 | geometry(LineString,5070) | Geometry of the split segment. |
+| length_m | double precision | Segment length (meters). |
+| cost | double precision | Traversal cost (mirrors length). |
+| reverse_cost | double precision | Reverse traversal cost. |
+| source | bigint | Start vertex id after topology build on split table. |
+| target | bigint | End vertex id after topology build on split table. |
+
+#### 3.6 `firearea.network_edges_vertices_pgr_split`
+| Column | Type | Description |
+|--------|------|-------------|
+| id | bigint (PK) | Vertex id in the split network topology. |
+| the_geom | geometry(Point,5070) | Split network vertex location. |
+
+#### 3.7 `firearea.fire_event_vertices`
+| Column | Type | Description |
+|--------|------|-------------|
+| usgs_site | text | Site identifier. |
+| event_id | text | Fire event id (can map to multiple vertices). |
+| ig_date | date | Event date carried through. |
+| vertex_id | bigint | Split network vertex nearest an intersection point. |
+| geom_5070 | geometry(Point,5070) | Representative geometry (snapped intersection). |
+
+Primary Key: (usgs_site, event_id, vertex_id) allowing multi-vertex representation of one event.
+
+#### 3.8 `firearea.site_fire_distances`
+| Column | Type | Description |
+|--------|------|-------------|
+| result_id | bigserial (PK, if present) | Surrogate key (implementation-dependent). |
+| usgs_site | text | Site identifier. |
+| pour_point_identifier | text | Identifier of pour point chosen. |
+| pour_point_comid | text | COMID from pour point snaps if available. |
+| event_id | text | Fire event id. |
+| ig_date | date | Event date. |
+| distance_m | double precision | Shortest path distance (meters) after zero-touch override. |
+| path_edge_ids | bigint[] | Reserved for future path edge storage (NULL for pure vertex distances). |
+| status | text | 'ok' or 'unreachable'. |
+| message | text | Processing tag ('split_vertex','split_vertex_no_path','split_zero_touch'). |
+| chosen_vertex_id | bigint | Vertex id selected for minimal distance. |
+| is_pour_point_touch | boolean | True if zero-distance enforced by touch logic. |
+| created_at | timestamptz | Insertion timestamp. |
+
+#### 3.9 `firearea.site_fire_distance_run_log`
+| Column | Type | Description |
+|--------|------|-------------|
+| run_id | text | Unique run identifier (timestamp + random suffix). |
+| usgs_site | text | Site identifier. |
+| step | text | Step label (currently final 'split_done'; earlier granular steps possible). |
+| detail | text | Summary counts (ok, unreachable, zero-touch). |
+| created_at | timestamptz | Log row timestamp. |
+
+#### 3.10 `firearea.site_fire_distance_log` (Legacy / Error Log)
+| Column | Type | Description |
+|--------|------|-------------|
+| usgs_site | text | Site identifier. |
+| pour_point_identifier | text | Pour point used (if available). |
+| status | text | High-level status/error code. |
+| detail | text | Human-readable explanation. |
+| created_at | timestamptz | Timestamp. |
+
+#### 3.11 `firearea.multi_site_run_log` (Batch Script Support)
+| Column | Type | Description |
+|--------|------|-------------|
+| run_ts | timestamptz | Timestamp of log insertion. |
+| usgs_site | text | Site processed in batch. |
+| phase | text | 'start','done','error'. |
+| status | text | 'info','ok','fail'. |
+| detail | text | Additional message or error hint. |
+
+#### 3.12 Virtual / Returned Only: `fn_fire_event_paths_split`
+Returned columns (not persisted):
+| Column | Type | Description |
+|--------|------|-------------|
+| event_id | text | Fire event id. |
+| ig_date | date | Event date. |
+| distance_m | double precision | Distance copied from `site_fire_distances`. |
+| pour_point_identifier | text | Pour point id. |
+| start_vertex_id | bigint | Source vertex used for Dijkstra. |
+| pour_point_geom | geometry(Point,5070) | Pour point geometry (projected). |
+| chosen_vertex_id | bigint | Vertex selected for distance. |
+| chosen_vertex_geom | geometry(Point,5070) | Geometry of chosen vertex. |
+| is_pour_point_touch | boolean | Zero-distance override flag. |
+| path_edge_count | integer | Number of edges in reconstructed path. |
+| path_edge_ids | bigint[] | Ordered list of edge ids. |
+| path_geom | geometry(LineString,5070) | Merged path geometry. |
+
+---
+### 4. Single-Site Split Workflow (Verbose)
 ```sql
--- Example: iterate over distinct sites present in pour_point_snaps
-DO $$
-DECLARE r record; BEGIN
-  FOR r IN (SELECT DISTINCT usgs_site FROM firearea.pour_point_snaps) LOOP
-    PERFORM firearea.fn_compute_site_fire_distances_lite(r.usgs_site);
-  END LOOP; END $$;
+SELECT firearea.fn_build_network_topology(true);      -- only when flowlines change
+SELECT firearea.fn_refresh_pour_point_snaps();        -- after editing pour points
+SELECT firearea.fn_prepare_site_split_topology('sbc_lter_rat');
+SELECT firearea.fn_compute_site_fire_distances('sbc_lter_rat');
+SELECT * FROM firearea.site_fire_distances WHERE usgs_site='sbc_lter_rat' ORDER BY distance_m;
 ```
 
-### Filter Fires Within X km
+---
+### 5. Batch (Per-Site Transaction)
+Use `run_multi_site_split.sh` which for each site runs:
 ```sql
-SELECT event_id, ig_date, ROUND(distance_m/1000.0,2) AS dist_km
+BEGIN;
+  SELECT firearea.fn_prepare_site_split_topology(:site);
+  SELECT firearea.fn_compute_site_fire_distances(:site);
+COMMIT;
+```
+Failures roll back only that site's work.
+
+---
+### 6. Key Advantages of Split Workflow
+| Improvement | Benefit |
+|-------------|---------|
+| No mid-edge fractions in distance algebra | Fewer edge cases & simpler QA |
+| Multiple vertices per fire event | Picks true nearest inserted vertex |
+| Zero-distance touch logic | Explicit flag for pour point intersecting fire polygon |
+| Single public function | Reduced maintenance surface |
+
+---
+### 7. Path Export (Optional)
+```sql
+SELECT event_id, ig_date, distance_m, path_edge_count, path_geom
+FROM firearea.fn_fire_event_paths_split('syca') ORDER BY distance_m;
+```
+
+---
+### 8. Zero-Distance (Touch) Logic
+Any fire polygon covering, intersecting, or within `in_touch_tolerance_m` (default 5 m) of the pour point is forced to distance 0 with `is_pour_point_touch=true` and `message='split_zero_touch'`.
+
+---
+### 9. Common Failure Modes
+| Symptom | Cause | Remedy |
+|---------|-------|--------|
+| No rows inserted (no error) | Site lacks fire polygons or all vertices unreachable | Verify `fires_catchments` for site; inspect graph connectivity. |
+| Exception: no event vertices after prep | Geometry/SRID mismatch or fires not touching network | Confirm SRIDs and spatial overlap. |
+| All unreachable | Pour point isolated component | Inspect `fire_event_vertices` vs pour point vertex; rebuild topology with tolerance tweak. |
+| Large `network_edges_split` size | Full rebuild per site (expected) | Optimize later (site-scoped split table) if performance issue. |
+
+---
+### 10. Suggested Indexes
+```sql
+CREATE INDEX IF NOT EXISTS network_edges_split_site_idx ON firearea.network_edges_split(usgs_site);
+CREATE INDEX IF NOT EXISTS fire_event_vertices_site_evt_idx ON firearea.fire_event_vertices(usgs_site, event_id);
+CREATE INDEX IF NOT EXISTS site_fire_distances_site_status_idx ON firearea.site_fire_distances(usgs_site, status);
+```
+
+---
+### 11. Execution Duration Logging (Discussion)
+You asked where to store run duration. Options:
+1. Add `duration_ms double precision` to `site_fire_distance_run_log` (store only on final step row).
+2. Create a new table `site_fire_distance_run_summary(run_id, usgs_site, started_at, finished_at, duration_ms, zero_touch_ct, ok_ct, unreachable_ct)`. Cleaner separation; avoids altering existing log semantics.
+3. Compute on demand: difference between earliest and latest `created_at` for a `run_id` (no schema change, but slower aggregations later).
+
+Recommended: Option 2 if you foresee analytics; Option 3 if minimal schema churn preferred. (Not implemented yet—tell me if you want one created.)
+
+---
+### 12. Do We Need a Materialized View for Counts?
+Current data already supports summaries:
+```sql
+-- Per site summary (reachable, unreachable, zero-touch)
+SELECT usgs_site,
+  COUNT(*) FILTER (WHERE status='ok') AS ok_ct,
+  COUNT(*) FILTER (WHERE status='unreachable') AS unreachable_ct,
+  COUNT(*) FILTER (WHERE is_pour_point_touch) AS zero_touch_ct
 FROM firearea.site_fire_distances
-WHERE usgs_site='syca' AND status='ok' AND distance_m <= 20000
-ORDER BY distance_m;
+GROUP BY usgs_site;
 ```
-
-### Distance Distribution / Histogram
-```sql
-SELECT width_bucket(distance_m, 0, 50000, 10) AS bucket, COUNT(*)
-FROM firearea.site_fire_distances
-WHERE usgs_site='syca' AND status='ok'
-GROUP BY bucket ORDER BY bucket;
-```
-
-### Identify Unreachable Events (if any)
-```sql
-SELECT event_id, ig_date
-FROM firearea.site_fire_distances
-WHERE usgs_site='syca' AND status='unreachable';
-```
-
-### Join Candidate Distances with Fire Metadata
-(Assumes additional fire metadata table `firearea.fire_events` exists.)
-```sql
-SELECT d.event_id, d.ig_date, d.distance_m, fe.*
-FROM firearea.site_fire_distances d
-LEFT JOIN firearea.fire_events fe USING (event_id)
-WHERE d.usgs_site='syca';
-```
-
-### Debug Shortest Path Coverage
-Immediately after a run (same session):
-```sql
-SELECT COUNT(*) AS n_vertices, MIN(dist) AS min_d, MAX(dist) AS max_d
-FROM firearea._lite_vertex_sp;
-```
+Since this is a single inexpensive GROUP BY on an indexed column, a materialized view is optional. Only create one if you repeatedly query large historical snapshots or need snapshot isolation.
 
 ---
-## Interpreting Diagnostics
-| Step | Interpretation | Action if Problematic |
-|------|----------------|-----------------------|
-| start_lite | Function entered. | — |
-| pour_point_selected_lite | Snap chosen & start vertex. | If snap_distance large ⇒ QA pour point or tolerance. |
-| pour_point_offset_lite | Offset due to mid‑edge pour point. | Large offset might mean long headwater edge. |
-| event_points_lite | Total raw intersection + fallback points. | Zero ⇒ geometry mismatch (SRID / coverage). |
-| event_edges_lite | Distinct event edges. | Very large vs events ⇒ complex fire boundaries. |
-| vertices_needed_lite | Unique endpoints for those edges. | High ratio edges:vertices suggests linear clustering. |
-| components_lite | Component counts for event edges vs pour point component. | Nonzero other_edges ⇒ disconnected network segment. |
-| sp_rows_lite | Reached vertices (should ≥ vertices_needed). | If < needed ⇒ gap in topology. |
-| event_min_lite | Rows = number of distinct events. | If << event_edges, expected (aggregation). |
-| done_lite | Final counts inserted. | Confirm reachable vs unreachable. |
+### 13. Migration Notes From Legacy Lite
+- Mid-edge fraction math & pour point offsets removed.
+- Unified function inlines vertex logic (old dedicated vertex function archived but callable history retained in VCS).
+- `chosen_vertex_id` enables path export.
 
 ---
-## Performance Notes
-- Single `pgr_dijkstra` call per site (multi‑target) keeps complexity low.
-- Projected geometry column reuse avoids repeated ST_Transform.
-- UNLOGGED temp tables reduce write overhead (acceptable; results persisted only in final table).
-- Indexes to consider (if not already present):
-  - `CREATE INDEX ON firearea.network_edges (usgs_site);`
-  - `CREATE INDEX ON firearea.pour_point_snaps (usgs_site);`
-  - `CREATE INDEX ON firearea.site_fire_distances (usgs_site, status);`
+### 14. Sanity Checklist Before Publishing Results
+- [ ] Distances exist for all target sites (`SELECT COUNT(*) FROM firearea.site_fire_distances`).
+- [ ] Zero-touch counts plausible.
+- [ ] Few or no unexpected unreachable events.
+- [ ] Path export returns expected geometry for sample site(s).
 
 ---
-## Troubleshooting Quick Guide
-| Symptom | Likely Cause | Remedy |
-|---------|--------------|--------|
-| 0 event_points | Fire polygons not intersecting network; SRID mismatch. | Verify SRIDs & network coverage. |
-| All events unreachable | Different connected component or pour point too far off network. | Inspect `components_lite`; rebuild topology with adjusted tolerance. |
-| Snap distance unexpectedly large | Bad pour point coordinates or missing transform. | Re‑check raw pour point source SRID. |
-| sp_rows_lite < vertices_needed | Edge directionality or missing edges. | Confirm edges SQL includes both cost & reverse_cost; rebuild topology. |
-| Slow pour point refresh | Very large network or missing index. | Ensure `(usgs_site)` index; consider simplifying geometry. |
-
----
-## Extensibility Ideas
-- Add upstream‐only enforcement (filter by flow direction) with a direction mask table.
-- Store the chosen start vertex id & offset directly in `site_fire_distances` for audit.
-- Add materialized view summarizing: earliest fire date within distance bands.
-- Implement incremental pour point refresh (changed points only).
-- Introduce path reconstruction optionally (store edge sequence) using on‑demand pgr_dijkstra path queries.
-
----
-## Example: Recompute Everything Safely (Single Site)
-```sql
--- Optional: clear old diagnostics (preserves historical distance rows if you skip the delete)
-DELETE FROM firearea.site_fire_distance_run_log WHERE usgs_site='syca';
-DELETE FROM firearea.site_fire_distance_log WHERE usgs_site='syca';
-DELETE FROM firearea.site_fire_distances WHERE usgs_site='syca';
-
-SELECT firearea.fn_build_network_topology(true);  -- only if flowlines changed
-SELECT firearea.fn_refresh_pour_point_snaps();
-SELECT firearea.fn_compute_site_fire_distances_lite('syca', 60.0, true);
-
-SELECT * FROM firearea.site_fire_distances WHERE usgs_site='syca' ORDER BY distance_m;
-```
-
----
-## License / Data Provenance
-(Adapt this section to your project’s actual licensing.)
-- Underlying hydrography: NHDPlus (USGS/EPA) – follow original data license.
-- Wildfire polygons: Source dataset (e.g., MTBS or agency feed) – cite appropriately.
-- This SQL logic: Add repository/project license (MIT / Apache 2.0 / etc.) as appropriate.
-
----
-## Glossary
+### 15. Glossary
 | Term | Definition |
-|------|-----------|
-| Pour Point | The designated monitoring location or outlet for a site. |
-| Snap | Nearest edge association plus fractional position. |
-| Fraction | 0 at edge source vertex; 1 at edge target. |
-| Offset | Linear distance from chosen start vertex to the actual pour point if mid‑edge. |
-| Component | Connected subgraph identifier from `pgr_connectedComponents`. |
+|------|------------|
+| Split Edge | Segment after splitting at pour point & fire fractions. |
+| Event Vertex | Promoted vertex representing a fire boundary intersection. |
+| Touch Event | Fire polygon touching or near the pour point (forced distance 0). |
 
 ---
-## Quick Sanity Checklist Before Large Batch Run
-- [ ] `network_edges` populated and has reasonable edge count per site.
-- [ ] `geom_5070` (or chosen SRID) present & non‑NULL.
-- [ ] `pour_point_snaps` row per site (snap_distance_m within tolerance).
-- [ ] Fires exist (`fires_catchments` not empty for target sites).
-- [ ] Test one site → verify run log has expected progression and non‑zero results.
+### 16. Where to Go Next
+- Use `run_multi_site_split.sh` for batch processing.
+- Add duration logging (choose an option in section 11) if performance trending becomes important.
+- Consider future optimization: site-local split cache or incremental splitting.
 
 ---
-## Getting Help
-Capture and share:
-1. Run log subset: `SELECT * FROM firearea.site_fire_distance_run_log WHERE usgs_site='SITE' ORDER BY created_at;`
-2. Snap diagnostics: `SELECT * FROM firearea.pour_point_snaps WHERE usgs_site='SITE';`
-3. Component mismatch: Output of `components_lite` step.
-
-These three artifacts usually pinpoint issues (snap tolerance, component isolation, or missing edges).
-
----
-Happy routing! 🚰🔥
+Happy (simpler) routing! 🔥➡️💧
