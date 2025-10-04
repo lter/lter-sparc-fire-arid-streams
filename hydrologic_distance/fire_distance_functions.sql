@@ -1341,6 +1341,16 @@ BEGIN
             EXECUTE 'CREATE INDEX fire_event_vertices_event_idx ON firearea.fire_event_vertices (usgs_site, event_id)';
         END IF;
     END IF;
+    -- Table to record whether a fire event had any true network boundary intersections (pre-fallback)
+    IF to_regclass('firearea.event_intersection_stats') IS NULL THEN
+        CREATE TABLE firearea.event_intersection_stats (
+            usgs_site text NOT NULL,
+            event_id text NOT NULL,
+            has_network_intersection boolean NOT NULL,
+            PRIMARY KEY (usgs_site, event_id)
+        );
+        CREATE INDEX IF NOT EXISTS event_intersection_stats_site_idx ON firearea.event_intersection_stats (usgs_site);
+    END IF;
 END;
 $$;
 
@@ -1440,6 +1450,16 @@ BEGIN
     FROM all_pts ap
     JOIN tmp_site_edges e USING(edge_id)
     WHERE pt IS NOT NULL;
+
+    -- Record which events had at least one true boundary intersection BEFORE midpoint fallback
+    DROP TABLE IF EXISTS tmp_event_boundary_stats;
+    CREATE TEMP TABLE tmp_event_boundary_stats AS
+    SELECT f.event_id, (COUNT(fi.event_id) > 0) AS has_boundary
+    FROM (
+        SELECT DISTINCT event_id FROM firearea.fires_catchments WHERE lower(usgs_site)=v_site_lower
+    ) f
+    LEFT JOIN (SELECT DISTINCT event_id FROM tmp_fire_intersections) fi USING (event_id)
+    GROUP BY f.event_id;
 
     -- Containment fallback midpoint for fires lacking boundary points
     INSERT INTO tmp_fire_intersections(event_id, ig_date, edge_id, fraction, pt_geom)
@@ -1577,6 +1597,11 @@ BEGIN
     FROM ranked
     WHERE rn=1;  -- one geometry exemplar per (event,vertex)
 
+    -- Persist intersection stats for this site (replace existing)
+    DELETE FROM firearea.event_intersection_stats WHERE lower(usgs_site)=v_site_lower;
+    INSERT INTO firearea.event_intersection_stats(usgs_site, event_id, has_network_intersection)
+    SELECT v_site_lower, event_id, has_boundary FROM tmp_event_boundary_stats;
+
     RAISE NOTICE '[split_topology] site=% edges_split=% event_vertices(raw_unique)=% events=%', v_site_lower,
         (SELECT count(*) FROM firearea.network_edges_split WHERE lower(usgs_site)=v_site_lower),
         (SELECT count(*) FROM firearea.fire_event_vertices WHERE lower(usgs_site)=v_site_lower),
@@ -1696,6 +1721,10 @@ BEGIN
         FROM firearea.fire_event_vertices fev
         JOIN _vx_vertex_dist vd ON vd.vertex_id = fev.vertex_id
         WHERE lower(fev.usgs_site)=v_site_lower
+          AND EXISTS (
+              SELECT 1 FROM firearea.event_intersection_stats s
+              WHERE lower(s.usgs_site)=v_site_lower AND s.event_id=fev.event_id AND s.has_network_intersection
+          )
     ), ranked AS (
         SELECT *, ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY dist) AS rn
         FROM per_vertex
@@ -1723,10 +1752,29 @@ BEGIN
             FROM firearea.fire_event_vertices fev
             LEFT JOIN _vx_vertex_dist vd ON vd.vertex_id = fev.vertex_id
             WHERE lower(fev.usgs_site)=v_site_lower
+              AND EXISTS (
+                  SELECT 1 FROM firearea.event_intersection_stats s
+                  WHERE lower(s.usgs_site)=v_site_lower AND s.event_id=fev.event_id AND s.has_network_intersection
+              )
             GROUP BY fev.event_id, fev.ig_date
         ) x
         WHERE x.any_reached = 0;
     END IF;
+
+    -- Fire events with NO true network intersection: insert NULL distance classification
+    INSERT INTO firearea.site_fire_distances(
+        usgs_site, pour_point_identifier, pour_point_comid,
+        event_id, ig_date, distance_m, path_edge_ids, status, message, chosen_vertex_id, is_pour_point_touch
+    )
+    SELECT v_site_lower, v_pp_identifier, v_pp_comid,
+           s.event_id, fc.ig_date, NULL, NULL, 'no_intersection', 'split_no_network_intersection', NULL, false
+    FROM firearea.event_intersection_stats s
+    JOIN firearea.fires_catchments fc ON lower(fc.usgs_site)=v_site_lower AND fc.event_id = s.event_id
+    WHERE lower(s.usgs_site)=v_site_lower AND NOT s.has_network_intersection
+      AND NOT EXISTS (
+          SELECT 1 FROM firearea.site_fire_distances d
+          WHERE d.usgs_site=v_site_lower AND d.event_id=s.event_id
+      );
 
     -- Zero-distance detection (touch / within tolerance)
     DROP TABLE IF EXISTS _split_zero_events;
@@ -1782,11 +1830,11 @@ $$;
 -- SELECT firearea.fn_prepare_site_split_topology('sbc_lter_mis');
 -- SELECT firearea.fn_compute_site_fire_distances('sbc_lter_mis');
 
--- SELECT firearea.fn_prepare_site_split_topology('sbc_lter_rat');
--- SELECT firearea.fn_compute_site_fire_distances('sbc_lter_rat');
+SELECT firearea.fn_prepare_site_split_topology('sbc_lter_rat');
+SELECT firearea.fn_compute_site_fire_distances('sbc_lter_rat');
 
--- SELECT firearea.fn_prepare_site_split_topology('USGS-11060400');
--- SELECT firearea.fn_compute_site_fire_distances('USGS-11060400');
+SELECT firearea.fn_prepare_site_split_topology('USGS-11060400');
+SELECT firearea.fn_compute_site_fire_distances('USGS-11060400');
 
 --------------------------------------------------------------------------------
 
