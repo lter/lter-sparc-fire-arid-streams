@@ -270,11 +270,11 @@ $$;
 
 --
 -- Deprecated: fn_refresh_pour_point_snaps removed in favor of batched version.
-DROP FUNCTION IF EXISTS firearea.fn_refresh_pour_point_snaps(double precision, integer);
-    ANALYZE firearea.pour_point_snaps;
-    RETURN v_cnt;
-END;
-$$;
+-- DROP FUNCTION IF EXISTS firearea.fn_refresh_pour_point_snaps(double precision, integer);
+--     ANALYZE firearea.pour_point_snaps;
+--     RETURN v_cnt;
+-- END;
+-- $$;
 
 -- Batched debug variant offering progress visibility (all sites only).
 DROP FUNCTION IF EXISTS firearea.fn_refresh_pour_point_snaps_batched(double precision, integer, integer, boolean);
