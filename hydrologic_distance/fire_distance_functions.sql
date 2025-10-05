@@ -97,6 +97,16 @@ BEGIN
             EXECUTE 'CREATE INDEX fire_event_vertices_event_idx ON firearea.fire_event_vertices (usgs_site, event_id)';
         END IF;
     END IF;
+    -- Additional lazily created table (moved from later duplicate block)
+    IF to_regclass('firearea.event_intersection_stats') IS NULL THEN
+        CREATE TABLE firearea.event_intersection_stats (
+            usgs_site text NOT NULL,
+            event_id text NOT NULL,
+            has_network_intersection boolean NOT NULL,
+            PRIMARY KEY (usgs_site, event_id)
+        );
+        CREATE INDEX IF NOT EXISTS event_intersection_stats_site_idx ON firearea.event_intersection_stats (usgs_site);
+    END IF;
 END;
 $$;
 
@@ -1591,91 +1601,7 @@ $$;
 --------------------------------------------------------------------------------
 
 -- (A) Tables (created lazily if absent)
-DO $$
-BEGIN
-    IF to_regclass('firearea.network_edges_split') IS NULL THEN
-        -- Use direct DDL; no need for EXECUTE with dollar quotes (avoids parser confusion)
-        CREATE TABLE firearea.network_edges_split (
-            edge_id bigserial PRIMARY KEY,
-            usgs_site text NOT NULL,
-            original_edge_id bigint,
-            segment_index integer,
-            start_fraction double precision,
-            end_fraction double precision,
-            geom_5070 geometry(LineString,5070) NOT NULL,
-            length_m double precision,
-            cost double precision,
-            reverse_cost double precision,
-            source bigint,
-            target bigint
-        );
-    CREATE INDEX IF NOT EXISTS network_edges_split_site_idx ON firearea.network_edges_split (usgs_site);
-    CREATE INDEX IF NOT EXISTS network_edges_split_geom_idx ON firearea.network_edges_split USING GIST (geom_5070);
-    END IF;
-    IF to_regclass('firearea.fire_event_vertices') IS NULL THEN
-        -- New multi-vertex schema: multiple vertices per (site,event)
-        CREATE TABLE firearea.fire_event_vertices (
-            usgs_site text NOT NULL,
-            event_id varchar(254) NOT NULL,
-            ig_date date,
-            vertex_id bigint NOT NULL,
-            geom_5070 geometry(Point,5070),
-            PRIMARY KEY (usgs_site, event_id, vertex_id)
-        );
-    CREATE INDEX IF NOT EXISTS fire_event_vertices_vertex_idx ON firearea.fire_event_vertices (vertex_id);
-    CREATE INDEX IF NOT EXISTS fire_event_vertices_event_idx ON firearea.fire_event_vertices (usgs_site, event_id);
-    ELSE
-        -- If legacy single-vertex PK exists, upgrade it in-place (idempotent)
-        PERFORM 1 FROM pg_constraint c
-          JOIN pg_class t ON t.oid=c.conrelid
-          JOIN pg_namespace n ON n.oid=t.relnamespace
-        WHERE n.nspname='firearea' AND t.relname='fire_event_vertices'
-          AND c.contype='p'
-          AND pg_get_constraintdef(c.oid) LIKE 'PRIMARY KEY (usgs_site, event_id)';
-        IF FOUND THEN
-            BEGIN
-                ALTER TABLE firearea.fire_event_vertices DROP CONSTRAINT fire_event_vertices_pkey;
-            EXCEPTION WHEN OTHERS THEN
-                -- Constraint name might differ; try generic lookup
-                PERFORM 1; -- swallow
-            END;
-            -- Add new composite PK if not already present
-            BEGIN
-                ALTER TABLE firearea.fire_event_vertices ADD PRIMARY KEY (usgs_site, event_id, vertex_id);
-            EXCEPTION WHEN duplicate_table THEN
-                NULL; -- already exists
-            WHEN duplicate_object THEN
-                NULL;
-            WHEN others THEN
-                -- Ignore if already adjusted manually
-                NULL;
-            END;
-        END IF;
-        -- Ensure helpful indexes exist
-        -- Ensure helpful indexes exist (cannot nest a DO inside plpgsql block)
-        IF NOT EXISTS (
-            SELECT 1 FROM pg_indexes WHERE schemaname='firearea' AND indexname='fire_event_vertices_vertex_idx'
-        ) THEN
-            EXECUTE 'CREATE INDEX fire_event_vertices_vertex_idx ON firearea.fire_event_vertices (vertex_id)';
-        END IF;
-        IF NOT EXISTS (
-            SELECT 1 FROM pg_indexes WHERE schemaname='firearea' AND indexname='fire_event_vertices_event_idx'
-        ) THEN
-            EXECUTE 'CREATE INDEX fire_event_vertices_event_idx ON firearea.fire_event_vertices (usgs_site, event_id)';
-        END IF;
-    END IF;
-    -- Table to record whether a fire event had any true network boundary intersections (pre-fallback)
-    IF to_regclass('firearea.event_intersection_stats') IS NULL THEN
-        CREATE TABLE firearea.event_intersection_stats (
-            usgs_site text NOT NULL,
-            event_id text NOT NULL,
-            has_network_intersection boolean NOT NULL,
-            PRIMARY KEY (usgs_site, event_id)
-        );
-        CREATE INDEX IF NOT EXISTS event_intersection_stats_site_idx ON firearea.event_intersection_stats (usgs_site);
-    END IF;
-END;
-$$;
+-- (Removed duplicate schema bootstrap DO block at original lines ~1550–1640; merged logic above.)
 
 --------------------------------------------------------------------------------
 -- (B) Function: fn_prepare_site_split_topology
