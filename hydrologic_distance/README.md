@@ -7,6 +7,11 @@ splitting edges at pour point and fire boundary intersections.
 
 ---
 ### 1. End‑to‑End Quick Start (Clean Rebuild)
+
+```bash
+psql -h localhost -d dbname -U user -v ON_ERROR_STOP=1 -f fire_distance_functions.sql
+```
+
 ```sql
 -- Rebuild base network (only if underlying flowlines changed)
 -- (rebuild boolean, tolerance, srid, debug, run_analyze?)
