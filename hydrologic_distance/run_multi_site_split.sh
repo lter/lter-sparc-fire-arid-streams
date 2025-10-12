@@ -77,8 +77,13 @@ WITH all_sites AS (
   UNION ALL SELECT usgs_site FROM firearea.largest_orthop_valid_fire_per_site
   UNION ALL SELECT usgs_site FROM firearea.largest_spcond_valid_fire_per_site
 )
-SELECT DISTINCT lower(usgs_site)
+SELECT DISTINCT lower(all_sites.usgs_site)
 FROM all_sites
+JOIN firearea.flowlines ON (all_sites.usgs_site = flowlines.usgs_site)
+WHERE lower(all_sites.usgs_site) NOT IN (
+  SELECT DISTINCT lower(site_fire_distance_run_log.usgs_site)
+  FROM firearea.site_fire_distance_run_log
+)
 ORDER BY 1;
 SQL
 
