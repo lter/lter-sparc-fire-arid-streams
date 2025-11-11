@@ -1,0 +1,72 @@
+
+//var watersheds = ee.FeatureCollection("projects/ee-ashleycale/assets/western-hcdn-basins")
+var watersheds = ee.FeatureCollection("projects/ee-ashleycale/assets/crass-catchments");
+var dataset = ee.Image('USGS/3DEP/10m')
+var elevation = dataset.select('elevation');
+var slope = ee.Terrain.slope(elevation);
+Map.setCenter(-112.8598, 36.2841, 10);
+Map.addLayer(elevation, {min: 0, max: 3000,   palette: [
+    '3ae237', 'b5e22e', 'd6e21f', 'fff705', 'ffd611', 'ffb613', 'ff8b13',
+    'ff6e08', 'ff500d', 'ff0000', 'de0101', 'c21301', '0602ff', '235cb1',
+    '307ef3', '269db1', '30c8e2', '32d3ef', '3be285', '3ff38f', '86e26f'
+  ],
+}, 'elevation');
+Map.addLayer(slope, {min: 0, max: 60}, 'slope');
+Map.addLayer(watersheds, {color: 'Red'}, "Fire perimeters");
+var slopeStats = slope.reduceRegions({
+  collection: watersheds,
+  reducer: ee.Reducer.min()
+            .combine(ee.Reducer.max(), '', true),
+  scale: 30, // adjust based on your DEM resolution
+});
+
+// 4. Add a "range" property: max - min
+var withRange = slopeStats.map(function(feature) {
+  var minslope = feature.getNumber('min');
+  var maxslope = feature.getNumber('max');
+  var rangeslope = maxslope.subtract(minslope);
+  return feature.set('rangeslope', rangeslope);
+});
+
+Export.table.toDrive({
+  collection: withRange,
+  description: 'SlopeStatsExport_crass-catchments',
+  fileFormat: 'CSV'
+});
+
+var elevationStats = elevation.reduceRegions({
+  collection: watersheds,
+  reducer: ee.Reducer.min()
+            .combine(ee.Reducer.max(), '', true),
+  scale: 30, // adjust based on your DEM resolution
+});
+
+// 4. Add a "range" property: max - min
+var withRange2 = elevationStats.map(function(feature) {
+  var minelevation = feature.getNumber('min');
+  var maxelevation = feature.getNumber('max');
+  var rangeelevation = maxelevation.subtract(minelevation);
+  return feature.set('rangeelevation', rangeelevation);
+});
+
+Export.table.toDrive({
+  collection: withRange2,
+  description: 'ElevationStatsExport_crass-catchments',
+  fileFormat: 'CSV'
+});
+
+var nlcd = ee.Image("USGS/NLCD_RELEASES/2020_REL/NALCMS")
+             .select('landcover');
+             
+var zonalHist = nlcd.reduceRegions({
+  collection: watersheds,
+  reducer: ee.Reducer.frequencyHistogram(),  // this counts pixels per class
+  scale: 30,
+});
+
+Export.table.toDrive({
+  collection: zonalHist,
+  description: 'NLCD_Pixel_Counts_crass-catchments',
+  fileFormat: 'CSV'
+});
+
