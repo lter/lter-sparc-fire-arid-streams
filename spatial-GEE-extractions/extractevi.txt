@@ -1,0 +1,295 @@
+//var catchments = ee.FeatureCollection("projects/ee-ashleycale/assets/nitrate-fires");
+var catchments2 = ee.FeatureCollection("projects/ee-ashleycale/assets/crass-fires");
+var first_100_features = catchments2.toList(5500).slice(5001, 5500);
+var catchments = ee.FeatureCollection(first_100_features);
+//0-2000,
+//Map.addLayer(catchments);
+//Map.centerObject(catchments);
+var fireID  = ee.List(catchments.aggregate_array('event_id')).getInfo();
+var catchID = ee.List(catchments.aggregate_array('usgs_site')).getInfo();
+var nFires = fireID.length;
+//Landsat needed
+var ls9SR = ee.ImageCollection('LANDSAT/LC09/C02/T1_L2'),
+    ls8SR = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2'),
+    ls7SR = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2'),
+    ls5SR = ee.ImageCollection('LANDSAT/LT05/C02/T1_L2'),
+    ls4SR = ee.ImageCollection('LANDSAT/LT04/C02/T1_L2');
+    
+//scaling among landsats    
+  var applyScaleFactors=function(lsImage) {
+  var opticalBands=lsImage.select(["SR_B."]).multiply(0.0000275).add(-0.2);
+  return lsImage.addBands(opticalBands, null, true)
+}
+
+//8 + 9
+var ls8_9_Indices = function(lsImage){
+  var nbr  = lsImage.normalizedDifference(['SR_B5', 'SR_B7']).toFloat();
+  var ndvi = lsImage.normalizedDifference(['SR_B5', 'SR_B4']).toFloat();
+  var ndmi = lsImage.normalizedDifference(['SR_B5', 'SR_B6']).toFloat();
+  var evi  = lsImage.expression(
+              '2.5 * ((SR_B5 - SR_B4) / (SR_B5 + 6 * SR_B4 - 7.5 * SR_B2 + 1))',
+              {'SR_B5': lsImage.select('SR_B5'),
+              'SR_B4': lsImage.select('SR_B4'),
+              'SR_B2': lsImage.select('SR_B2')}).toFloat();
+  var mirbi = lsImage.expression(
+              '((10 * SR_B6) - (9.8 * SR_B7) + 2)',
+              {'SR_B6': lsImage.select('SR_B6'),
+               'SR_B7': lsImage.select('SR_B7'),
+              }).toFloat();              
+  var qa = lsImage.select(['QA_PIXEL']);
+  return nbr.addBands([ndvi,ndmi,evi,mirbi,qa])
+          .select([0,1,2,3,4,5], ['nbr','ndvi','ndmi','evi','mirbi','QA_PIXEL'])
+          .copyProperties(lsImage, ['system:time_start']);
+          
+  };
+
+//4 -7 
+var ls4_7_Indices = function(lsImage){
+  var nbr  = lsImage.normalizedDifference(['SR_B4', 'SR_B7']).toFloat();
+  var ndvi = lsImage.normalizedDifference(['SR_B4', 'SR_B3']).toFloat();  
+  var ndmi = lsImage.normalizedDifference(['SR_B4', 'SR_B5']).toFloat();
+  var evi = lsImage.expression(
+              '2.5 * ((SR_B4 - SR_B3) / (SR_B4 + 6 * SR_B3 - 7.5 * SR_B1 + 1))',
+              {'SR_B4': lsImage.select('SR_B4'),
+               'SR_B3': lsImage.select('SR_B3'),
+               'SR_B1': lsImage.select('SR_B1')}).toFloat();
+  var mirbi = lsImage.expression(
+              '((10 * SR_B5) - (9.8 * SR_B7) + 2)',
+              {'SR_B5': lsImage.select('SR_B5'),
+               'SR_B7': lsImage.select('SR_B7'),
+              }).toFloat();              
+  var qa = lsImage.select(['QA_PIXEL']);
+  return nbr.addBands([ndvi,ndmi,evi,mirbi,qa])
+          .select([0,1,2,3,4,5], ['nbr','ndvi','ndmi','evi','mirbi','QA_PIXEL'])
+          .copyProperties(lsImage, ['system:time_start']);
+  };
+
+//pulled this masking logic from Parks 2018
+var lsCfmask = function(lsImage) {
+	// Bits 3,4,5,7: cloud,cloud-shadow,snow,water respectively.
+	var cloudsBitMask      = (1 << 3);
+	var cloudShadowBitMask = (1 << 4);
+	var snowBitMask        = (1 << 5);
+	var waterBitMask       = (1 << 7);
+	// Get the pixel QA band.
+	var qa = lsImage.select('QA_PIXEL');
+	// Flags should be set to zero, indicating clear conditions.
+  var clear =  qa.bitwiseAnd(cloudsBitMask).eq(0)
+              .and(qa.bitwiseAnd(cloudShadowBitMask).eq(0))
+              .and(qa.bitwiseAnd(snowBitMask).eq(0))
+              .and(qa.bitwiseAnd(waterBitMask).eq(0));
+	return lsImage.updateMask(clear).select([0,1,2,3,4]) 
+              .copyProperties(lsImage,["system:time_start"]);
+}
+//var waterMask = ee.Image('UMD/hansen/global_forest_change_2015').select(['datamask']).eq(1);
+//variables calculated for all tiles 
+var ls9 = ls9SR.map(applyScaleFactors)
+                .map(ls8_9_Indices)
+                .map(lsCfmask);
+var ls8 = ls8SR.map(applyScaleFactors)
+               .map(ls8_9_Indices)
+               .map(lsCfmask);
+var ls7 = ls7SR.map(applyScaleFactors)
+               .map(ls4_7_Indices)
+               .map(lsCfmask);
+var ls5 = ls5SR.map(applyScaleFactors)
+               .map(ls4_7_Indices)
+               .map(lsCfmask);
+var ls4 = ls4SR.map(applyScaleFactors)
+               .map(ls4_7_Indices)
+               .map(lsCfmask);
+                
+// Merge Landsat Collections
+var lsCol = ee.ImageCollection(ls9.merge(ls8).merge(ls7).merge(ls5).merge(ls4));
+
+//map over all shapefiles
+var indices = ee.ImageCollection(catchments.map(function(ft){
+
+var fName   = ft.get('event_id');
+
+// select fire
+var fire = ft;
+var fireBounds = ft.geometry().bounds();
+
+var fireYear = ee.Date.parse('YYYY', fire.get('fire_year'));
+
+var startday = ee.Number(171);
+var endday   = ee.Number(244);  
+//var startday = 171;
+//var endday   = 244;  
+
+//three years after fire 
+ var postFireYear = fireYear.advance(3, 'year');
+
+ var postFireIndices  = ee.Algorithms.If(lsCol.filterBounds(fireBounds)
+                           .filterDate(postFireYear,fireYear.advance(4,'year'))
+                          .filter(ee.Filter.dayOfYear(startday, endday))
+                          .size(),
+                          lsCol.filterBounds(fireBounds)
+                            .filterDate(postFireYear,fireYear.advance(4,'year'))
+                            .filter(ee.Filter.dayOfYear(startday, endday))
+                            .mean()
+                            .select([0,1,2,3,4], ['post_nbr','post_ndvi', 'post_ndmi', 'post_evi','post_mirbi']),
+                          ee.Image.cat(ee.Image(),ee.Image(),ee.Image(),ee.Image(),ee.Image())
+                            .rename(['post_nbr','post_ndvi', 'post_ndmi', 'post_evi','post_mirbi'])
+                          );
+    var postFireIndices2  = ee.Algorithms.If(lsCol.filterBounds(fireBounds)
+                          .filterDate(postFireYear, fireYear.advance(5, 'year'))
+                          .filter(ee.Filter.dayOfYear(startday, endday))
+                          .size(),
+                          lsCol.filterBounds(fireBounds)
+                            .filterDate(postFireYear, fireYear.advance(5, 'year'))
+                            .filter(ee.Filter.dayOfYear(startday, endday))
+                            .mean()
+                            .select([0,1,2,3,4], ['post_nbr','post_ndvi', 'post_ndmi', 'post_evi','post_mirbi']),
+                          ee.Image.cat(ee.Image(),ee.Image(),ee.Image(),ee.Image(),ee.Image())
+                            .rename(['post_nbr','post_ndvi', 'post_ndmi', 'post_evi','post_mirbi'])
+                          ) 
+  var post_filled = ee.Image(postFireIndices).unmask(postFireIndices2)                           
+
+  var postFireIndices22 = ee.Image(post_filled).select(['post_evi','post_ndvi']) ;                      
+/*
+  var imageevi = ee.Image(postFireIndices22).select('post_evi');
+      
+  var reduced = imageevi.reduceRegion({
+        reducer: ee.Reducer.mean(),
+        geometry: ft.geometry(),
+      });
+      
+  var reduced2 = imageevi.reduceRegion({
+        reducer: ee.Reducer.median(),
+        geometry: ft.geometry(),
+      });
+*/
+  //var meanevi = postFireIndices2.select('post_evi').reduceRegion.mean()
+  //return postFireIndices2
+  //var postevi = postFireIndices2.select('post_evi').add(10);
+  //print(postFireIndices2.length);
+  var postFireIndices222 = postFireIndices22.clip(fire);
+  //var firename = ft.get('event_id')
+  //var catchname = ft.get('usge_site')
+  return postFireIndices222.set({
+    'fireID' : ft.get('event_id'),
+    'catchID' :ft.get('usgs_site'),
+    'fireYear':ft.get('fire_year'),
+    //'post_evi_mean':reduced,
+    //'post_evi_median':reduced2
+    //'post_evi_median':postFireIndices2.median('post_evi')
+    
+  });
+}));
+
+//var finalTable = indices.aggregate_array(ee.List(['fireID','catchID','post_evi_median'])); 
+
+
+//print(indices);
+//print(indices.first().bandNames());
+/*
+var processFeature = function(feature) {
+      // Example: Calculate the mean of a band from an image within the feature's geometry
+      var image = ee.Image('indices').select('post_evi');
+      var reduced = image.reduceRegion({
+        reducer: ee.Reducer.mean(),
+        geometry: feature.geometry(),
+        scale: 30,
+        maxPixels: 1e9
+      });
+      // Return the feature with the new property
+      return feature.set('mean_band4', reduced.get('B4'));
+    };
+*/
+
+//var evistats = eviii.reduceRegions({
+//  collection:catchments,
+//  reducer: ee.Reducer.median()
+//})
+/*
+var tableData = ee.FeatureCollection(indices.map(function(feature) {
+      return ee.List([feature.get('fireID'),
+      feature.get('catchID'),
+      feature.get('fireYear'),
+      feature.get('post_evi_mean'),
+      feature.get('post_evi_median')]);
+    });
+*/   
+//var finalTable = tableData.aggregate_array(ee.List); 
+//print(indices);
+
+//print(finalTable);
+var paletteclass = ["#0000CD","#6B8E23", "#FFFF00","#FFA500","#FF0000" ];
+Map.addLayer(indices.select('post_evi'), {min:0, max:1, palette:paletteclass}, 'EVI');
+var evi_mean = indices.select('post_evi').mean().copyproperties;
+Map.addLayer(evi_mean,{palette:paletteclass},'evi-mean');
+
+Export.table.toDrive({
+  collection:indices,
+  description: 'evi-allcatchements',
+  fileFormat:'CSV'
+})
+
+/*
+var slopeStats = slope.reduceRegions({
+  collection: watersheds,
+  reducer: ee.Reducer.min()
+            .combine(ee.Reducer.max(), '', true),
+  scale: 30, // adjust based on your DEM resolution
+});
+
+// 4. Add a "range" property: max - min
+var withRange = slopeStats.map(function(feature) {
+  var minslope = feature.getNumber('min');
+  var maxslope = feature.getNumber('max');
+  var rangeslope = maxslope.subtract(minslope);
+  return feature.set('rangeslope', rangeslope);
+});
+
+Export.table.toDrive({
+  collection: withRange,
+  description: 'SlopeStatsExport',
+  fileFormat: 'CSV'
+});
+*/
+
+/*
+
+//Map.centerObject(catchments,3);
+var paletteclass = ["#0000CD","#6B8E23", "#FFFF00","#FFA500","#FF0000" ]; 
+Map.addLayer(catchments, {color: 'Red'}, "Fire perimeters");
+//Map.addLayer(indices.select('CBI_bc'), {min:0, max:3, palette:paletteclass}, 'CBI bias corrected');
+//Map.addLayer(indices.select('CBI'),    {min:0, max:3, palette:paletteclass}, 'CBI');
+Map.addLayer(indices.select('post_evi'), {min:0, max:1, palette:paletteclass}, 'EVI');
+//Map.addLayer(indices.select('CBI_class'),    {min:0, max:3, palette:paletteclass}, 'CBI');
+
+var bandsToExport = ['post_evi'];
+var nBands = bandsToExport.length;
+
+for (var j = 0; j < nFires; j++){
+  var id   = fireID[j];
+  var Name = id;
+  var ct = catchID[j];
+  var cat = ct;
+  //var fireExport = ee.Image(indices.filterMetadata('fireID', 'equals', id).first());
+  var f1 = ee.Filter.eq('fireID',id);
+  var f2 = ee.Filter.eq('catchID',ct);
+  var ff1 = ee.Filter.eq('event_id',id);
+  var ff2 = ee.Filter.eq('usgs_site',ct);
+  var fireExport = ee.Image(indices.filter(ee.Filter.and(f1,f2)).first());
+  var fireBounds = ee.Feature(catchments.filter(ee.Filter.and(ff1,ff2)).first()).geometry().bounds();
+  //var fireBounds = ee.Feature(catchments.filterMetadata('event_id', 'equals', id).first()).geometry().bounds();
+//print(fireBounds);
+  for (var i = 0; i < nBands; i++) {
+    var bandExport = bandsToExport[i];  
+    var exportImg = fireExport.select(bandExport);
+    Export.image.toDrive({
+      image: exportImg.toFloat(),  //casting to float maintains NA values in masked pixels
+      description: Name + '_' + cat + '_' + bandExport,
+      fileNamePrefix: Name + '_' + cat + '_' + bandExport,
+      maxPixels: 1e13,
+      scale: 30,
+      crs: "EPSG:4326",
+      //folder: 'mtbs_cbi',
+      folder: 'all_fires_evi',
+      region: fireBounds
+  }); 
+}}
+*/
