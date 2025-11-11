@@ -1,0 +1,5 @@
+project:
+  render:
+    - water_chem_functions.qmd
+
+# quarto render --profile chem_build -P user:"user"

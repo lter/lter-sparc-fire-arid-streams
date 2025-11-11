@@ -48,6 +48,8 @@ vignettes/*.pdf
 data
 data_stanfits
 data_working
+figures
 
 # Model fits
 *_template.rds
+*_template_R.rds

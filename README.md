@@ -4,8 +4,8 @@
 
 ## PIs: 
 
-- Tamara Harms, Associate Professor, Department of Biology & Wildlife and Institute of Arctic Biology, University of Alaska Fairbanks
-- Heili Lowman, Department of Natural Resources and Environmental Science, University of Nevada, Reno
+- Tamara Harms, Associate Professor Environmental Sciences Dept, UC Riverside 
+- Heili Lowman, Research Scholar, Rhodes Information Initiative, Duke University
 - Stevan Earl, Information Manager for the Central Arizona-Phoenix Long-Term Ecological Research (CAP LTER) project
 
 ## Script Explanations

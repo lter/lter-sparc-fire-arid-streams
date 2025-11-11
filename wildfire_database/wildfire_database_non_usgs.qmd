@@ -6,11 +6,32 @@ format: gfm
 
 # overview ---------------------------------------------------------------------
 
-Documentation and general workflow overview for developing the wildfire database to support the CRASS 2.0 study that will investigate relationships between wildfire and aquatic biogeochemistry in the arid western United States. The focus here is strictly on development of the wildfire database that stores information such as the geometry of study catchments, discharge, and water chemistry data. Other workflows for harvesting, for example covariates, are detailed in other files within this repository. The workflow draws heavily on the [firearea](https://srearl.gitlab.io/firearea/index.html) package that also support this effort. Important is that this is not a reproducible workflow: there is a time-sensitive component to some of the `firearea` queries, especially those related to discharge, such that there could be different returns based on the date of query, and this workflow features iterative steps, such as querying data for USGS sites in individual sites but for multiple states that is not shown, and some, particularly, database actions are run once after initial table construction but not when data are added subsequently.
+Documentation and general workflow overview for developing the wildfire
+database to support the CRASS 2.0 study that will investigate relationships
+between wildfire and aquatic biogeochemistry in the arid western United States.
+The focus here is strictly on development of the wildfire database that stores
+information such as the geometry of study catchments, discharge, and water
+chemistry data. Other workflows for harvesting, for example covariates, are
+detailed in other files within this repository. The workflow draws heavily on
+the [firearea](https://srearl.gitlab.io/firearea/index.html) package that also
+support this effort. Important is that this is not a reproducible workflow:
+there is a time-sensitive component to some of the `firearea` queries,
+especially those related to discharge, such that there could be different
+returns based on the date of query, and this workflow features iterative steps,
+such as querying data for USGS sites in individual sites but for multiple
+states that is not shown, and some, particularly, database actions are run once
+after initial table construction but not when data are added subsequently.
 
-This workflow documents adding non-usgs data (catchments, pour points) to the wildfire database. Locations include NEON aquatic (Sycamore Creek, AZ; Red Butte, UT), Santa Barbara Coastal LTER (SBC LTER), and Sycamore Creek LTREB (Dos S; Below Mesquite Wash) monitoring sites. The NEON Sycamore Creek site is co-located with the Dos S Sycamore Creek LTREB site and thus the LTREB Sycamore Creek site reflects both the LTREB and NEON programs.
+This workflow documents adding non-usgs data (catchments, pour points) to the
+wildfire database. Locations include NEON aquatic (Sycamore Creek, AZ; Red
+Butte, UT), Santa Barbara Coastal LTER (SBC LTER), and Sycamore Creek LTREB
+(Dos S; Below Mesquite Wash) monitoring sites. The NEON Sycamore Creek site is
+co-located with the Dos S Sycamore Creek LTREB site and thus the LTREB Sycamore
+Creek site reflects both the LTREB and NEON programs.
 
-Whereas the USGS catchments, pour points, and chemistry and discharge data employ the nhdplusTools suite of tools, the non-USGS site catchments are delineated with Streamstats.
+Whereas the USGS catchments, pour points, and chemistry and discharge data
+employ the nhdplusTools suite of tools, the non-USGS site catchments are
+delineated with Streamstats.
 
 
 # helpers ----------------------------------------------------------------------
@@ -176,7 +197,12 @@ DBI::dbWriteTable(
 
 ### rattlesnake creek
 
-It is generally, though not necessarily the case, that one or more locations among the California sites will not delineate. This seems unrelated to the sites but rather that `Streamstats` on occasion does not find a solution. For sites that were not delineated in the purrr workflow, delineate and add sites to the database individually. The example here is Rattlesnake Creek, which seems to fail often when run as part of a batch, but could be any site.
+It is generally, though not necessarily the case, that one or more locations
+among the California sites will not delineate. This seems unrelated to the
+sites but rather that `Streamstats` on occasion does not find a solution. For
+sites that were not delineated in the purrr workflow, delineate and add sites
+to the database individually. The example here is Rattlesnake Creek, which
+seems to fail often when run as part of a batch, but could be any site.
 
 ```{r}
 #| eval: FALSE
@@ -261,7 +287,7 @@ DBI::dbWriteTable(
 )
 ```
 
-## pour points (except Hanan's Bell sites that are already uploaded)
+## pour points (except Hanan Bell sites that are already uploaded)
 
 ```{r}
 #| eval: FALSE
@@ -331,9 +357,9 @@ DBI::dbExecute(
   conn      = pg,
   statement = "
   ALTER TABLE firearea.non_usgs_catchments
-    ALTER COLUMN geometry
-    TYPE geometry(geometry, 4326)
-    USING ST_SetSRID(geometry, 4326)
+  ALTER COLUMN geometry
+  TYPE geometry(geometry, 4326)
+  USING ST_SetSRID(geometry, 4326)
   ;
   "
 )
@@ -342,9 +368,9 @@ DBI::dbExecute(
   conn      = pg,
   statement = "
   ALTER TABLE firearea.non_usgs_pour_points
-    ALTER COLUMN geometry
-    TYPE geometry(geometry, 4326)
-    USING ST_SetSRID(geometry, 4326)
+  ALTER COLUMN geometry
+  TYPE geometry(geometry, 4326)
+  USING ST_SetSRID(geometry, 4326)
   ;
   "
 )
@@ -376,6 +402,982 @@ DBI::dbExecute(
   WHERE usgs_site !~* 'ono|dev'
   ;
   "
+)
+
+```
+
+# fix NEON site names ----------------------------------------------------------
+
+The names assigned to the NEON sites to this point were based on a combination
+of 'neon_' and the first two letters of the site name (e.g., Sycamore Creek ~
+'neon_sycr'). However, this is confusing because it diverges from the NEON name
+(neon_sycr ~ SYCA and neon_rebu ~ REDB). Here, we change the names associated
+with the NEON sites to the NEON site name designations (but lowercase).
+
+```{r}
+#| eval: TRUE
+
+DBI::dbWithTransaction(
+  conn = pg,
+  {
+    DBI::dbExecute(
+      conn      = pg,
+      statement = "
+      UPDATE firearea.non_usgs_catchments
+      SET usgs_site = 'redb'
+      WHERE usgs_site = 'neon_rebu'
+      ;
+      "
+    )
+
+    DBI::dbExecute(
+      conn      = pg,
+      statement = "
+      UPDATE firearea.non_usgs_catchments
+      SET usgs_site = 'syca'
+      WHERE usgs_site = 'neon_sycr'
+      ;
+      "
+    )
+
+    ## non_usgs_pour_points
+
+    DBI::dbExecute(
+      conn      = pg,
+      statement = "
+      UPDATE firearea.non_usgs_pour_points
+      SET usgs_site = 'redb'
+      WHERE usgs_site = 'neon_rebu'
+      ;
+      "
+    )
+
+    DBI::dbExecute(
+      conn      = pg,
+      statement = "
+      UPDATE firearea.non_usgs_pour_points
+      SET usgs_site = 'syca'
+      WHERE usgs_site = 'neon_sycr'
+      ;
+      "
+    )
+
+    ## ecoregion_catchments 
+
+    DBI::dbExecute(
+      conn      = pg,
+      statement = "
+      UPDATE firearea.ecoregion_catchments
+      SET usgs_site = 'redb'
+      WHERE usgs_site = 'neon_rebu'
+      ;
+      "
+    )
+
+    DBI::dbExecute(
+      conn      = pg,
+      statement = "
+      UPDATE firearea.ecoregion_catchments
+      SET usgs_site = 'syca'
+      WHERE usgs_site = 'neon_sycr'
+      ;
+      "
+    )
+  }
+)
+
+```
+
+# neon data --------------------------------------------------------------------
+
+## discharge
+
+```{r}
+#| eval: TRUE
+
+neon_discharge <- function(neon_site) {
+
+  q <- neonUtilities::loadByProduct(
+    dpID       = "DP4.00130.001",
+    # startdate = "2016-01",
+    # enddate   = "2022-03",
+    site       = c(neon_site),
+    package    = "basic",
+    check.size = FALSE
+  )
+
+  q <- q$csd_continuousDischarge
+
+  site_name <- tolower(neon_site)
+
+  q_upload <- q |> 
+    dplyr::mutate(date = lubridate::date(endDate)) |> 
+    dplyr::summarise(
+      mean = mean(
+        x     = maxpostDischarge,
+        na.rm = TRUE
+      ),
+      sd = sd(
+        x     = maxpostDischarge,
+        na.rm = TRUE
+      ),
+      missing = sum(is.na(maxpostDischarge)),
+      .by  = date
+    ) |> 
+    dplyr::mutate(usgs_site = site_name) |> 
+    dplyr::select(
+      usgs_site,
+      tidyselect::everything()
+    ) |> 
+    dplyr::filter(!is.na(mean))
+
+    DBI::dbWriteTable(
+      conn      = pg,
+      name      = c("firearea", "non_usgs_discharge"),
+      value     = q_upload,
+      overwrite = FALSE,
+      append    = TRUE,
+      row.names = FALSE
+    )
+
+}
+
+purrr::walk(
+  .x = c("REDB", "SYCA"),
+  .f = ~ neon_discharge(neon_site = .x)
+)
+
+DBI::dbExecute(
+  conn      = pg,
+  statement = "
+  COMMENT ON COLUMN firearea.non_usgs_discharge.mean IS 'liters per second' ;"
+)
+```
+
+## exo
+
+```{r}
+#| eval: TRUE
+
+neon_exo <- function(neon_site) {
+
+  exo <- neonUtilities::loadByProduct(
+    dpID       = "DP1.20288.001",
+    # startdate = "2016-01",
+    # enddate   = "2022-03",
+    site       = c(neon_site),
+    package    = "basic",
+    check.size = FALSE
+  )
+
+  exo_data <- exo$waq_instantaneous
+  # exo_vars <- exo$variables_20288
+
+  site_name <- tolower(neon_site)
+
+  exo_upload <- exo_data |> 
+    dplyr::mutate(date = lubridate::date(endDateTime)) |> 
+    dplyr::select(
+      date,
+      specificConductance,      # microsiemensPerCentimeter
+      dissolvedOxygen,          # milligramsPerLiter
+      localDissolvedOxygenSat,
+      pH,
+      chlorophyll,              # microgramsPerLiter
+      turbidity,                # formazinNephelometricUnit
+      fDOM                      # quinineSulfateUnit
+    ) |>
+    tidyr::pivot_longer(
+      cols      = dplyr::where(is.numeric),
+      names_to  = "analyte",
+      values_to = "concentration"
+    ) |>
+    dplyr::summarise(
+      mean = mean(
+        x     = concentration,
+        na.rm = TRUE
+      ),
+      sd = sd(
+        x     = concentration,
+        na.rm = TRUE
+      ),
+      missing = sum(is.na(concentration)),
+      .by  = c(date, analyte)
+    ) |> 
+    dplyr::mutate(
+      usgs_site = site_name,
+      unit      = dplyr::case_when(
+        analyte == "specificConductance"      ~ "microsiemensPerCentimeter",
+        analyte == "dissolvedOxygen"          ~ "milligramsPerLiter",
+        analyte == "localDissolvedOxygenSat"  ~ "percent",
+        analyte == "pH"                       ~ "pH" ,
+        analyte == "chlorophyll"              ~ "microgramsPerLiter",
+        analyte == "turbidity"                ~ "formazinNephelometricUnit",
+        analyte == "fDOM"                     ~ "quinineSulfateUnit"
+      ),
+      source = "NEON_exo"
+    ) |> 
+    dplyr::select(
+      usgs_site,
+      dplyr::everything()
+    ) |> 
+    dplyr::filter(!is.na(mean))
+
+    DBI::dbWriteTable(
+      conn      = pg,
+      name      = c("firearea", "non_usgs_water_chem"),
+      value     = exo_upload,
+      overwrite = FALSE,
+      append    = TRUE,
+      row.names = FALSE
+    )
+
+}
+
+purrr::walk(
+  .x = c("REDB", "SYCA"),
+  .f = ~ neon_exo(neon_site = .x)
+)
+
+```
+
+
+## nitrate
+
+```{r}
+#| eval: TRUE
+
+neon_nitrate <- function(neon_site) {
+
+  nitrate <- neonUtilities::loadByProduct(
+    dpID      = "DP1.20033.001",
+    # startdate = "2016-01",
+    # enddate   = "2022-03",
+    site      = c(neon_site),
+    package    = "basic",
+    check.size = FALSE
+  )
+
+  nitrate_data <- nitrate$NSW_15_minute
+  # nitrate_vars <- nitrate$variables_20033
+
+  site_name <- tolower(neon_site)
+
+  nitrate_upload <- nitrate_data |> 
+    dplyr::mutate(date = lubridate::date(endDateTime)) |> 
+    dplyr::select(
+      date,
+      surfWaterNitrateMean # micromolesPerLiter
+    ) |>
+    dplyr::summarise(
+      mean = mean(
+        x     = surfWaterNitrateMean,
+        na.rm = TRUE
+      ),
+      sd = sd(
+        x     = surfWaterNitrateMean,
+        na.rm = TRUE
+      ),
+      missing = sum(is.na(surfWaterNitrateMean)),
+      .by  = c(date)
+    ) |> 
+    dplyr::mutate(
+      usgs_site = site_name,
+      analyte   = "nitrate",
+      unit      = "micromolesPerLiter",
+      source    = "NEON_nitrate"
+    ) |> 
+    dplyr::select(
+      usgs_site,
+      date,
+      analyte,
+      dplyr::everything()
+    ) |> 
+    dplyr::filter(!is.na(mean))
+
+    DBI::dbWriteTable(
+      conn      = pg,
+      name      = c("firearea", "non_usgs_water_chem"),
+      value     = nitrate_upload,
+      overwrite = FALSE,
+      append    = TRUE,
+      row.names = FALSE
+    )
+
+}
+
+purrr::walk(
+  .x = c("REDB", "SYCA"),
+  .f = ~ neon_nitrate(neon_site = .x)
+)
+
+```
+
+## grabs
+
+```{r}
+#| eval: TRUE
+
+neon_grabs <- function(neon_site) {
+
+  grabs <- neonUtilities::loadByProduct(
+    dpID      = "DP1.20093.001",
+    # startdate = "2012-01",
+    # enddate   = "2022-02",
+    site      = c(neon_site),
+    package    = "basic",
+    check.size = FALSE
+  )
+
+  grabs_data  <- grabs$swc_externalLabDataByAnalyte
+  # grabs_field <- grabs$swc_fieldData
+  # grabs_vars  <- grabs$variables_20093
+  # grabs_cats  <- grabs$categoricalCodes_20093
+
+  site_name <- tolower(neon_site)
+
+  grabs_upload <- grabs_data |> 
+    dplyr::mutate(date = lubridate::date(collectDate)) |> 
+    dplyr::summarise(
+      mean = mean(
+        x     = analyteConcentration,
+        na.rm = TRUE
+      ),
+      sd = sd(
+        x     = analyteConcentration,
+        na.rm = TRUE
+      ),
+      missing = sum(is.na(analyteConcentration)),
+      .by  = c(date, analyte)
+    ) |> 
+    dplyr::mutate(
+      usgs_site = site_name,
+      unit      = NA_character_,
+      unit      = dplyr::case_when(
+        grepl("TDS",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("Fe",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("SO4",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("CO3",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("conductance", analyte, ignore.case = TRUE) ~ "microsiemensPerCentimeter",
+        grepl("TDP",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("TPN",         analyte, ignore.case = TRUE) ~ "microgramsPerLiter",
+        grepl("Cl",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("DIC",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("NO3+NO2",     analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("ANC",         analyte, ignore.case = TRUE) ~ "milliequivalentsPerLiter",
+        grepl("Ca",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("HCO3",        analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("Br",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("TSS",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("TDN",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("NH4N",        analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("Si",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("Mg",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("Na",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("TSS",         analyte, ignore.case = TRUE) ~ "microgram",
+        grepl("TP",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("TN",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("TOC",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("K",           analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("Mn",          analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("NO2",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("TPC",         analyte, ignore.case = TRUE) ~ "microgramsPerLiter",
+        grepl("DOC",         analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("F",           analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("Ortho",       analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+        grepl("ph",          analyte, ignore.case = TRUE) ~ "pH",
+        TRUE ~ unit
+      ),
+      source = "NEON_grabs"
+    ) |> 
+    dplyr::select(
+      usgs_site,
+      dplyr::everything()
+    ) |> 
+    dplyr::filter(!is.na(mean))
+
+    DBI::dbWriteTable(
+      conn      = pg,
+      name      = c("firearea", "non_usgs_water_chem"),
+      value     = grabs_upload,
+      overwrite = FALSE,
+      append    = TRUE,
+      row.names = FALSE
+    )
+
+}
+
+purrr::walk(
+  .x = c("REDB", "SYCA"),
+  .f = ~ neon_grabs(neon_site = .x)
+)
+```
+
+
+# add foreign keys to non-usgs tables
+
+```{r}
+#| eval: TRUE
+
+dbExecute(
+  conn      = pg,
+  statement = "
+  ALTER TABLE firearea.non_usgs_discharge
+  ADD CONSTRAINT non_usgs_discharge_fk_usgs_site
+  FOREIGN KEY (usgs_site) REFERENCES firearea.non_usgs_catchments(usgs_site)
+  ;"
+)
+
+dbExecute(
+  conn      = pg,
+  statement = "
+  ALTER TABLE firearea.non_usgs_pour_points
+  ADD CONSTRAINT non_usgs_pour_points_fk_usgs_site
+  FOREIGN KEY (usgs_site) REFERENCES firearea.non_usgs_catchments(usgs_site)
+  ;"
+)
+
+dbExecute(
+  conn      = pg,
+  statement = "
+  ALTER TABLE firearea.non_usgs_water_chem
+  ADD CONSTRAINT non_usgs_water_chem_fk_usgs_site
+  FOREIGN KEY (usgs_site) REFERENCES firearea.non_usgs_catchments(usgs_site)
+  ;"
+)
+
+
+```
+
+# San Dimas discharge and nitrate
+
+## data
+
+```{r}
+#| eval: TRUE
+
+bell3 <- readr::read_csv("../data/bell3_streamflow_nitrate_obs_20220127.csv")
+bell4 <- readr::read_csv("../data/bell4_streamflow_nitrate_obs_20220127.csv")
+
+```
+
+## catchment area
+
+```{r}
+#| eval: TRUE
+
+bell_3_area_m2 <- sf::st_read(
+  dsn   = pg,
+  query = "
+  SELECT *
+  FROM firearea.non_usgs_catchments
+  WHERE usgs_site ~~* '%bell_3%'
+  ;"
+) |> 
+  sf::st_area() |> 
+  units::drop_units()
+
+bell_4_area_m2 <- sf::st_read(
+  dsn   = pg,
+  query = "
+  SELECT *
+  FROM firearea.non_usgs_catchments
+  WHERE usgs_site ~~* '%bell_4%'
+  ;"
+) |> 
+  sf::st_area() |> 
+  units::drop_units()
+
+```
+
+## discharge
+
+```{r}
+#| eval: TRUE
+
+bell3_q <- bell3 |> 
+  dplyr::mutate(
+    flow = streamflow_mm * 0.001 * bell_3_area_m2 * 1000 * (1 / 86400)
+  ) |> 
+  dplyr::filter(!is.na(flow)) |> 
+  glue::glue_data_sql("
+    INSERT INTO firearea.non_usgs_discharge (
+      usgs_site,
+      date,
+      mean
+    )
+    values
+    (
+      'hanan_bell_3',
+      { date },
+      { flow }
+    )
+    ;
+    ",
+    .con = DBI::ANSI()
+  )
+
+DBI::dbWithTransaction(
+  conn = pg,
+  {
+    purrr::walk(
+      .x = bell3_q,
+      .f = ~ DBI::dbExecute(
+        statement = .x,
+        conn      = pg
+      )
+    )
+  }
+)
+
+bell4_q <- bell4 |> 
+  dplyr::mutate(
+    flow = streamflow_mm * 0.001 * bell_3_area_m2 * 1000 * (1 / 86400)
+  ) |> 
+  dplyr::filter(!is.na(flow)) |> 
+  glue::glue_data_sql("
+    INSERT INTO firearea.non_usgs_discharge (
+      usgs_site,
+      date,
+      mean
+    )
+    values
+    (
+      'hanan_bell_4',
+      { date },
+      { flow }
+    )
+    ;
+    ",
+    .con = DBI::ANSI()
+  )
+
+DBI::dbWithTransaction(
+  conn = pg,
+  {
+    purrr::walk(
+      .x = bell4_q,
+      .f = ~ DBI::dbExecute(
+        statement = .x,
+        conn      = pg
+      )
+    )
+  }
+)
+
+```
+
+## nitrate
+
+```{r}
+#| eval: TRUE
+
+bell3_no3 <- bell3 |> 
+  dplyr::filter(!is.na(nitrate)) |> 
+  glue::glue_data_sql("
+    INSERT INTO firearea.non_usgs_water_chem (
+      usgs_site,
+      date,
+      analyte,
+      mean,
+      unit,
+      source
+    )
+    values
+    (
+      'hanan_bell_3',
+      { date },
+      'nitrate',
+      { nitrate },
+      'milligramsPerLiter',
+      'EJH'
+    )
+    ;
+    ",
+    .con = DBI::ANSI()
+  )
+
+DBI::dbWithTransaction(
+  conn = pg,
+  {
+    purrr::walk(
+      .x = bell3_no3,
+      .f = ~ DBI::dbExecute(
+        statement = .x,
+        conn      = pg
+      )
+    )
+  }
+)
+
+bell4_no3 <- bell4 |> 
+  dplyr::filter(!is.na(nitrate)) |> 
+  glue::glue_data_sql("
+    INSERT INTO firearea.non_usgs_water_chem (
+      usgs_site,
+      date,
+      analyte,
+      mean,
+      unit,
+      source
+    )
+    values
+    (
+      'hanan_bell_4',
+      { date },
+      'nitrate',
+      { nitrate },
+      'milligramsPerLiter',
+      'EJH'
+    )
+    ;
+    ",
+    .con = DBI::ANSI()
+  )
+
+DBI::dbWithTransaction(
+  conn = pg,
+  {
+    purrr::walk(
+      .x = bell4_no3,
+      .f = ~ DBI::dbExecute(
+        statement = .x,
+        conn      = pg
+      )
+    )
+  }
+)
+
+```
+
+# SBC discharge and chemistry
+
+Omit Devereaux and San Onofre per Heili:
+https://github.com/lter/lter-sparc-fire-arid-streams/issues/27
+
+## sbc: discharge
+
+```{r}
+#| eval: TRUE
+#| label: sbc-discharge
+
+packages <- EDIutils::search_data_packages(query = "defType=edismax&q=subject:%22discharge%22&fq=-scope:ecotrends&fq=-scope:lter-landsat*&fq=scope:(knb-lter-sbc)&fl=id,packageid,title,author,organization,pubdate,coordinates&debug=false")
+
+harvest_discharge <- function(title, packageid) {
+
+  entity <- EDIutils::read_data_entity_names(packageid)
+
+  if (nrow(entity) > 1) {
+    stop("more than one data entity for", packageid)
+  }
+
+  raw  <- EDIutils::read_data_entity(packageid, entity$entityId)
+  data <- readr::read_csv(
+    file = raw,
+    na   = c("-999") # number not a string so this does not work
+  )
+
+  expected_colnames <- c(
+    "timestamp_local",
+    "timestamp_utc",
+    "discharge_lps",
+    "water_temperature_celsius"
+  )
+
+  if (!all(expected_colnames %in% colnames(data))) {
+    colnames(data) <- expected_colnames
+  }
+
+  data <- data |>
+    dplyr::filter(
+      !is.na(discharge_lps),
+      discharge_lps != -999,
+      !grepl(
+        pattern     = "nan",
+        x           = timestamp_utc,
+        ignore.case = TRUE
+      )
+    ) |>
+    dplyr::mutate(desc = title)
+
+  return(data)
+
+}
+
+# need to address that two data packages have a different dttm format
+time_fmt_a <- packages[grepl("on02|sm01", packages$title, ignore.case = TRUE), ]
+time_fmt_b <- packages[!grepl("on02|sm01", packages$title, ignore.case = TRUE), ]
+
+combine_sites <- function(site_list) {
+
+  bound_data <- split(
+    x = site_list,
+    f = site_list$packageid
+  ) |>
+    {
+      \(df) purrr::map(
+        .x = df,
+        .f = ~ harvest_discharge(
+          .x$title,
+          .x$packageid
+        )
+      )
+    }() |>
+    dplyr::bind_rows()
+
+  return(bound_data)
+
+}
+
+type_a_bound <- combine_sites(time_fmt_a)
+type_b_bound <- combine_sites(time_fmt_b)
+
+sbc_q <- dplyr::bind_rows(
+  type_a_bound |>
+    dplyr::mutate(
+      timestamp_local = as.character(
+        as.POSIXct(
+          x      = timestamp_local,
+          format = "%Y-%m-%dT%H:%M",
+          tz     = "US/Pacific"
+        )
+      ),
+      timestamp_utc = as.character(
+        as.POSIXct(
+          x      = timestamp_utc,
+          format = "%Y-%m-%dT%H:%M",
+          tz     = "UTC"
+        )
+      )
+    ),
+  type_b_bound |>
+    dplyr::mutate(
+      timestamp_local = as.character(timestamp_local),
+      timestamp_utc   = as.character(timestamp_utc)
+    )
+) |>
+  dplyr::mutate(
+    usgs_site = dplyr::case_when(
+      grepl("mc00", desc, ignore.case = TRUE) ~ "sbc_lter_mis",
+      grepl("rg01", desc, ignore.case = TRUE) ~ "sbc_lter_ref",
+      grepl("mc06", desc, ignore.case = TRUE) ~ "sbc_lter_noo",
+      grepl("on02", desc, ignore.case = TRUE) ~ "sbc_lter_ono",
+      grepl("ab00", desc, ignore.case = TRUE) ~ "sbc_lter_bur",
+      grepl("bc02", desc, ignore.case = TRUE) ~ "sbc_lter_bel",
+      grepl("gv01", desc, ignore.case = TRUE) ~ "sbc_lter_gav",
+      grepl("ho00", desc, ignore.case = TRUE) ~ "sbc_lter_hon",
+      grepl("rs02", desc, ignore.case = TRUE) ~ "sbc_lter_rat",
+      grepl("sp02", desc, ignore.case = TRUE) ~ "sbc_lter_ped",
+      grepl("te03", desc, ignore.case = TRUE) ~ "sbc_lter_tec", # double check
+      grepl("at07", desc, ignore.case = TRUE) ~ "sbc_lter_ata",
+      grepl("dv01", desc, ignore.case = TRUE) ~ "sbc_lter_dev",
+      # -- these sites are not in firearea --
+      # grepl("fk00", desc, ignore.case = TRUE) ~ "sbc_lter_",
+      # grepl("sm04", desc, ignore.case = TRUE) ~ "sbc_lter_",
+      # grepl("cp00", desc, ignore.case = TRUE) ~ "sbc_lter_",
+      # grepl("rn01", desc, ignore.case = TRUE) ~ "sbc_lter_",
+      # grepl("sm01", desc, ignore.case = TRUE) ~ "sbc_lter_",
+    )
+  ) |>
+  dplyr::filter(!is.na(usgs_site))
+
+# check timestamps
+# one <- harvest_discharge("one", packages[1,  ]$packageid) #MC00 package:3009 group:B
+# two <- harvest_discharge("two", packages[2,  ]$packageid) #RG01 package:3011 group:B
+# fiv <- harvest_discharge("fiv", packages[5,  ]$packageid) #ON02 package:3010 group:A
+# etn <- harvest_discharge("etn", packages[18, ]$packageid) #SM01 package:3014 group:A
+
+# sbc_q_mean <- readr::read_csv("sbc_q.csv") |>
+sbc_q_mean <- sbc_q |>
+  dplyr::filter(
+    !grepl(
+      pattern     = "ono|dev",
+      x           = usgs_site,
+      ignore.case = TRUE
+    )
+    ) |>
+  dplyr::mutate(date = as.Date(timestamp_local)) |>
+  dplyr::summarise(
+    mean = mean(
+      x     = discharge_lps,
+      na.rm = TRUE
+    ),
+    sd = sd(
+      x     = discharge_lps,
+      na.rm = TRUE
+    ),
+    count = sum(!is.na(discharge_lps)),
+    .by = c(
+      usgs_site,
+      date
+    )
+  )
+
+sbc_q_upload <- sbc_q_mean |> 
+  glue::glue_data_sql("
+    INSERT INTO firearea.non_usgs_discharge (
+      usgs_site,
+      date,
+      mean,
+      sd
+    )
+    values
+    (
+      { usgs_site },
+      { date },
+      { mean },
+      { sd }
+    )
+    ;
+    ",
+    .con = DBI::ANSI()
+  )
+
+DBI::dbWithTransaction(
+  conn = pg,
+  {
+    purrr::walk(
+      .x = sbc_q_upload,
+      .f = ~ DBI::dbExecute(
+        statement = .x,
+        conn      = pg
+      )
+    )
+  }
+)
+```
+
+
+## sbc: chemistry
+
+```{r}
+#| eval: TRUE
+#| label: sbc-chemistry
+
+chem_package_id  <- "knb-lter-sbc.6.17"
+chem_entity      <- EDIutils::read_data_entity_names(chem_package_id)
+raw_registered   <- EDIutils::read_data_entity(chem_package_id, chem_entity$entityId[[1]])
+raw_unregistered <- EDIutils::read_data_entity(chem_package_id, chem_entity$entityId[[2]])
+registered       <- readr::read_csv(file = raw_registered)
+unregistered     <- readr::read_csv(file = raw_unregistered)
+
+sbc_chem <- dplyr::bind_rows(
+  registered |>
+    dplyr::mutate(source = "registered"),
+  unregistered |>
+    dplyr::mutate(source = "non_registered")
+) |>
+  dplyr::inner_join(
+    y = sbc_q |>
+      dplyr::distinct(
+        usgs_site,
+        desc
+      ) |>
+      dplyr::mutate(
+        site_code = dplyr::case_when(
+          grepl("mc00", desc, ignore.case = TRUE) ~ "MC00",
+          grepl("rg01", desc, ignore.case = TRUE) ~ "RG01",
+          grepl("mc06", desc, ignore.case = TRUE) ~ "MC06",
+          grepl("on02", desc, ignore.case = TRUE) ~ "ON02",
+          grepl("ab00", desc, ignore.case = TRUE) ~ "AB00",
+          grepl("bc02", desc, ignore.case = TRUE) ~ "BC02",
+          grepl("gv01", desc, ignore.case = TRUE) ~ "GV01",
+          grepl("ho00", desc, ignore.case = TRUE) ~ "HO00",
+          grepl("rs02", desc, ignore.case = TRUE) ~ "RS02",
+          grepl("sp02", desc, ignore.case = TRUE) ~ "SP02",
+          grepl("te03", desc, ignore.case = TRUE) ~ "TE03", # double check
+          grepl("at07", desc, ignore.case = TRUE) ~ "AT07",
+          grepl("dv01", desc, ignore.case = TRUE) ~ "DV01",
+        )
+      ),
+    by = c("site_code" = "site_code")
+  ) |>
+  dplyr::filter(!is.na(usgs_site)) |>
+  dplyr::mutate(date = as.Date(timestamp_local))
+
+sbc_chem_mean <- sbc_chem |>
+  dplyr::filter(
+    !grepl(
+      pattern     = "ono|dev",
+      x           = usgs_site,
+      ignore.case = TRUE
+    )
+    ) |>
+  tidyr::pivot_longer(
+    cols = c(
+      tidyselect::contains("uM"),
+      tidyselect::contains("tss"),
+      tidyselect::contains("spec")
+    ),
+    names_to = "analyte",
+    values_to = "concentration"
+  ) |>
+  dplyr::filter(
+    !is.na(concentration),
+    concentration != -999
+  ) |>
+  dplyr::summarise(
+    mean = mean(
+      x     = concentration,
+      na.rm = TRUE
+    ),
+    sd = sd(
+      x     = concentration,
+      na.rm = TRUE
+    ),
+    count = sum(!is.na(concentration)),
+    .by = c(
+      usgs_site,
+      date,
+      analyte
+    )
+  ) |>
+  dplyr::mutate(
+    unit = dplyr::case_when(
+      grepl("uM", analyte, ignore.case = TRUE) ~ "uM",
+      grepl("cond", analyte, ignore.case = TRUE) ~ "microsiemensPerCentimeter",
+      grepl("tss", analyte, ignore.case = TRUE) ~ "milligramsPerLiter",
+      TRUE ~ NA_character_
+    )
+  )
+
+sbc_chem_upload <- sbc_chem_mean |> 
+  glue::glue_data_sql("
+    INSERT INTO firearea.non_usgs_water_chem (
+      usgs_site,
+      date,
+      analyte,
+      mean,
+      sd,
+      unit,
+      source
+    )
+    values
+    (
+      { usgs_site },
+      { date },
+      { analyte },
+      { mean },
+      { sd },
+      { unit },
+      'EDI'
+    )
+    ;
+    ",
+    .con = DBI::ANSI()
+  )
+
+DBI::dbWithTransaction(
+  conn = pg,
+  {
+    purrr::walk(
+      .x = sbc_chem_upload,
+      .f = ~ DBI::dbExecute(
+        statement = .x,
+        conn      = pg
+      )
+    )
+  }
 )
 
 ```

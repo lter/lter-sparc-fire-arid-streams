@@ -1,0 +1,7 @@
+project:
+  render:
+    - water_chem_functions.qmd
+    - wildfire_database_query_summaries.qmd
+    - water_chem_build_export.qmd
+
+# quarto render --profile chem -P user:user
