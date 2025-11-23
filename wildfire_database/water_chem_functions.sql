@@ -1083,7 +1083,7 @@ DECLARE
         fire_with_data.usgs_site,
         fire_with_data.year,
         fire_with_data.start_date,
-        fire_with_data.end_date>,
+  fire_with_data.end_date,
         fire_with_data.before_count,
         fire_with_data.after_count
       FROM fire_with_data

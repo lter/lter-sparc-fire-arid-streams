@@ -1,5 +1,3 @@
-
-
 ## overview
 
 Functions for building and extracting water chemistry resources. Note
@@ -12,41 +10,37 @@ should be reconstructed as needed based on database updates.
 
 stepwise:
 
-– Step 1: Rebuild base view only (destroys all dependencies) SELECT
-firearea.rebuild_usgs_water_chem_std();
-
-– Step 2: Rebuild analyte views SELECT firearea.create_nitrate_view();
-SELECT firearea.create_spcond_view(); SELECT
-firearea.create_ammonium_view(); SELECT firearea.create_orthop_view();
-
-– Step 3: Rebuild counts views SELECT
-firearea.create_analyte_counts_view(‘nitrate’); SELECT
-firearea.create_analyte_counts_view(‘spcond’); SELECT
-firearea.create_analyte_counts_view(‘ammonium’); SELECT
-firearea.create_analyte_counts_view(‘orthop’);
-
-– Step 4: Rebuild largest fire materialized views SELECT
-firearea.create_largest_analyte_valid_fire_per_site_mv(‘nitrate’);
-SELECT firearea.create_largest_analyte_valid_fire_per_site_mv(‘spcond’);
-SELECT
-firearea.create_largest_analyte_valid_fire_per_site_mv(‘ammonium’);
-SELECT firearea.create_largest_analyte_valid_fire_per_site_mv(‘orthop’);
+1. Rebuild base view only (destroys all dependencies):
+  - SELECT firearea.rebuild_usgs_water_chem_std();
+2. Rebuild analyte views:
+  - SELECT firearea.create_nitrate_view();
+  - SELECT firearea.create_spcond_view();
+  - SELECT firearea.create_ammonium_view();
+  - SELECT firearea.create_orthop_view();
+3. Rebuild counts views:
+  - SELECT firearea.create_analyte_counts_view('nitrate');
+  - SELECT firearea.create_analyte_counts_view('spcond');
+  - SELECT firearea.create_analyte_counts_view('ammonium');
+  - SELECT firearea.create_analyte_counts_view('orthop');
+4. Rebuild largest fire materialized views:
+  - SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('nitrate');
+  - SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('spcond');
+  - SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('ammonium');
+  - SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('orthop');
 
 single site:
 
-– Just rebuild one analyte’s full stack (e.g., nitrate) SELECT
-firearea.create_nitrate_view(); SELECT
-firearea.create_analyte_counts_view(‘nitrate’);  
-SELECT
-firearea.create_largest_analyte_valid_fire_per_site_mv(‘nitrate’);
+- Just rebuild the full stack for one analyte (e.g., nitrate):
+  + SELECT firearea.create_nitrate_view();
+  + SELECT firearea.create_analyte_counts_view('nitrate');  
+  + SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('nitrate');
 
 the whole game:
 
-builds standarized chem; and views of aggregated values and counts, and
+- builds standarized chem; and views of aggregated values and counts, and
 the largest fire materialized view for each analyte in a single call
 (i.e., all of stepwise steps 1-4 from above in a single function)
-
-SELECT firearea.rebuild_usgs_water_chem_std_and_dependencies();
+  + SELECT firearea.rebuild_usgs_water_chem_std_and_dependencies();
 
 ## fn. view: usgs_water_chem_std (std chem)
 
@@ -1533,7 +1527,7 @@ DECLARE
         fire_with_data.usgs_site,
         fire_with_data.year,
         fire_with_data.start_date,
-        fire_with_data.end_date>,
+  fire_with_data.end_date,
         fire_with_data.before_count,
         fire_with_data.after_count
       FROM fire_with_data
