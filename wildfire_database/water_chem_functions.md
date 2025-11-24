@@ -1,6 +1,6 @@
 ## overview
 
-Functions for building and extracting water chemistry resources. Note
+Functions for building and extracting water-chemistry resources. Note
 that the functions are built here but called elsewhere in the workflow.
 
 Queries generate either a view, materialized view, or export. Views
@@ -10,19 +10,32 @@ should be reconstructed as needed based on database updates.
 
 stepwise:
 
-1. Rebuild base view only (destroys all dependencies):
+1. (re)build standardized water chemistry (destroys all dependencies):
+  - Generates firearea.usgs_water_chem_std from which all analyte views are
+  built
   - SELECT firearea.rebuild_usgs_water_chem_std();
-2. Rebuild analyte views:
+2. (re)build analyte views:
+  - Generates, e.g., firearea.nitrate, firearea.spcond, etc., which are the
+  standardized chemistry views for each analyte. Note that each analyte has its
+  own function to build its view.
   - SELECT firearea.create_nitrate_view();
   - SELECT firearea.create_spcond_view();
   - SELECT firearea.create_ammonium_view();
   - SELECT firearea.create_orthop_view();
-3. Rebuild counts views:
+3. (re)build counts views:
+  - Generates firearea.{analyte}_counts, which are the counts of samples before
+  and after (aggregated) fires. This is just one function where the target analyte
+  is passed as an argument. This view is not yet used in the analyses.
   - SELECT firearea.create_analyte_counts_view('nitrate');
   - SELECT firearea.create_analyte_counts_view('spcond');
   - SELECT firearea.create_analyte_counts_view('ammonium');
   - SELECT firearea.create_analyte_counts_view('orthop');
-4. Rebuild largest fire materialized views:
+4. (re)build largest fire materialized views:
+  - Generates firearea.largest_{analyte}_valid_fire_per_site, which is the date
+  of the largest fire in a catchment that has data that meet our selection
+  criteria (e.g., pre- and post-fire samples in each of three quartiles 3 years
+  before and after fire). This is just one function where the target analyte is
+  passed as an argument. 
   - SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('nitrate');
   - SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('spcond');
   - SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('ammonium');
@@ -30,16 +43,16 @@ stepwise:
 
 single site:
 
-- Just rebuild the full stack for one analyte (e.g., nitrate):
+- rebuild the full stack for only one analyte (e.g., nitrate):
   + SELECT firearea.create_nitrate_view();
   + SELECT firearea.create_analyte_counts_view('nitrate');  
   + SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('nitrate');
 
 the whole game:
 
-- builds standarized chem; and views of aggregated values and counts, and
-the largest fire materialized view for each analyte in a single call
-(i.e., all of stepwise steps 1-4 from above in a single function)
+- builds standardized chem; and views of aggregated values and counts, and the
+largest fire materialized view for each analyte in a single call (i.e., all of
+stepwise steps 1-4 from above in a single function)
   + SELECT firearea.rebuild_usgs_water_chem_std_and_dependencies();
 
 ## fn. view: usgs_water_chem_std (std chem)
@@ -518,8 +531,8 @@ The `num_pre_fire` and `num_post_fire` reflect the number of
 observations in the period prior to and after fire or aggregated fires
 of interest.
 
-The number of observations reflects observations for which there is also
-a discharge measurement.
+The number of observations reflects observations for which there is also a
+discharge measurement.
 
 ``` sql
 CREATE OR REPLACE FUNCTION firearea.create_analyte_counts_view(analyte_name TEXT)
@@ -1283,8 +1296,9 @@ outputs:
 | `before_count` | Count of observations in 3 years before the fire |
 | `after_count`  | Count of observations in 3 years after the fire  |
 
-The query result is saved as:
-`{analyte}_discharge_quartiles_234_max_fire.csv`
+- function name: 
+- materialized view constructed as: `largest_{analyte}_valid_fire_per_site`
+- query result saved as: `{analyte}_discharge_quartiles_234_max_fire.csv`
 
 ``` sql
 CREATE OR REPLACE FUNCTION firearea.export_analyte_q_pre_post_quartiles_largest_fire(analyte_name TEXT, file_path TEXT DEFAULT NULL)
