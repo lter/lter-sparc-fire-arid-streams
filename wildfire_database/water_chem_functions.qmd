@@ -1,4 +1,7 @@
-
+---
+format: gfm
+engine: knitr
+---
 
 ## overview
 
@@ -12,67 +15,56 @@ should be reconstructed as needed based on database updates.
 
 stepwise:
 
-1.  (re)build standardized water chemistry (destroys all dependencies):
-
-- Generates firearea.usgs_water_chem_std from which all analyte views
-  are built
-- SELECT firearea.rebuild_usgs_water_chem_std();
-
-2.  (re)build analyte views:
-
-- Generates, e.g., firearea.nitrate, firearea.spcond, etc., which are
-  the standardized chemistry views for each analyte. Note that each
-  analyte has its own function to build its view.
-- SELECT firearea.create_nitrate_view();
-- SELECT firearea.create_spcond_view();
-- SELECT firearea.create_ammonium_view();
-- SELECT firearea.create_orthop_view();
-
-3.  (re)build counts views:
-
-- Generates firearea.{analyte}\_counts, which are the counts of samples
-  before and after (aggregated) fires. This is just one function where
-  the target analyte is passed as an argument. This view is not yet used
-  in the analyses.
-- SELECT firearea.create_analyte_counts_view(‘nitrate’);
-- SELECT firearea.create_analyte_counts_view(‘spcond’);
-- SELECT firearea.create_analyte_counts_view(‘ammonium’);
-- SELECT firearea.create_analyte_counts_view(‘orthop’);
-
-4.  (re)build largest fire materialized views:
-
-- Generates firearea.largest\_{analyte}\_valid_fire_per_site, which is
-  the date of the largest fire in a catchment that has data that meet
-  our selection criteria (e.g., pre- and post-fire samples in each of
-  three quartiles 3 years before and after fire). This is just one
-  function where the target analyte is passed as an argument.
-- SELECT
-  firearea.create_largest_analyte_valid_fire_per_site_mv(‘nitrate’);
-- SELECT
-  firearea.create_largest_analyte_valid_fire_per_site_mv(‘spcond’);
-- SELECT
-  firearea.create_largest_analyte_valid_fire_per_site_mv(‘ammonium’);
-- SELECT
-  firearea.create_largest_analyte_valid_fire_per_site_mv(‘orthop’);
+1. (re)build standardized water chemistry (destroys all dependencies):
+  - Generates firearea.usgs_water_chem_std from which all analyte views are
+  built
+  - SELECT firearea.rebuild_usgs_water_chem_std();
+2. (re)build analyte views:
+  - Generates, e.g., firearea.nitrate, firearea.spcond, etc., which are the
+  standardized chemistry views for each analyte. Note that each analyte has its
+  own function to build its view.
+  - SELECT firearea.create_nitrate_view();
+  - SELECT firearea.create_spcond_view();
+  - SELECT firearea.create_ammonium_view();
+  - SELECT firearea.create_orthop_view();
+3. (re)build counts views:
+  - Generates firearea.{analyte}_counts, which are the counts of samples before
+  and after (aggregated) fires. This is just one function where the target analyte
+  is passed as an argument. This view is not yet used in the analyses.
+  - SELECT firearea.create_analyte_counts_view('nitrate');
+  - SELECT firearea.create_analyte_counts_view('spcond');
+  - SELECT firearea.create_analyte_counts_view('ammonium');
+  - SELECT firearea.create_analyte_counts_view('orthop');
+4. (re)build largest fire materialized views:
+  - Generates firearea.largest_{analyte}_valid_fire_per_site, which is the date
+  of the largest fire in a catchment that has data that meet our selection
+  criteria (e.g., pre- and post-fire samples in each of three quartiles 3 years
+  before and after fire). This is just one function where the target analyte is
+  passed as an argument. 
+  - SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('nitrate');
+  - SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('spcond');
+  - SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('ammonium');
+  - SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('orthop');
 
 single site:
 
 - rebuild the full stack for only one analyte (e.g., nitrate):
-  - SELECT firearea.create_nitrate_view();
-  - SELECT firearea.create_analyte_counts_view(‘nitrate’);  
-  - SELECT
-    firearea.create_largest_analyte_valid_fire_per_site_mv(‘nitrate’);
+  + SELECT firearea.create_nitrate_view();
+  + SELECT firearea.create_analyte_counts_view('nitrate');  
+  + SELECT firearea.create_largest_analyte_valid_fire_per_site_mv('nitrate');
 
 the whole game:
 
-- builds standardized chem; and views of aggregated values and counts,
-  and the largest fire materialized view for each analyte in a single
-  call (i.e., all of stepwise steps 1-4 from above in a single function)
-  - SELECT firearea.rebuild_usgs_water_chem_std_and_dependencies();
+- builds standardized chem; and views of aggregated values and counts, and the
+largest fire materialized view for each analyte in a single call (i.e., all of
+stepwise steps 1-4 from above in a single function)
+  + SELECT firearea.rebuild_usgs_water_chem_std_and_dependencies();
 
 ## fn. view: usgs_water_chem_std (std chem)
 
-``` sql
+```{sql}
+#| eval: FALSE
+
 CREATE OR REPLACE FUNCTION firearea.rebuild_usgs_water_chem_std()
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -139,7 +131,9 @@ from from both the USGS and non-USGS data sources.
 
 Convert NEON and SBC data (micromoles) to `mg NO3-N / L`.
 
-``` sql
+```{sql}
+#| eval: FALSE
+
 CREATE OR REPLACE FUNCTION firearea.create_nitrate_view()
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -212,7 +206,9 @@ from from both the USGS and non-USGS data sources.
 
 Convert NEON and SBC data (micromoles) to `mg NH4-N / L`.
 
-``` sql
+```{sql}
+#| eval: FALSE
+
 CREATE OR REPLACE FUNCTION firearea.create_ammonium_view()
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -281,7 +277,9 @@ $$;
 Create a view of standardized (forms, units) specific conductance that
 reflects data from from both the USGS and non-USGS data sources.
 
-``` sql
+```{sql}
+#| eval: FALSE
+
 CREATE OR REPLACE FUNCTION firearea.create_spcond_view()
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -346,7 +344,9 @@ reflects data from from both the USGS and non-USGS data sources.
 
 Convert SBC data (micromoles) to `mg PO4-P / L`.
 
-``` sql
+```{sql}
+#| eval: FALSE
+
 CREATE OR REPLACE FUNCTION firearea.create_orthop_view()
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -411,7 +411,9 @@ $$;
 
 ## fn. view: usgs_water_chem_std AND dependencies
 
-``` sql
+```{sql}
+#| eval: FALSE
+
 CREATE OR REPLACE FUNCTION firearea.rebuild_usgs_water_chem_std_and_dependencies()
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -546,10 +548,12 @@ The `num_pre_fire` and `num_post_fire` reflect the number of
 observations in the period prior to and after fire or aggregated fires
 of interest.
 
-The number of observations reflects observations for which there is also
-a discharge measurement.
+The number of observations reflects observations for which there is also a
+discharge measurement.
 
-``` sql
+```{sql}
+#| eval: FALSE
+
 CREATE OR REPLACE FUNCTION firearea.create_analyte_counts_view(analyte_name TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -703,7 +707,9 @@ technical notes:
 - Refresh as needed to reflect updates to analyte, discharge, or fire
   data.
 
-``` sql
+```{sql}
+#| eval: FALSE
+
 CREATE OR REPLACE FUNCTION firearea.create_largest_analyte_valid_fire_per_site_mv(analyte_name TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -847,7 +853,9 @@ output columns:
 | count_before_start  | Number of analyte observations before fire window     |
 | count_after_end     | Number of analyte observations after fire window      |
 
-``` sql
+```{sql}
+#| eval: FALSE
+
 -- DROP FUNCTION IF EXISTS firearea.export_analyte_summary_all_sites(TEXT);
 -- DROP FUNCTION IF EXISTS firearea.export_analyte_summary_all_sites(TEXT, TEXT);
 
@@ -970,7 +978,9 @@ output columns:
 | latitude            | Catchment centroid latitude                           |
 | longitude           | Catchment centroid longitude                          |
 
-``` sql
+```{sql}
+#| eval: FALSE
+
 CREATE OR REPLACE FUNCTION firearea.export_analyte_largest_fire_sites(analyte_name TEXT, file_path TEXT DEFAULT NULL)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -1096,7 +1106,9 @@ output:
 The query result is saved as:
 `{analyte}_discharge_data_filtered_quartiles_234.csv`
 
-``` sql
+```{sql}
+#| eval: FALSE
+
 CREATE OR REPLACE FUNCTION firearea.export_analyte_q_pre_post_quartiles(analyte_name TEXT, file_path TEXT DEFAULT NULL)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -1240,10 +1252,10 @@ $$;
 
 purpose:
 
-Analyte and discharge observations from USGS sites surrounding
-wildfires. It isolates data for only the largest valid fire per
-watershed, where validity is defined by the presence of adequate water
-quality monitoring data before and after the fire.
+Analyte and discharge observations from USGS sites surrounding wildfires. It
+isolates data for only the largest valid fire per watershed, where validity is
+defined by the presence of adequate water quality monitoring data before and
+after the fire.
 
 key objectives:
 
@@ -1256,18 +1268,17 @@ key objectives:
 
 core logic steps:
 
-1.  Join analyte and discharge records by site and date.
-2.  Filter for valid data windows:
-    - Records must fall within 3 years before or after each fire.
-    - Each fire must have discharge records in quartiles 2–4 in both
-      windows.
-3.  Select valid fires per watershed from `ranges_agg`, ensuring they
-    meet all data coverage criteria.
-4.  Identify the largest fire per `usgs_site` by selecting the maximum
-    `cum_fire_area` among valid events.
-5.  Return analyte + discharge records for the selected fire per
-    watershed, with an additional field (`segment`) labeling records as
-    “before” or “after” the fire.
+1. Join analyte and discharge records by site and date.
+2. Filter for valid data windows:
+   - Records must fall within 3 years before or after each fire.
+   - Each fire must have discharge records in quartiles 2–4 in both windows.
+3. Select valid fires per watershed from `ranges_agg`, ensuring they meet all
+   data coverage criteria.
+4. Identify the largest fire per `usgs_site` by selecting the maximum
+   `cum_fire_area` among valid events.
+5. Return analyte + discharge records for the selected fire per watershed, with
+   an additional field (`segment`) labeling records as "before" or “after” the
+fire.
 
 processing note:
 
@@ -1304,16 +1315,16 @@ outputs:
 | `before_count` | Count of observations in 3 years before the fire |
 | `after_count`  | Count of observations in 3 years after the fire  |
 
-function context:
 
-- materialized view constructed as:
-  `{analyte}_q_pre_post_quartiles_largest_fire`
-- joins against: `firearea.largest_{analyte}_valid_fire_per_site` for
-  largest valid fire per site selection
-- was formerly exported with query result saved as:
-  `{analyte}_discharge_quartiles_234_max_fire.csv`
+function context: 
 
-``` sql
+- materialized view constructed as: `{analyte}_q_pre_post_quartiles_largest_fire`
+- joins against: `firearea.largest_{analyte}_valid_fire_per_site` for largest valid fire per site selection
+- was formerly exported with query result saved as: `{analyte}_discharge_quartiles_234_max_fire.csv`
+
+```{sql}
+#| eval: FALSE
+
 CREATE OR REPLACE FUNCTION firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv(analyte_name TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -1411,6 +1422,7 @@ END;
 $$;
 
 -- SELECT firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv('nitrate');
+
 ```
 
 ## fn. m. view: q+c pre-quartiles largest fire
@@ -1418,9 +1430,9 @@ $$;
 purpose:
 
 Retrieves analyte and discharge records for USGS sites (`usgs_site`)
-surrounding wildfires. It ensures strong sampling coverage before the
-fire, requiring observations in flow quartiles 2, 3, and 4, while
-placing no constraint on post-fire sampling coverage.
+surrounding wildfires. It ensures strong sampling coverage before the fire,
+requiring observations in flow quartiles 2, 3, and 4, while placing no
+constraint on post-fire sampling coverage.
 
 \*\* It is important to note that the results of this query are NOT a
 superset of the results of the query where we are also constraining the
@@ -1446,17 +1458,16 @@ context:
 
 query logic:
 
-1.  Join `firearea.{analyte}`, `firearea.discharge`, and
-    `firearea.ranges_agg`.
-2.  Identify all fire windows per site (`usgs_site`) and evaluate 3-year
-    sampling windows:
-    - Pre-fire window must contain observations in flow quartiles 2, 3,
-      and 4. Post-fire window is included regardless of flow
-      distribution.
-3.  From qualifying fire windows, select the largest fire event per site
-    using `cum_fire_area DESC`.
-4.  Return analyte–discharge samples from the 3-year pre- and post-fire
-    windows, with labeled segment (`'before'` or `'after'`).
+1. Join `firearea.{analyte}`, `firearea.discharge`, and `firearea.ranges_agg`.
+2. Identify all fire windows per site (`usgs_site`) and evaluate 3-year
+   sampling windows:
+   - Pre-fire window must contain observations in flow quartiles 2, 3,
+     and 4. Post-fire window is included regardless of flow
+     distribution.
+3. From qualifying fire windows, select the largest fire event per site
+   using `cum_fire_area DESC`.
+4. Return analyte–discharge samples from the 3-year pre- and post-fire windows,
+   with labeled segment (`'before'` or `'after'`).
 
 input tables:
 
@@ -1483,12 +1494,13 @@ output columns:
 | `before_count` | Total records in pre-fire window       |
 | `after_count`  | Total records in post-fire window      |
 
-- materialized view constructed as:
-  `{analyte}_q_pre_quartiles_largest_fire`
+- materialized view constructed as: `{analyte}_q_pre_quartiles_largest_fire`
 - was formerly an export statement with query result saved as:
-  `{analyte}_discharge_before_quartiles_234_max_fire.csv`
+`{analyte}_discharge_before_quartiles_234_max_fire.csv`
 
-``` sql
+```{sql}
+#| eval: FALSE
+
 CREATE OR REPLACE FUNCTION firearea.create_analyte_q_pre_quartiles_largest_fire_mv(analyte_name TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -1623,4 +1635,5 @@ END;
 $$;
 
 -- SELECT firearea.create_analyte_q_pre_quartiles_largest_fire_mv('nitrate');
+
 ```

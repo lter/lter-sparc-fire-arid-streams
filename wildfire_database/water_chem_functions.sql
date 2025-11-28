@@ -1,5 +1,7 @@
--- NOTE: Removed global BEGIN/COMMIT wrapper to avoid holding locks for the entire rebuild.
--- Each function executes in its own transaction scope; invoke them individually or via orchestration.
+-- Generated from water_chem_functions.qmd
+-- Execute all functions in a single transaction
+
+BEGIN;
 
 -- chunk_1
 CREATE OR REPLACE FUNCTION firearea.rebuild_usgs_water_chem_std()
@@ -641,7 +643,7 @@ EXCEPTION
 END;
 $$;
 
--- export_analyte_summary_all_sites
+-- chunk_9
 -- DROP FUNCTION IF EXISTS firearea.export_analyte_summary_all_sites(TEXT);
 -- DROP FUNCTION IF EXISTS firearea.export_analyte_summary_all_sites(TEXT, TEXT);
 
@@ -915,7 +917,6 @@ $$;
 -- SELECT firearea.export_analyte_q_pre_post_quartiles('phosphate'::TEXT, '/data/phosphate_quartiles.csv'::TEXT);
 
 -- chunk_12
--- Materialized view build for largest valid fire per site with complete BEFORE & AFTER windows (quartiles 2-4 present)
 CREATE OR REPLACE FUNCTION firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv(analyte_name TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -1148,17 +1149,9 @@ EXCEPTION
 END;
 $$;
 
--- Use default path
 -- SELECT firearea.create_analyte_q_pre_quartiles_largest_fire_mv('nitrate');
 
--- Use custom path  
--- SELECT firearea.export_analyte_q_pre_quartiles_largest_fire('nitrate'::TEXT, '/home/user/data/nitrate_pre_quartiles_max_fire.csv'::TEXT);
 
--- For spcond
--- SELECT firearea.export_analyte_q_pre_quartiles_largest_fire('spcond'::TEXT);
+COMMIT;
 
--- For any future analyte
--- SELECT firearea.create_analyte_q_pre_quartiles_largest_fire_mv('phosphate');
-
-
--- End of function definitions (no global transaction wrapper).
+-- If any errors occurred, the transaction will be rolled back automatically
