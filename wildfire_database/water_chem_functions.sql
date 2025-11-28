@@ -948,7 +948,8 @@ BEGIN
         RETURN FORMAT('ERROR: Missing largest fire matview firearea.%s', largest_fire_mv);
     END IF;
 
-    sql := FORMAT($f$
+  -- Build MV only; create indexes in separate EXECUTEs to avoid ambiguity
+  sql := FORMAT($f$
     DROP MATERIALIZED VIEW IF EXISTS firearea.%I CASCADE;
     CREATE MATERIALIZED VIEW firearea.%I AS
     WITH counts AS (
@@ -997,14 +998,14 @@ BEGIN
     WHERE a.value_std IS NOT NULL AND d."Flow" IS NOT NULL AND d.quartile IS NOT NULL AND
       ((a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date) OR (a.date > l.end_date AND a.date <= (l.end_date + INTERVAL '3 years')))
     ORDER BY a.usgs_site,l.year,segment DESC,a.date;
-
-    CREATE INDEX %I ON firearea.%I(usgs_site);
-    CREATE INDEX %I ON firearea.%I(start_date);
   -- FORMAT placeholders order: 1 drop MV name, 2 create MV name, 3 analyte view (counts), 4 largest fire MV (counts),
-  -- 5 analyte view (select), 6 largest fire MV (select), 7 index name (usgs_site), 8 MV name, 9 index name (start_date), 10 MV name
-  $f$, mv_name, mv_name, analyte_view, largest_fire_mv, analyte_view, largest_fire_mv, idx_site, mv_name, idx_start, mv_name);
+  -- 5 analyte view (select), 6 largest fire MV (select)
+  $f$, mv_name, mv_name, analyte_view, largest_fire_mv, analyte_view, largest_fire_mv);
 
     EXECUTE sql;
+    -- Create indexes separately for robustness
+    EXECUTE FORMAT('CREATE INDEX IF NOT EXISTS %I ON firearea.%I(usgs_site);', idx_site, mv_name);
+    EXECUTE FORMAT('CREATE INDEX IF NOT EXISTS %I ON firearea.%I(start_date);', idx_start, mv_name);
     RETURN FORMAT('SUCCESS: Created materialized view firearea.%s', mv_name);
 EXCEPTION WHEN OTHERS THEN
     RETURN FORMAT('ERROR: Failed to create MV for %s: %s', analyte_name, SQLERRM);
@@ -1021,85 +1022,131 @@ AS $$
 DECLARE
     mv_name TEXT;
     analyte_view TEXT;
-    largest_fire_mv TEXT;
     idx_site TEXT;
     idx_start TEXT;
     sql TEXT;
     ok_analyte BOOLEAN;
-    ok_largest BOOLEAN;
 BEGIN
     IF analyte_name !~ '^[a-zA-Z_][a-zA-Z0-9_]*$' THEN
         RETURN FORMAT('ERROR: Invalid analyte name: %s', analyte_name);
     END IF;
-    analyte_view := analyte_name;
-    largest_fire_mv := FORMAT('largest_%s_valid_fire_per_site', analyte_name);
-    mv_name := FORMAT('%s_q_pre_quartiles_largest_fire', analyte_name);
-    idx_site := FORMAT('idx_%s_qpre_lf_usgs_site', analyte_name);
-    idx_start := FORMAT('idx_%s_qpre_lf_start_date', analyte_name);
 
-    SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema='firearea' AND table_name=analyte_view) INTO ok_analyte;
+    analyte_view := analyte_name;                -- firearea.<analyte> view
+    mv_name      := FORMAT('%s_q_pre_quartiles_largest_fire', analyte_name);
+    idx_site     := FORMAT('idx_%s_qpre_lf_usgs_site', analyte_name);
+    idx_start    := FORMAT('idx_%s_qpre_lf_start_date', analyte_name);
+
+    -- Ensure analyte view exists
+    SELECT EXISTS(
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema='firearea' AND table_name=analyte_view
+    ) INTO ok_analyte;
     IF NOT ok_analyte THEN
         RETURN FORMAT('ERROR: Missing analyte view firearea.%s', analyte_view);
     END IF;
-    SELECT EXISTS(SELECT 1 FROM pg_matviews WHERE schemaname='firearea' AND matviewname=largest_fire_mv) INTO ok_largest;
-    IF NOT ok_largest THEN
-        RETURN FORMAT('ERROR: Missing largest fire matview firearea.%s', largest_fire_mv);
-    END IF;
 
-    sql := FORMAT($f$
+  -- Build MV: choose largest fire per site satisfying pre quartile presence (2–4), then emit both windows
+  -- Note: create the MV and the indexes in separate EXECUTEs to avoid any parsing ambiguity.
+  sql := FORMAT($f$
     DROP MATERIALIZED VIEW IF EXISTS firearea.%I CASCADE;
     CREATE MATERIALIZED VIEW firearea.%I AS
-    WITH counts AS (
+    WITH fire_candidates AS (
+      SELECT
+        r.usgs_site,
+        r.year,
+        r.start_date,
+        r.end_date,
+        r.cum_fire_area
+      FROM firearea.ranges_agg r
+      -- We join analyte + discharge only to test pre-window quartile presence
+      JOIN firearea.%I a
+        ON a.usgs_site = r.usgs_site
+      JOIN firearea.discharge d
+        ON a.usgs_site = d.usgs_site AND a.date = d."Date"
+      WHERE a.value_std IS NOT NULL
+        AND d."Flow" IS NOT NULL
+        AND d.quartile IS NOT NULL
+        AND a.date >= (r.start_date - INTERVAL '3 years')
+        AND a.date <  r.start_date
+      GROUP BY r.usgs_site, r.year, r.start_date, r.end_date, r.cum_fire_area
+      HAVING
+        SUM(CASE WHEN a.date >= (r.start_date - INTERVAL '3 years')
+                  AND a.date < r.start_date AND d.quartile = 2 THEN 1 ELSE 0 END) > 0
+        AND SUM(CASE WHEN a.date >= (r.start_date - INTERVAL '3 years')
+                  AND a.date < r.start_date AND d.quartile = 3 THEN 1 ELSE 0 END) > 0
+        AND SUM(CASE WHEN a.date >= (r.start_date - INTERVAL '3 years')
+                  AND a.date < r.start_date AND d.quartile = 4 THEN 1 ELSE 0 END) > 0
+    ),
+    largest_fire AS (
+      SELECT DISTINCT ON (usgs_site)
+        usgs_site, year, start_date, end_date, cum_fire_area
+      FROM fire_candidates
+      ORDER BY usgs_site, cum_fire_area DESC
+    ),
+    counts AS (
       SELECT
         a.usgs_site,
         l.year,
         l.start_date,
         l.end_date,
-        COUNT(CASE WHEN a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date THEN 1 END) AS before_count,
-        SUM(CASE WHEN a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date AND d.quartile=2 THEN 1 ELSE 0 END) AS bq2,
-        SUM(CASE WHEN a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date AND d.quartile=3 THEN 1 ELSE 0 END) AS bq3,
-        SUM(CASE WHEN a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date AND d.quartile=4 THEN 1 ELSE 0 END) AS bq4
+        COUNT(CASE WHEN a.date >= (l.start_date - INTERVAL '3 years')
+                   AND a.date <  l.start_date THEN 1 END) AS before_count,
+        COUNT(CASE WHEN a.date > l.end_date
+                   AND a.date <= (l.end_date + INTERVAL '3 years') THEN 1 END) AS after_count
       FROM firearea.%I a
-      JOIN firearea.discharge d ON (a.usgs_site=d.usgs_site AND a.date=d."Date")
-      JOIN firearea.%I l ON (a.usgs_site=l.usgs_site)
-      WHERE a.value_std IS NOT NULL AND d."Flow" IS NOT NULL AND d.quartile IS NOT NULL
-      GROUP BY a.usgs_site,l.year,l.start_date,l.end_date
-      HAVING
-        SUM(CASE WHEN a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date AND d.quartile=2 THEN 1 ELSE 0 END) > 0 AND
-        SUM(CASE WHEN a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date AND d.quartile=3 THEN 1 ELSE 0 END) > 0 AND
-        SUM(CASE WHEN a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date AND d.quartile=4 THEN 1 ELSE 0 END) > 0
+      JOIN firearea.discharge d
+        ON a.usgs_site = d.usgs_site AND a.date = d."Date"
+      JOIN largest_fire l
+        ON a.usgs_site = l.usgs_site
+      WHERE a.value_std IS NOT NULL
+        AND d."Flow" IS NOT NULL
+        AND d.quartile IS NOT NULL
+      GROUP BY a.usgs_site, l.year, l.start_date, l.end_date
     )
     SELECT
       a.usgs_site,
       l.year,
       l.start_date,
       l.end_date,
-      'before' AS segment,
+      CASE
+        WHEN a.date < l.start_date THEN 'before'
+        WHEN a.date > l.end_date  THEN 'after'
+      END AS segment,
       a.date,
       a.value_std,
-      d."Flow" AS flow,
+      d."Flow"      AS flow,
       d.quartile,
-      c.before_count
+      c.before_count,
+      c.after_count
     FROM firearea.%I a
-    JOIN firearea.discharge d ON (a.usgs_site=d.usgs_site AND a.date=d."Date")
-    JOIN firearea.%I l ON (a.usgs_site=l.usgs_site)
-    JOIN counts c ON (a.usgs_site=c.usgs_site AND l.year=c.year AND l.start_date=c.start_date AND l.end_date=c.end_date)
-    WHERE a.value_std IS NOT NULL AND d."Flow" IS NOT NULL AND d.quartile IS NOT NULL AND (a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date)
-    ORDER BY a.usgs_site,l.year,a.date;
-
-    CREATE INDEX %I ON firearea.%I(usgs_site);
-    CREATE INDEX %I ON firearea.%I(start_date);
-  -- FORMAT placeholders order: 1 drop MV name, 2 create MV name, 3 analyte view (counts), 4 largest fire MV (counts),
-  -- 5 analyte view (select), 6 largest fire MV (select), 7 index name (usgs_site), 8 MV name, 9 index name (start_date), 10 MV name
-  $f$, mv_name, mv_name, analyte_view, largest_fire_mv, analyte_view, largest_fire_mv, idx_site, mv_name, idx_start, mv_name);
+    JOIN firearea.discharge d
+      ON a.usgs_site = d.usgs_site AND a.date = d."Date"
+    JOIN largest_fire l
+      ON a.usgs_site = l.usgs_site
+    JOIN counts c
+      ON a.usgs_site = c.usgs_site AND l.year = c.year
+       AND l.start_date = c.start_date AND l.end_date = c.end_date
+    WHERE a.value_std IS NOT NULL
+      AND d."Flow" IS NOT NULL
+      AND d.quartile IS NOT NULL
+      AND (
+        (a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date) OR
+        (a.date > l.end_date AND a.date <= (l.end_date + INTERVAL '3 years'))
+      )
+    ORDER BY a.usgs_site, l.year, segment DESC, a.date;
+    $f$, mv_name, mv_name, analyte_view, analyte_view, analyte_view, analyte_view);
 
     EXECUTE sql;
+    -- Create indexes separately
+    EXECUTE FORMAT('CREATE INDEX IF NOT EXISTS %I ON firearea.%I(usgs_site);', idx_site, mv_name);
+    EXECUTE FORMAT('CREATE INDEX IF NOT EXISTS %I ON firearea.%I(start_date);', idx_start, mv_name);
     RETURN FORMAT('SUCCESS: Created materialized view firearea.%s', mv_name);
-EXCEPTION WHEN OTHERS THEN
-    RETURN FORMAT('ERROR: Failed to create MV for %s: %s', analyte_name, SQLERRM);
+
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN FORMAT('ERROR: Failed to create MV for %s: %s', analyte_name, SQLERRM);
 END;
 $$;
-
 
 -- Use default path
 -- SELECT firearea.create_analyte_q_pre_quartiles_largest_fire_mv('nitrate');
