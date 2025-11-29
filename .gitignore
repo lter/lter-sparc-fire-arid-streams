@@ -45,7 +45,7 @@ vignettes/*.pdf
 .DS_Store
 
 # Data folders
-data
+# data
 data_stanfits
 data_working
 figures
