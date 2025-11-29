@@ -186,3 +186,63 @@ googledrive::drive_upload(media = elev_path, overwrite = T,
                           path = googledrive::as_id("https://drive.google.com/drive/u/0/folders/1XxvY56h1cMmaYatF7WhVrbYbaOgdRBGC"))
 
 # End ----
+
+# Add SYCA catchment data to existing elevation and slope data
+
+## data source:
+
+## NASA Shuttle Radar Topography Mission Global 3 arc second
+## https://lpdaac.usgs.gov/products/srtmgl3v003/
+
+here::set_here()
+
+elev_existing <- readr::read_csv(here::here("data", "fire-arid_elevation.csv"))
+
+syca_elev_stats <- readr::read_csv(here::here("data", "SRTMGL3-NC-003-Statistics.csv")) |>
+  dplyr::mutate(
+    usgs_site = "syca"
+  ) |>
+  dplyr::rename(
+    elev_avg_m    = Mean,
+    elev_median_m = Median,
+    elev_min_m    = Minimum,
+    elev_max_m    = Maximum
+  ) |>
+  dplyr::select(
+    usgs_site,
+    elev_avg_m,
+    elev_median_m,
+    elev_min_m,
+    elev_max_m
+  )
+
+syca_elev_rast <- terra::rast(
+  x = here::here("data", "SRTMGL3_NC.003_SRTMGL3_DEM_doy2000042000000_aid0001.tif")
+  )
+
+syca_slope_rast <- terra::terrain(
+  x    = syca_elev_rast,
+  v    = "slope",
+  unit = "degrees"
+)
+
+syca_slope_df <- terra::as.data.frame(syca_slope_rast)
+
+syca_slope <- syca_slope_df |>
+  dplyr::summarize(
+    slope_avg_deg = spatialEco::mean_angle(
+      a     = slope,
+      angle = "degree"
+    ),
+    slope_median_deg = median(slope, na.rm = TRUE),
+    slope_min_deg    = min(slope, na.rm = TRUE),
+    slope_max_deg    = max(slope, na.rm = TRUE)
+  ) |>
+  dplyr::ungroup()
+
+syca_elev_stats |>
+  dplyr::bind_cols(syca_slope) |>
+  dplyr::bind_rows(elev_existing) |>
+  readr::write_csv(
+    here::here("data", "fire-arid_elevation.csv")
+  )

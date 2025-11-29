@@ -1,0 +1,2 @@
+File Name,Dataset,aid,Date,Count,Minimum,Maximum,Range,Mean,Standard Deviation,Variance,Upper Quartile,Upper 1.5 IQR,Median,Lower 1.5 IQR,Lower Quartile
+SRTMGL3_NC_003_SRTMGL3_DEM_doy2000042000000_aid0001,SRTMGL3_DEM,aid0001,2000-02-11,38933,649,2164,"(649,2164)",1270.5416998,284.7598579,81088.1766509,1481.0,2082,1250.0,649,1078.0
