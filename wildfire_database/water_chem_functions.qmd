@@ -1422,6 +1422,9 @@ END;
 $$;
 
 -- SELECT firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv('nitrate');
+-- SELECT firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv('ammonium');
+-- SELECT firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv('orthop');
+-- SELECT firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv('spcond');
 
 ```
 
