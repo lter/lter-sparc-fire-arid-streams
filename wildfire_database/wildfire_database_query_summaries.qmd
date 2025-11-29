@@ -563,40 +563,158 @@ ORDER BY
 ```
 
 
-## export: ecoregions
+## view: catchment_ecoregion
+
+Ecoregion attributes for each catchment in firearea.ecoregion_catchments.
 
 Join (spatially) usgs_site to firearea.ecoregions table. Note that these
 geometries are as 4326. Changing to a projected CRS (e.g., 5070) does generate
 different (and probably more accurate) results but the differences are trivial.
 
+Note that we exclude the ecoregion with ogc_fid = 68, which is a duplicate of
+the Arizona/New Mexico Mountains ecoregion ogc_fid = 52. It is unclear how a
+duplicate was introduced into the ecoregions table so we will simply exclude it
+here until any issues with the ecoregions table are resolved.
+
+This view is not to be confused with the firearea.ecoregion_catchments table,
+which is a table of catchments that overlap with the ecoregions. This
+firearea.catchment_ecoregion view provides the ecoregion attributes for those
+catchments.
+
 ```{sql}
 #| eval: FALSE
 #| connection: "pg"
 
-\COPY (
+DROP VIEW IF EXISTS firearea.catchment_ecoregion ;
+
+CREATE OR REPLACE VIEW firearea.catchment_ecoregion AS 
 SELECT
-  ecoregion_catchments.usgs_site,
-  ecoregions.ogc_fid,
-  ecoregions.na_l3code,
-  ecoregions.na_l3name,
-  ecoregions.na_l2code,
-  ecoregions.na_l2name,
-  ecoregions.na_l1code,
-  ecoregions.na_l1name,
-  ecoregions.na_l3key,
-  ecoregions.na_l2key,
-  ecoregions.na_l1key,
-  ecoregions.shape_leng,
-  ecoregions.shape_area,
-  ecoregions.ai_mode,
-  ecoregions.ai_mean,
-  ecoregions.ai_median,
-  ecoregions.ai_mean_narm,
-  100.0 * ST_Area(ST_Intersection(ecoregion_catchments.geometry, ecoregions.wkb_geometry)) / NULLIF(ST_Area(ecoregion_catchments.geometry), 0) AS percent_overlap
+  firearea.ecoregion_catchments.usgs_site,
+  firearea.ecoregions.ogc_fid,
+  firearea.ecoregions.na_l3code,
+  firearea.ecoregions.na_l3name,
+  firearea.ecoregions.na_l2code,
+  firearea.ecoregions.na_l2name,
+  firearea.ecoregions.na_l1code,
+  firearea.ecoregions.na_l1name,
+  firearea.ecoregions.na_l3key,
+  firearea.ecoregions.na_l2key,
+  firearea.ecoregions.na_l1key,
+  firearea.ecoregions.shape_leng,
+  firearea.ecoregions.shape_area,
+  firearea.ecoregions.ai_mode,
+  firearea.ecoregions.ai_mean,
+  firearea.ecoregions.ai_median,
+  firearea.ecoregions.ai_mean_narm,
+  ST_Area(
+    ST_Intersection(firearea.ecoregion_catchments.geometry, firearea.ecoregions.wkb_geometry),
+    TRUE
+  ) / 1000000.0 AS overlap_area_km2,
+  100.0 * ST_Area(
+    ST_Intersection(firearea.ecoregion_catchments.geometry, firearea.ecoregions.wkb_geometry),
+    TRUE
+  ) / NULLIF(ST_Area(firearea.ecoregion_catchments.geometry, TRUE), 0) AS percent_overlap
 FROM firearea.ecoregion_catchments
 JOIN firearea.ecoregions
-  ON ST_Intersects(ecoregion_catchments.geometry, ecoregions.wkb_geometry)
-) to '/tmp/study_sites_ecoregions.csv' WITH CSV HEADER
+  ON ST_Intersects(firearea.ecoregion_catchments.geometry, firearea.ecoregions.wkb_geometry)
+-- exclude duplicate Arizona/New Mexico Mountains
+WHERE firearea.ecoregions.ogc_fid != 68
+ORDER BY
+  firearea.ecoregion_catchments.usgs_site,
+  firearea.ecoregions.ogc_fid
+;
+
+```
+
+
+## view: catchment_dominant_ecoregion
+
+Identifies, for each catchment (`usgs_site`), the single ecoregion record from
+`firearea.catchment_ecoregion` with the largest spatial overlap. This provides
+an attribution of a "dominant" Level III ecoregion to each catchment when more
+than one ecoregion intersects the catchment boundary.
+
+### logic & tie handling
+
+1. Source: Uses the previously defined `firearea.catchment_ecoregion` view
+   (which already excludes the duplicate Arizona/New Mexico Mountains polygon
+   `ogc_fid = 68`).
+2. Ranking: Window function ranks rows per `usgs_site` by
+   - `percent_overlap` (descending)
+   - `overlap_area_km2` (descending) for rare ties on percent caused by
+     rounding
+   - `ogc_fid` (ascending) as a final deterministic tiebreaker
+3. Selection: Keeps the top-ranked (`ROW_NUMBER() = 1`) ecoregion per site.
+
+### scientific note
+
+Because the dominant assignment is based strictly on areal proportion, sites at
+ecotones may have a relatively modest maximum percent (e.g., <60%). Researchers
+should consult full overlap distributions if ecological heterogeneity is
+relevant to modeling decisions. The exclusion of the duplicate polygon prevents
+artificial inflation of `percent_overlap` sums but overlapping original source
+polygons in the dataset (if any) could still theoretically produce sums >100%.
+
+```{sql}
+#| eval: FALSE
+#| connection: "pg"
+
+DROP VIEW IF EXISTS firearea.catchment_dominant_ecoregion ;
+
+CREATE OR REPLACE VIEW firearea.catchment_dominant_ecoregion AS 
+WITH ranked AS (
+  SELECT
+    firearea.catchment_ecoregion.usgs_site,
+    firearea.catchment_ecoregion.ogc_fid,
+    firearea.catchment_ecoregion.na_l3code,
+    firearea.catchment_ecoregion.na_l3name,
+    firearea.catchment_ecoregion.na_l2code,
+    firearea.catchment_ecoregion.na_l2name,
+    firearea.catchment_ecoregion.na_l1code,
+    firearea.catchment_ecoregion.na_l1name,
+    firearea.catchment_ecoregion.na_l3key,
+    firearea.catchment_ecoregion.na_l2key,
+    firearea.catchment_ecoregion.na_l1key,
+    firearea.catchment_ecoregion.shape_leng,
+    firearea.catchment_ecoregion.shape_area,
+    firearea.catchment_ecoregion.ai_mode,
+    firearea.catchment_ecoregion.ai_mean,
+    firearea.catchment_ecoregion.ai_median,
+    firearea.catchment_ecoregion.ai_mean_narm,
+    firearea.catchment_ecoregion.overlap_area_km2,
+    firearea.catchment_ecoregion.percent_overlap,
+    ROW_NUMBER() OVER (
+      PARTITION BY firearea.catchment_ecoregion.usgs_site
+      ORDER BY
+        firearea.catchment_ecoregion.percent_overlap DESC,
+        firearea.catchment_ecoregion.overlap_area_km2 DESC,
+        firearea.catchment_ecoregion.ogc_fid ASC
+    ) AS rn
+  FROM firearea.catchment_ecoregion
+)
+SELECT
+  ranked.usgs_site,
+  ranked.ogc_fid,
+  ranked.na_l3code,
+  ranked.na_l3name,
+  ranked.na_l2code,
+  ranked.na_l2name,
+  ranked.na_l1code,
+  ranked.na_l1name,
+  ranked.na_l3key,
+  ranked.na_l2key,
+  ranked.na_l1key,
+  ranked.shape_leng,
+  ranked.shape_area,
+  ranked.ai_mode,
+  ranked.ai_mean,
+  ranked.ai_median,
+  ranked.ai_mean_narm,
+  ranked.overlap_area_km2,
+  ranked.percent_overlap
+FROM ranked
+WHERE ranked.rn = 1
+ORDER BY ranked.usgs_site
 ;
 
 ```
@@ -610,8 +728,10 @@ analysis identifies nested and overlapping watersheds within the study domain.
 
 **input data sources**
 - `firearea.catchments` - USGS catchment geometries
-- `firearea.non_usgs_catchments` - Non-USGS research network catchment geometries (NEON, SBC-LTER)
-- `firearea.ecoregion_catchments` - Study site definitions (filters USGS catchments to study domain)
+- `firearea.non_usgs_catchments` - Non-USGS research network catchment
+geometries (NEON, SBC-LTER)
+- `firearea.ecoregion_catchments` - Study site definitions (filters USGS
+catchments to study domain)
 
 **processing logic**
 
@@ -622,12 +742,16 @@ analysis identifies nested and overlapping watersheds within the study domain.
 
 2. spatial intersection analysis
 - Pairwise comparison: Each catchment compared against every other catchment
-- Self-exclusion: Uses `c1.usgs_site < c2.usgs_site` to avoid self-comparison and duplicate pairs
-- Intersection detection: `ST_Intersects()` identifies overlapping catchment pairs
-- Area calculations: Uses spheroidal geometry (`ST_Area(geometry, TRUE)`) for accuracy
+- Self-exclusion: Uses `c1.usgs_site < c2.usgs_site` to avoid self-comparison
+and duplicate pairs
+- Intersection detection: `ST_Intersects()` identifies overlapping catchment
+pairs
+- Area calculations: Uses spheroidal geometry (`ST_Area(geometry, TRUE)`) for
+accuracy
 
 3. overlap metrics calculation
-- Bidirectional percentages: Calculates what percent of each catchment overlaps with the other
+- Bidirectional percentages: Calculates what percent of each catchment overlaps
+with the other
 - Actual overlap area: Intersection area in square kilometers
 - Zero exclusion: Filters out pairs with no actual spatial overlap
 
@@ -642,7 +766,8 @@ analysis identifies nested and overlapping watersheds within the study domain.
 | `overlap_area_km2` | Actual overlapping area | Square kilometers (2 decimal places) |
 
 **data quality controls**
-- Non-zero overlap requirement: `ST_Area(ST_Intersection()) > 0` excludes trivial/edge-touching cases
+- Non-zero overlap requirement: `ST_Area(ST_Intersection()) > 0` excludes
+trivial/edge-touching cases
 - Spheroidal calculations: Accurate area measurements using Earth's curvature
 - NULLIF protection: Prevents division by zero errors in percentage calculations
 - Precision control: Results rounded to 2 decimal places for consistency
@@ -654,14 +779,16 @@ analysis identifies nested and overlapping watersheds within the study domain.
 - Ordering: Alphabetical by primary site, then comparison site
 
 **common overlap patterns**
-- Nested catchments: `percent_overlap_site2 = 100.00` indicates site_2 completely within site_1
-- Partial overlaps: Both percentages < 100% indicate intersecting but not nested watersheds
-- Small overlap areas: May indicate catchments sharing drainage boundaries or measurement uncertainties
+- Nested catchments: `percent_overlap_site2 = 100.00` indicates site_2
+completely within site_1
+- Partial overlaps: Both percentages < 100% indicate intersecting but not nested
+watersheds
+- Small overlap areas: May indicate catchments sharing drainage boundaries or
+measurement uncertainties
 
 This analysis supports understanding of spatial relationships between monitoring
 sites and helps inform appropriate statistical approaches for multi-site
 comparisons
-
 
 ```{sql}
 #| eval: FALSE

@@ -2,7 +2,7 @@
 
 ## overview
 
-Functions for building and extracting water chemistry resources. Note
+Functions for building and extracting water-chemistry resources. Note
 that the functions are built here but called elsewhere in the workflow.
 
 Queries generate either a view, materialized view, or export. Views
@@ -12,41 +12,63 @@ should be reconstructed as needed based on database updates.
 
 stepwise:
 
-– Step 1: Rebuild base view only (destroys all dependencies) SELECT
-firearea.rebuild_usgs_water_chem_std();
+1.  (re)build standardized water chemistry (destroys all dependencies):
 
-– Step 2: Rebuild analyte views SELECT firearea.create_nitrate_view();
-SELECT firearea.create_spcond_view(); SELECT
-firearea.create_ammonium_view(); SELECT firearea.create_orthop_view();
+- Generates firearea.usgs_water_chem_std from which all analyte views
+  are built
+- SELECT firearea.rebuild_usgs_water_chem_std();
 
-– Step 3: Rebuild counts views SELECT
-firearea.create_analyte_counts_view(‘nitrate’); SELECT
-firearea.create_analyte_counts_view(‘spcond’); SELECT
-firearea.create_analyte_counts_view(‘ammonium’); SELECT
-firearea.create_analyte_counts_view(‘orthop’);
+2.  (re)build analyte views:
 
-– Step 4: Rebuild largest fire materialized views SELECT
-firearea.create_largest_analyte_valid_fire_per_site_mv(‘nitrate’);
-SELECT firearea.create_largest_analyte_valid_fire_per_site_mv(‘spcond’);
-SELECT
-firearea.create_largest_analyte_valid_fire_per_site_mv(‘ammonium’);
-SELECT firearea.create_largest_analyte_valid_fire_per_site_mv(‘orthop’);
+- Generates, e.g., firearea.nitrate, firearea.spcond, etc., which are
+  the standardized chemistry views for each analyte. Note that each
+  analyte has its own function to build its view.
+- SELECT firearea.create_nitrate_view();
+- SELECT firearea.create_spcond_view();
+- SELECT firearea.create_ammonium_view();
+- SELECT firearea.create_orthop_view();
+
+3.  (re)build counts views:
+
+- Generates firearea.{analyte}\_counts, which are the counts of samples
+  before and after (aggregated) fires. This is just one function where
+  the target analyte is passed as an argument. This view is not yet used
+  in the analyses.
+- SELECT firearea.create_analyte_counts_view(‘nitrate’);
+- SELECT firearea.create_analyte_counts_view(‘spcond’);
+- SELECT firearea.create_analyte_counts_view(‘ammonium’);
+- SELECT firearea.create_analyte_counts_view(‘orthop’);
+
+4.  (re)build largest fire materialized views:
+
+- Generates firearea.largest\_{analyte}\_valid_fire_per_site, which is
+  the date of the largest fire in a catchment that has data that meet
+  our selection criteria (e.g., pre- and post-fire samples in each of
+  three quartiles 3 years before and after fire). This is just one
+  function where the target analyte is passed as an argument.
+- SELECT
+  firearea.create_largest_analyte_valid_fire_per_site_mv(‘nitrate’);
+- SELECT
+  firearea.create_largest_analyte_valid_fire_per_site_mv(‘spcond’);
+- SELECT
+  firearea.create_largest_analyte_valid_fire_per_site_mv(‘ammonium’);
+- SELECT
+  firearea.create_largest_analyte_valid_fire_per_site_mv(‘orthop’);
 
 single site:
 
-– Just rebuild one analyte’s full stack (e.g., nitrate) SELECT
-firearea.create_nitrate_view(); SELECT
-firearea.create_analyte_counts_view(‘nitrate’);  
-SELECT
-firearea.create_largest_analyte_valid_fire_per_site_mv(‘nitrate’);
+- rebuild the full stack for only one analyte (e.g., nitrate):
+  - SELECT firearea.create_nitrate_view();
+  - SELECT firearea.create_analyte_counts_view(‘nitrate’);  
+  - SELECT
+    firearea.create_largest_analyte_valid_fire_per_site_mv(‘nitrate’);
 
 the whole game:
 
-builds standarized chem; and views of aggregated values and counts, and
-the largest fire materialized view for each analyte in a single call
-(i.e., all of stepwise steps 1-4 from above in a single function)
-
-SELECT firearea.rebuild_usgs_water_chem_std_and_dependencies();
+- builds standardized chem; and views of aggregated values and counts,
+  and the largest fire materialized view for each analyte in a single
+  call (i.e., all of stepwise steps 1-4 from above in a single function)
+  - SELECT firearea.rebuild_usgs_water_chem_std_and_dependencies();
 
 ## fn. view: usgs_water_chem_std (std chem)
 
@@ -1214,23 +1236,20 @@ $$;
 -- SELECT firearea.export_analyte_q_pre_post_quartiles('phosphate'::TEXT, '/data/phosphate_quartiles.csv'::TEXT);
 ```
 
-## fn. export: q+c pre-post-quartiles largest fire
+## fn. m. view: q+c pre-post-quartiles largest fire
 
 purpose:
 
-This query extracts analyte and discharge observations from USGS
-watershed sites surrounding wildfires. It isolates data for only the
-largest valid fire per watershed, where validity is defined by the
-presence of adequate water quality monitoring data before and after the
-fire.
+Analyte and discharge observations from USGS sites surrounding
+wildfires. It isolates data for only the largest valid fire per
+watershed, where validity is defined by the presence of adequate water
+quality monitoring data before and after the fire.
 
 key objectives:
 
-- Assess hydrologic and water quality response (analyte + flow) to
-  wildfire disturbances.
 - Limit analysis to only the most impactful fire per watershed, based on
   fire area (`cum_fire_area`).
-- ensure fire events are sufficiently monitored, with:
+- ensure fires are sufficiently monitored, with:
   - At least 3 years of data before and after the fire.
   - Presence of streamflow across flow quartiles 2, 3, and 4 in both
     windows.
@@ -1252,8 +1271,7 @@ core logic steps:
 
 processing note:
 
-When export_analyte_q_pre_post_quartiles_largest_fire joins to
-`largest_{analyte}_valid_fire_per_site`:
+joins to `largest_{analyte}_valid_fire_per_site`:
 
 1.  The materialized view only contains fires that have already passed
     the quartile filtering
@@ -1261,9 +1279,6 @@ When export_analyte_q_pre_post_quartiles_largest_fire joins to
     the criteria
 3.  The date filtering in the export function ensures only the 3-year
     windows around those validated fires are included
-
-As a result of \#1 and \#2 above, this query is very fast relative to
-only querying the quartiles alone (e.g, [here]()).
 
 inputs:
 
@@ -1289,111 +1304,123 @@ outputs:
 | `before_count` | Count of observations in 3 years before the fire |
 | `after_count`  | Count of observations in 3 years after the fire  |
 
-The query result is saved as:
-`{analyte}_discharge_quartiles_234_max_fire.csv`
+function context:
+
+- materialized view constructed as:
+  `{analyte}_q_pre_post_quartiles_largest_fire`
+- joins against: `firearea.largest_{analyte}_valid_fire_per_site` for
+  largest valid fire per site selection
+- was formerly exported with query result saved as:
+  `{analyte}_discharge_quartiles_234_max_fire.csv`
 
 ``` sql
-CREATE OR REPLACE FUNCTION firearea.export_analyte_q_pre_post_quartiles_largest_fire(analyte_name TEXT, file_path TEXT DEFAULT NULL)
+CREATE OR REPLACE FUNCTION firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv(analyte_name TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    sql_query TEXT;
-    output_file TEXT;
-    analyte_table TEXT;
-    largest_fire_table TEXT;
-    query_template TEXT := $template$
-    COPY (
-    SELECT
-      firearea.ANALYTE.usgs_site,
-      firearea.LARGEST_FIRE_TABLE.year,
-      firearea.LARGEST_FIRE_TABLE.start_date,
-      firearea.LARGEST_FIRE_TABLE.end_date,
-      CASE
-        WHEN firearea.ANALYTE.date < firearea.LARGEST_FIRE_TABLE.start_date THEN 'before'
-        WHEN firearea.ANALYTE.date > firearea.LARGEST_FIRE_TABLE.end_date THEN 'after'
-      END AS segment,
-      firearea.ANALYTE.date,
-      firearea.ANALYTE.value_std,
-      firearea.discharge."Flow",
-      firearea.discharge.quartile,
-      firearea.LARGEST_FIRE_TABLE.before_count,
-      firearea.LARGEST_FIRE_TABLE.after_count
-    FROM firearea.ANALYTE
-    JOIN firearea.discharge
-      ON firearea.ANALYTE.usgs_site = firearea.discharge.usgs_site
-      AND firearea.ANALYTE.date = firearea.discharge."Date"
-    JOIN firearea.LARGEST_FIRE_TABLE
-      ON firearea.ANALYTE.usgs_site = firearea.LARGEST_FIRE_TABLE.usgs_site
-    WHERE firearea.ANALYTE.value_std IS NOT NULL
-      AND firearea.discharge."Flow" IS NOT NULL
-      AND firearea.discharge.quartile IS NOT NULL
-      AND (
-        (firearea.ANALYTE.date >= (firearea.LARGEST_FIRE_TABLE.start_date - INTERVAL '3 years') AND firearea.ANALYTE.date < firearea.LARGEST_FIRE_TABLE.start_date)
-        OR
-        (firearea.ANALYTE.date > firearea.LARGEST_FIRE_TABLE.end_date AND firearea.ANALYTE.date <= (firearea.LARGEST_FIRE_TABLE.end_date + INTERVAL '3 years'))
-      )
-    ORDER BY
-      ANALYTE.usgs_site,
-      LARGEST_FIRE_TABLE.year,
-      segment DESC,
-      ANALYTE.date
-    ) TO 'OUTPUT_FILE' WITH CSV HEADER
-    $template$;
+    mv_name TEXT;
+    analyte_view TEXT;
+    largest_fire_mv TEXT;
+    idx_site TEXT;
+    idx_start TEXT;
+    sql TEXT;
+    ok_analyte BOOLEAN;
+    ok_largest BOOLEAN;
 BEGIN
-    -- Input validation
     IF analyte_name !~ '^[a-zA-Z_][a-zA-Z0-9_]*$' THEN
         RETURN FORMAT('ERROR: Invalid analyte name: %s', analyte_name);
     END IF;
-    
-    -- Set table and file names
-    analyte_table := analyte_name;
-    largest_fire_table := FORMAT('largest_%s_valid_fire_per_site', analyte_name);
-    output_file := COALESCE(file_path, FORMAT('/tmp/%s_discharge_quartiles_234_max_fire.csv', analyte_name));
-    
-    -- Check if the analyte table exists
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.tables 
-        WHERE table_schema = 'firearea' AND table_name = analyte_name
-    ) THEN
-        RETURN FORMAT('ERROR: Table firearea.%s does not exist', analyte_name);
+    analyte_view := analyte_name; -- firearea.<analyte>
+    largest_fire_mv := FORMAT('largest_%s_valid_fire_per_site', analyte_name);
+    mv_name := FORMAT('%s_q_pre_post_quartiles_largest_fire', analyte_name);
+    idx_site := FORMAT('idx_%s_qpp_lf_usgs_site', analyte_name);
+    idx_start := FORMAT('idx_%s_qpp_lf_start_date', analyte_name);
+
+    SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema='firearea' AND table_name=analyte_view) INTO ok_analyte;
+    IF NOT ok_analyte THEN
+        RETURN FORMAT('ERROR: Missing analyte view firearea.%s', analyte_view);
     END IF;
-    
-    -- Check if the largest fire materialized view exists
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_matviews 
-        WHERE schemaname = 'firearea' AND matviewname = largest_fire_table
-    ) THEN
-        RETURN FORMAT('ERROR: Materialized view firearea.%s does not exist', largest_fire_table);
+    SELECT EXISTS(SELECT 1 FROM pg_matviews WHERE schemaname='firearea' AND matviewname=largest_fire_mv) INTO ok_largest;
+    IF NOT ok_largest THEN
+        RETURN FORMAT('ERROR: Missing largest fire matview firearea.%s', largest_fire_mv);
     END IF;
-    
-    -- Replace all placeholders in the template
-    sql_query := replace(query_template, 'ANALYTE', analyte_table);
-    sql_query := replace(sql_query, 'LARGEST_FIRE_TABLE', largest_fire_table);
-    sql_query := replace(sql_query, 'OUTPUT_FILE', output_file);
-    
-    EXECUTE sql_query;
-    
-    RETURN FORMAT('SUCCESS: Exported %s pre-post quartiles largest fire data to %s', analyte_name, output_file);
-    
-EXCEPTION
-    WHEN OTHERS THEN
-        RETURN FORMAT('ERROR: Failed to export %s pre-post quartiles largest fire data: %s', analyte_name, SQLERRM);
+
+  -- Build MV only; create indexes in separate EXECUTEs to avoid ambiguity
+  sql := FORMAT($f$
+    DROP MATERIALIZED VIEW IF EXISTS firearea.%I CASCADE;
+    CREATE MATERIALIZED VIEW firearea.%I AS
+    WITH counts AS (
+      SELECT
+        a.usgs_site,
+        l.year,
+        l.start_date,
+        l.end_date,
+        COUNT(CASE WHEN a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date THEN 1 END) AS before_count,
+        COUNT(CASE WHEN a.date > l.end_date AND a.date <= (l.end_date + INTERVAL '3 years') THEN 1 END) AS after_count,
+        SUM(CASE WHEN a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date AND d.quartile=2 THEN 1 ELSE 0 END) AS bq2,
+        SUM(CASE WHEN a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date AND d.quartile=3 THEN 1 ELSE 0 END) AS bq3,
+        SUM(CASE WHEN a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date AND d.quartile=4 THEN 1 ELSE 0 END) AS bq4,
+        SUM(CASE WHEN a.date > l.end_date AND a.date <= (l.end_date + INTERVAL '3 years') AND d.quartile=2 THEN 1 ELSE 0 END) AS aq2,
+        SUM(CASE WHEN a.date > l.end_date AND a.date <= (l.end_date + INTERVAL '3 years') AND d.quartile=3 THEN 1 ELSE 0 END) AS aq3,
+        SUM(CASE WHEN a.date > l.end_date AND a.date <= (l.end_date + INTERVAL '3 years') AND d.quartile=4 THEN 1 ELSE 0 END) AS aq4
+      FROM firearea.%I a
+      JOIN firearea.discharge d ON (a.usgs_site=d.usgs_site AND a.date=d."Date")
+      JOIN firearea.%I l ON (a.usgs_site=l.usgs_site)
+      WHERE a.value_std IS NOT NULL AND d."Flow" IS NOT NULL AND d.quartile IS NOT NULL
+      GROUP BY a.usgs_site,l.year,l.start_date,l.end_date
+      HAVING
+        SUM(CASE WHEN a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date AND d.quartile=2 THEN 1 ELSE 0 END) > 0 AND
+        SUM(CASE WHEN a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date AND d.quartile=3 THEN 1 ELSE 0 END) > 0 AND
+        SUM(CASE WHEN a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date AND d.quartile=4 THEN 1 ELSE 0 END) > 0 AND
+        SUM(CASE WHEN a.date > l.end_date AND a.date <= (l.end_date + INTERVAL '3 years') AND d.quartile=2 THEN 1 ELSE 0 END) > 0 AND
+        SUM(CASE WHEN a.date > l.end_date AND a.date <= (l.end_date + INTERVAL '3 years') AND d.quartile=3 THEN 1 ELSE 0 END) > 0 AND
+        SUM(CASE WHEN a.date > l.end_date AND a.date <= (l.end_date + INTERVAL '3 years') AND d.quartile=4 THEN 1 ELSE 0 END) > 0
+    )
+    SELECT
+      a.usgs_site,
+      l.year,
+      l.start_date,
+      l.end_date,
+      CASE WHEN a.date < l.start_date THEN 'before' ELSE 'after' END AS segment,
+      a.date,
+      a.value_std,
+      d."Flow" AS flow,
+      d.quartile,
+      c.before_count,
+      c.after_count
+    FROM firearea.%I a
+    JOIN firearea.discharge d ON (a.usgs_site=d.usgs_site AND a.date=d."Date")
+    JOIN firearea.%I l ON (a.usgs_site=l.usgs_site)
+    JOIN counts c ON (a.usgs_site=c.usgs_site AND l.year=c.year AND l.start_date=c.start_date AND l.end_date=c.end_date)
+    WHERE a.value_std IS NOT NULL AND d."Flow" IS NOT NULL AND d.quartile IS NOT NULL AND
+      ((a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date) OR (a.date > l.end_date AND a.date <= (l.end_date + INTERVAL '3 years')))
+    ORDER BY a.usgs_site,l.year,segment DESC,a.date;
+  -- FORMAT placeholders order: 1 drop MV name, 2 create MV name, 3 analyte view (counts), 4 largest fire MV (counts),
+  -- 5 analyte view (select), 6 largest fire MV (select)
+  $f$, mv_name, mv_name, analyte_view, largest_fire_mv, analyte_view, largest_fire_mv);
+
+    EXECUTE sql;
+    -- Create indexes separately for robustness
+    EXECUTE FORMAT('CREATE INDEX IF NOT EXISTS %I ON firearea.%I(usgs_site);', idx_site, mv_name);
+    EXECUTE FORMAT('CREATE INDEX IF NOT EXISTS %I ON firearea.%I(start_date);', idx_start, mv_name);
+    RETURN FORMAT('SUCCESS: Created materialized view firearea.%s', mv_name);
+EXCEPTION WHEN OTHERS THEN
+    RETURN FORMAT('ERROR: Failed to create MV for %s: %s', analyte_name, SQLERRM);
 END;
 $$;
 
--- filepath output is hardcoded to /tmp
--- SELECT firearea.export_analyte_q_pre_post_quartiles_largest_fire('nitrate'::TEXT);
+-- SELECT firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv('nitrate');
 ```
 
-## fn. export: q+c pre-quartiles largest fire
+## fn. m. view: q+c pre-quartiles largest fire
 
 purpose:
 
-This query retrieves analyte and discharge records for USGS watershed
-sites (`usgs_site`) surrounding wildfires. It ensures strong sampling
-coverage before the fire, requiring observations in flow quartiles 2, 3,
-and 4, while placing no constraint on post-fire sampling coverage.
+Retrieves analyte and discharge records for USGS sites (`usgs_site`)
+surrounding wildfires. It ensures strong sampling coverage before the
+fire, requiring observations in flow quartiles 2, 3, and 4, while
+placing no constraint on post-fire sampling coverage.
 
 \*\* It is important to note that the results of this query are NOT a
 superset of the results of the query where we are also constraining the
@@ -1456,146 +1483,144 @@ output columns:
 | `before_count` | Total records in pre-fire window       |
 | `after_count`  | Total records in post-fire window      |
 
-The query result is saved as:
-`{analyte}_discharge_before_quartiles_234_max_fire.csv`
+- materialized view constructed as:
+  `{analyte}_q_pre_quartiles_largest_fire`
+- was formerly an export statement with query result saved as:
+  `{analyte}_discharge_before_quartiles_234_max_fire.csv`
 
 ``` sql
-CREATE OR REPLACE FUNCTION firearea.export_analyte_q_pre_quartiles_largest_fire(analyte_name TEXT, file_path TEXT DEFAULT NULL)
+CREATE OR REPLACE FUNCTION firearea.create_analyte_q_pre_quartiles_largest_fire_mv(analyte_name TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    sql_query TEXT;
-    output_file TEXT;
-    query_template TEXT := $template$
-    COPY (
-    WITH fire_with_data AS (
-      SELECT
-        firearea.ANALYTE.usgs_site,
-        firearea.ranges_agg.year,
-        firearea.ranges_agg.start_date,
-        firearea.ranges_agg.end_date,
-        firearea.ranges_agg.cum_fire_area,
-        COUNT(CASE WHEN firearea.ANALYTE.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years')
-                   AND firearea.ANALYTE.date < firearea.ranges_agg.start_date THEN 1 END) AS before_count,
-        COUNT(CASE WHEN firearea.ANALYTE.date > firearea.ranges_agg.end_date
-                   AND firearea.ANALYTE.date <= (firearea.ranges_agg.end_date + INTERVAL '3 years') THEN 1 END) AS after_count,
-        SUM(CASE WHEN firearea.ANALYTE.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years')
-                  AND firearea.ANALYTE.date < firearea.ranges_agg.start_date AND firearea.discharge.quartile = 2 THEN 1 ELSE 0 END) AS bq2,
-        SUM(CASE WHEN firearea.ANALYTE.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years')
-                  AND firearea.ANALYTE.date < firearea.ranges_agg.start_date AND firearea.discharge.quartile = 3 THEN 1 ELSE 0 END) AS bq3,
-        SUM(CASE WHEN firearea.ANALYTE.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years')
-                  AND firearea.ANALYTE.date < firearea.ranges_agg.start_date AND firearea.discharge.quartile = 4 THEN 1 ELSE 0 END) AS bq4
-      FROM firearea.ANALYTE
-      JOIN firearea.discharge
-        ON firearea.ANALYTE.usgs_site = firearea.discharge.usgs_site
-        AND firearea.ANALYTE.date = firearea.discharge."Date"
-      JOIN firearea.ranges_agg
-        ON firearea.ANALYTE.usgs_site = firearea.ranges_agg.usgs_site
-      WHERE firearea.ANALYTE.value_std IS NOT NULL
-        AND firearea.discharge."Flow" IS NOT NULL
-        AND firearea.discharge.quartile IS NOT NULL
-      GROUP BY
-        firearea.ANALYTE.usgs_site,
-        firearea.ranges_agg.year,
-        firearea.ranges_agg.start_date,
-        firearea.ranges_agg.end_date,
-        firearea.ranges_agg.cum_fire_area
-      HAVING
-        SUM(CASE WHEN firearea.ANALYTE.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years')
-                  AND firearea.ANALYTE.date < firearea.ranges_agg.start_date AND firearea.discharge.quartile = 2 THEN 1 ELSE 0 END) > 0 AND
-        SUM(CASE WHEN firearea.ANALYTE.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years')
-                  AND firearea.ANALYTE.date < firearea.ranges_agg.start_date AND firearea.discharge.quartile = 3 THEN 1 ELSE 0 END) > 0 AND
-        SUM(CASE WHEN firearea.ANALYTE.date >= (firearea.ranges_agg.start_date - INTERVAL '3 years')
-                  AND firearea.ANALYTE.date < firearea.ranges_agg.start_date AND firearea.discharge.quartile = 4 THEN 1 ELSE 0 END) > 0
-    )
-    SELECT
-      firearea.ANALYTE.usgs_site,
-      fire_with_data.year,
-      fire_with_data.start_date,
-      fire_with_data.end_date,
-      CASE
-        WHEN firearea.ANALYTE.date < fire_with_data.start_date THEN 'before'
-        WHEN firearea.ANALYTE.date > fire_with_data.end_date THEN 'after'
-      END AS segment,
-      firearea.ANALYTE.date,
-      firearea.ANALYTE.value_std,
-      firearea.discharge."Flow",
-      firearea.discharge.quartile,
-      fire_with_data.before_count,
-      fire_with_data.after_count
-    FROM firearea.ANALYTE
-    JOIN firearea.discharge
-      ON firearea.ANALYTE.usgs_site = firearea.discharge.usgs_site
-      AND firearea.ANALYTE.date = firearea.discharge."Date"
-    JOIN (
-      SELECT DISTINCT ON (fire_with_data.usgs_site)
-        fire_with_data.usgs_site,
-        fire_with_data.year,
-        fire_with_data.start_date,
-        fire_with_data.end_date>,
-        fire_with_data.before_count,
-        fire_with_data.after_count
-      FROM fire_with_data
-      ORDER BY fire_with_data.usgs_site, fire_with_data.cum_fire_area DESC
-    ) AS fire_with_data
-      ON firearea.ANALYTE.usgs_site = fire_with_data.usgs_site
-    WHERE firearea.ANALYTE.value_std IS NOT NULL
-      AND firearea.discharge."Flow" IS NOT NULL
-      AND firearea.discharge.quartile IS NOT NULL
-      AND (
-        (firearea.ANALYTE.date >= (fire_with_data.start_date - INTERVAL '3 years') AND firearea.ANALYTE.date < fire_with_data.start_date)
-        OR
-        (firearea.ANALYTE.date > fire_with_data.end_date AND firearea.ANALYTE.date <= (fire_with_data.end_date + INTERVAL '3 years'))
-      )
-    ORDER BY
-      ANALYTE.usgs_site,
-      fire_with_data.year,
-      segment DESC,
-      ANALYTE.date
-    ) TO 'OUTPUT_FILE' WITH CSV HEADER
-    $template$;
+    mv_name TEXT;
+    analyte_view TEXT;
+    idx_site TEXT;
+    idx_start TEXT;
+    sql TEXT;
+    ok_analyte BOOLEAN;
 BEGIN
-    -- Input validation
     IF analyte_name !~ '^[a-zA-Z_][a-zA-Z0-9_]*$' THEN
         RETURN FORMAT('ERROR: Invalid analyte name: %s', analyte_name);
     END IF;
-    
-    -- Set file name
-    output_file := COALESCE(file_path, FORMAT('/tmp/%s_discharge_before_quartiles_234_max_fire.csv', analyte_name));
-    
-    -- Check if the analyte table exists
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.tables 
-        WHERE table_schema = 'firearea' AND table_name = analyte_name
-    ) THEN
-        RETURN FORMAT('ERROR: Table firearea.%s does not exist', analyte_name);
+
+    analyte_view := analyte_name;                -- firearea.<analyte> view
+    mv_name      := FORMAT('%s_q_pre_quartiles_largest_fire', analyte_name);
+    idx_site     := FORMAT('idx_%s_qpre_lf_usgs_site', analyte_name);
+    idx_start    := FORMAT('idx_%s_qpre_lf_start_date', analyte_name);
+
+    -- Ensure analyte view exists
+    SELECT EXISTS(
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema='firearea' AND table_name=analyte_view
+    ) INTO ok_analyte;
+    IF NOT ok_analyte THEN
+        RETURN FORMAT('ERROR: Missing analyte view firearea.%s', analyte_view);
     END IF;
-    
-    -- Replace all placeholders in the template
-    sql_query := replace(query_template, 'ANALYTE', analyte_name);
-    sql_query := replace(sql_query, 'OUTPUT_FILE', output_file);
-    
-    EXECUTE sql_query;
-    
-    RETURN FORMAT('SUCCESS: Exported %s pre-quartiles largest fire data to %s', analyte_name, output_file);
-    
+
+  -- Build MV: choose largest fire per site satisfying pre quartile presence (2–4), then emit both windows
+  -- Note: create the MV and the indexes in separate EXECUTEs to avoid any parsing ambiguity.
+  sql := FORMAT($f$
+    DROP MATERIALIZED VIEW IF EXISTS firearea.%I CASCADE;
+    CREATE MATERIALIZED VIEW firearea.%I AS
+    WITH fire_candidates AS (
+      SELECT
+        r.usgs_site,
+        r.year,
+        r.start_date,
+        r.end_date,
+        r.cum_fire_area
+      FROM firearea.ranges_agg r
+      -- We join analyte + discharge only to test pre-window quartile presence
+      JOIN firearea.%I a
+        ON a.usgs_site = r.usgs_site
+      JOIN firearea.discharge d
+        ON a.usgs_site = d.usgs_site AND a.date = d."Date"
+      WHERE a.value_std IS NOT NULL
+        AND d."Flow" IS NOT NULL
+        AND d.quartile IS NOT NULL
+        AND a.date >= (r.start_date - INTERVAL '3 years')
+        AND a.date <  r.start_date
+      GROUP BY r.usgs_site, r.year, r.start_date, r.end_date, r.cum_fire_area
+      HAVING
+        SUM(CASE WHEN a.date >= (r.start_date - INTERVAL '3 years')
+                  AND a.date < r.start_date AND d.quartile = 2 THEN 1 ELSE 0 END) > 0
+        AND SUM(CASE WHEN a.date >= (r.start_date - INTERVAL '3 years')
+                  AND a.date < r.start_date AND d.quartile = 3 THEN 1 ELSE 0 END) > 0
+        AND SUM(CASE WHEN a.date >= (r.start_date - INTERVAL '3 years')
+                  AND a.date < r.start_date AND d.quartile = 4 THEN 1 ELSE 0 END) > 0
+    ),
+    largest_fire AS (
+      SELECT DISTINCT ON (usgs_site)
+        usgs_site, year, start_date, end_date, cum_fire_area
+      FROM fire_candidates
+      ORDER BY usgs_site, cum_fire_area DESC
+    ),
+    counts AS (
+      SELECT
+        a.usgs_site,
+        l.year,
+        l.start_date,
+        l.end_date,
+        COUNT(CASE WHEN a.date >= (l.start_date - INTERVAL '3 years')
+                   AND a.date <  l.start_date THEN 1 END) AS before_count,
+        COUNT(CASE WHEN a.date > l.end_date
+                   AND a.date <= (l.end_date + INTERVAL '3 years') THEN 1 END) AS after_count
+      FROM firearea.%I a
+      JOIN firearea.discharge d
+        ON a.usgs_site = d.usgs_site AND a.date = d."Date"
+      JOIN largest_fire l
+        ON a.usgs_site = l.usgs_site
+      WHERE a.value_std IS NOT NULL
+        AND d."Flow" IS NOT NULL
+        AND d.quartile IS NOT NULL
+      GROUP BY a.usgs_site, l.year, l.start_date, l.end_date
+    )
+    SELECT
+      a.usgs_site,
+      l.year,
+      l.start_date,
+      l.end_date,
+      CASE
+        WHEN a.date < l.start_date THEN 'before'
+        WHEN a.date > l.end_date  THEN 'after'
+      END AS segment,
+      a.date,
+      a.value_std,
+      d."Flow"      AS flow,
+      d.quartile,
+      c.before_count,
+      c.after_count
+    FROM firearea.%I a
+    JOIN firearea.discharge d
+      ON a.usgs_site = d.usgs_site AND a.date = d."Date"
+    JOIN largest_fire l
+      ON a.usgs_site = l.usgs_site
+    JOIN counts c
+      ON a.usgs_site = c.usgs_site AND l.year = c.year
+       AND l.start_date = c.start_date AND l.end_date = c.end_date
+    WHERE a.value_std IS NOT NULL
+      AND d."Flow" IS NOT NULL
+      AND d.quartile IS NOT NULL
+      AND (
+        (a.date >= (l.start_date - INTERVAL '3 years') AND a.date < l.start_date) OR
+        (a.date > l.end_date AND a.date <= (l.end_date + INTERVAL '3 years'))
+      )
+    ORDER BY a.usgs_site, l.year, segment DESC, a.date;
+    $f$, mv_name, mv_name, analyte_view, analyte_view, analyte_view, analyte_view);
+
+    EXECUTE sql;
+    -- Create indexes separately
+    EXECUTE FORMAT('CREATE INDEX IF NOT EXISTS %I ON firearea.%I(usgs_site);', idx_site, mv_name);
+    EXECUTE FORMAT('CREATE INDEX IF NOT EXISTS %I ON firearea.%I(start_date);', idx_start, mv_name);
+    RETURN FORMAT('SUCCESS: Created materialized view firearea.%s', mv_name);
+
 EXCEPTION
     WHEN OTHERS THEN
-        RETURN FORMAT('ERROR: Failed to export %s pre-quartiles largest fire data: %s', analyte_name, SQLERRM);
+        RETURN FORMAT('ERROR: Failed to create MV for %s: %s', analyte_name, SQLERRM);
 END;
 $$;
 
-
--- Use default path
--- SELECT firearea.export_analyte_q_pre_quartiles_largest_fire('nitrate'::TEXT);
-
--- Use custom path  
--- SELECT firearea.export_analyte_q_pre_quartiles_largest_fire('nitrate'::TEXT, '/home/user/data/nitrate_pre_quartiles_max_fire.csv'::TEXT);
-
--- For spcond
--- SELECT firearea.export_analyte_q_pre_quartiles_largest_fire('spcond'::TEXT);
-
--- For any future analyte
--- SELECT firearea.export_analyte_q_pre_quartiles_largest_fire('phosphate'::TEXT, '/data/phosphate_pre_quartiles.csv'::TEXT);
+-- SELECT firearea.create_analyte_q_pre_quartiles_largest_fire_mv('nitrate');
 ```
