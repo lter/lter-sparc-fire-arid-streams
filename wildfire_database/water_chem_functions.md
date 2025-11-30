@@ -409,6 +409,148 @@ $$;
 -- SELECT firearea.create_orthop_view();
 ```
 
+## fn. mv: EVI join per analyte
+
+Join post-fire EVI to the largest valid fire event set per site for any
+analyte.
+
+- Input: `{analyte}` string (e.g., `nitrate`, `ammonium`, `spcond`,
+  `orthop`)
+- Output MV: `firearea.evi_join_largest_{analyte}` with deterministic
+  ordering
+- Semantics:
+  - Matches on `usgs_site` and the normalized, order-insensitive
+    `events` array
+  - Computes `avg_median_post_evi` only when all required events have
+    valid numeric EVI
+  - Flags `has_missing_evi` and `has_bad_data` per event set
+  - Preserves `year`, `start_date`, `end_date` from the largest-fire MV
+  - Adds indexes on `usgs_site` and `start_date` for common filtering
+
+``` sql
+CREATE OR REPLACE FUNCTION firearea.create_evi_join_largest_analyte_mv(analyte TEXT)
+RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  mv_name TEXT;
+  lf_mv_name TEXT;
+  result_msg TEXT;
+BEGIN
+  -- Resolve target MV and dependency names deterministically
+  mv_name := format('evi_join_largest_%s', analyte);
+  lf_mv_name := format('largest_%s_valid_fire_per_site', analyte);
+
+  -- Validate dependency exists
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_matviews
+    WHERE schemaname = 'firearea' AND matviewname = lf_mv_name
+  ) THEN
+    RAISE EXCEPTION 'Dependency firearea.% does not exist. Build it first via create_largest_analyte_valid_fire_per_site_mv(%).', lf_mv_name, analyte;
+  END IF;
+
+  -- Drop target MV and indexes if present
+  EXECUTE format('DROP MATERIALIZED VIEW IF EXISTS firearea.%I CASCADE', mv_name);
+
+  -- Create MV: join EVI to largest valid fire event sets for the analyte
+  EXECUTE format($fmt$ 
+    CREATE MATERIALIZED VIEW firearea.%I AS
+    WITH lf AS (
+      SELECT
+        usgs_site,
+        events,
+        year,
+        start_date,
+        end_date
+      FROM firearea.%I
+    ),
+    lf_events AS (
+      SELECT
+        usgs_site,
+        year,
+        start_date,
+        end_date,
+        ARRAY(SELECT unnest(events) ORDER BY 1) AS events_sorted,
+        cardinality(events) AS event_count
+      FROM lf
+    ),
+    evi_validated AS (
+      SELECT
+        evi.usgs_site,
+        evi.event_id,
+        btrim(evi.median_post_evi) AS median_post_evi_trim,
+        CASE
+          WHEN btrim(evi.median_post_evi) IS NULL OR btrim(evi.median_post_evi) = '' THEN FALSE
+          WHEN btrim(evi.median_post_evi) ~ $re$^[+-]?([0-9]*\.?[0-9]+)([eE][+-]?[0-9]+)?$re$ THEN TRUE
+          ELSE FALSE
+        END AS is_numeric
+      FROM firearea.evi AS evi
+    ),
+    joined AS (
+      SELECT
+        l.usgs_site,
+        l.year,
+        l.start_date,
+        l.end_date,
+        l.events_sorted,
+        l.event_count,
+        ev.event_id,
+        ev.median_post_evi_trim,
+        ev.is_numeric
+      FROM lf_events AS l
+      JOIN evi_validated AS ev
+        ON ev.usgs_site = l.usgs_site
+       AND ev.event_id = ANY(l.events_sorted)
+    ),
+    per_group AS (
+      SELECT
+        usgs_site,
+        year,
+        start_date,
+        end_date,
+        events_sorted AS events,
+        event_count,
+        COUNT(*) FILTER (WHERE is_numeric) AS numeric_count,
+        COUNT(*) FILTER (WHERE NOT is_numeric OR median_post_evi_trim IS NULL OR median_post_evi_trim = '') AS bad_or_missing_count,
+        AVG(median_post_evi_trim::DOUBLE PRECISION) FILTER (WHERE is_numeric) AS avg_median_post_evi
+      FROM joined
+      GROUP BY usgs_site, year, start_date, end_date, events_sorted, event_count
+    )
+    SELECT
+      usgs_site,
+      events,
+      year,
+      start_date,
+      end_date,
+      avg_median_post_evi,
+      (bad_or_missing_count > 0 AND bad_or_missing_count <> event_count) OR (bad_or_missing_count = event_count) AS has_missing_evi,
+      (bad_or_missing_count > 0 AND numeric_count > 0) AS has_bad_data
+    FROM per_group
+    ORDER BY usgs_site, start_date, end_date;
+  $fmt$, mv_name, lf_mv_name);
+
+  -- Indexes for common filters
+  EXECUTE format('CREATE INDEX IF NOT EXISTS %I_usgs_site_idx ON firearea.%I (usgs_site)', mv_name, mv_name);
+  EXECUTE format('CREATE INDEX IF NOT EXISTS %I_start_date_idx ON firearea.%I (start_date)', mv_name, mv_name);
+
+  result_msg := format('SUCCESS: Created firearea.%s and indexes', mv_name);
+  RAISE NOTICE '%', result_msg;
+  RETURN result_msg;
+
+EXCEPTION
+  WHEN OTHERS THEN
+    RAISE EXCEPTION 'FAILED: Error creating EVI join MV for analyte %: %', analyte, SQLERRM;
+END;
+$$;
+
+-- Examples:
+-- SELECT firearea.create_evi_join_largest_analyte_mv('nitrate');
+-- SELECT firearea.create_evi_join_largest_analyte_mv('ammonium');
+-- SELECT firearea.create_evi_join_largest_analyte_mv('spcond');
+-- SELECT firearea.create_evi_join_largest_analyte_mv('orthop');
+```
+
 ## fn. view: usgs_water_chem_std AND dependencies
 
 ``` sql
@@ -1411,6 +1553,9 @@ END;
 $$;
 
 -- SELECT firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv('nitrate');
+-- SELECT firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv('ammonium');
+-- SELECT firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv('orthop');
+-- SELECT firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv('spcond');
 ```
 
 ## fn. m. view: q+c pre-quartiles largest fire

@@ -616,3 +616,62 @@ result_df  <- tibble::tibble(
 )
 
 ```
+
+
+# elevation and slope ----------------------------------------------------------
+
+Provided by N. Lyon (see
+[here](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/spatial_covars/extract_elevation.R))
+with augmented sites (as needed).
+
+```{r}
+#| eval: FALSE
+
+elev_slope <- readr::read_csv(here::here("data", "fire-arid_elevation.csv")) |>
+  dplyr::select(-ecoregion_pct)
+
+DBI::dbWriteTable(
+  conn      = pg,
+  name      = c("firearea", "elevation"),
+  value     = elev_slope,
+  overwrite = FALSE,
+  append    = FALSE,
+  row.names = FALSE
+)
+
+DBI::dbExecute(
+  conn      = pg,
+  statement = "ALTER TABLE firearea.elevation ADD PRIMARY KEY (usgs_site) ;"
+)
+
+```
+
+
+# EVI --------------------------------------------------------------------------
+
+Workflow indicates ingesting file with median EVI data locally. In fact, the
+file was beyond what is appropriate to store under version control and is
+instead stored externally; the code here is retained for reference. Link to file
+in Goole Drive: 
+[here](https://drive.google.com/file/d/1AtuzWtwYDD_rligo1j3qw9l7w1XteWpi/view?usp=drive_link).
+
+```{sh}
+#| eval: FALSE
+
+csvcut --maxfieldsize 10000000 -C 'system:index' median_post_evi_by_catchment-all.csv \
+  > /tmp/no_system_index.csv
+
+ogr2ogr -f "PostgreSQL" \
+  PG:"host=myhost user=myuser dbname=wildfire" \
+    /tmp/no_system_index.csv \
+  -oo HEADERS=YES \
+  -oo GEOM_POSSIBLE_NAMES='.geo' \
+  -oo KEEP_GEOM_COLUMNS=NO \
+  -nln firearea.evi \
+  -lco GEOMETRY_NAME=geom \
+  -lco FID=gid \
+  -a_srs EPSG:4326 \
+  -nlt PROMOTE_TO_MULTI \
+  -overwrite
+
+```
