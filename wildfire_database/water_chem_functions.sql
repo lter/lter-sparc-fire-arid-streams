@@ -1105,6 +1105,7 @@ BEGIN
     )
     SELECT
       a.usgs_site,
+      ARRAY(SELECT unnest(l.events) ORDER BY 1) AS events,
       l.year,
       l.start_date,
       l.end_date,
