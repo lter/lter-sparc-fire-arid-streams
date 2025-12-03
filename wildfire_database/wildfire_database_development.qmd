@@ -649,17 +649,33 @@ DBI::dbExecute(
 
 # EVI --------------------------------------------------------------------------
 
-Workflow indicates ingesting file with median EVI data locally. In fact, the
-file was beyond what is appropriate to store under version control and is
-instead stored externally; the code here is retained for reference. Link to file
-in Goole Drive: 
+Workflow indicates ingesting file with median EVI data locally. The file was
+accessed locally but is bigger than what is appropriate to store under version
+control and so is stored externally. Link to file in Goole Drive: 
 [here](https://drive.google.com/file/d/1AtuzWtwYDD_rligo1j3qw9l7w1XteWpi/view?usp=drive_link).
+
+```{r}
+
+readr::read_csv("median_post_evi_by_catchment-all.csv") |> 
+  dplyr::mutate(
+    ig_datetime_utc = lubridate::as_datetime(ig_date / 1000),
+    ig_date_utc     = lubridate::as_date(ig_datetime_utc)
+  ) |> 
+  dplyr::select(-'ig_date') |> 
+  dplyr::rename(ig_date = ig_date_utc) |>
+  dplyr::select(
+    -`system:index`,
+    -ig_datetime_utc
+    ) |> 
+  readr::write_csv('/tmp/no_system_index.csv')
+
+```
 
 ```{sh}
 #| eval: FALSE
 
-csvcut --maxfieldsize 10000000 -C 'system:index' median_post_evi_by_catchment-all.csv \
-  > /tmp/no_system_index.csv
+# csvcut --maxfieldsize 10000000 -C 'system:index' median_post_evi_by_catchment-all.csv \
+#   > /tmp/no_system_index.csv
 
 ogr2ogr -f "PostgreSQL" \
   PG:"host=myhost user=myuser dbname=wildfire" \
