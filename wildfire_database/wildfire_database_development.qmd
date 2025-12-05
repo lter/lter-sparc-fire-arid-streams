@@ -655,6 +655,7 @@ control and so is stored externally. Link to file in Goole Drive:
 [here](https://drive.google.com/file/d/1AtuzWtwYDD_rligo1j3qw9l7w1XteWpi/view?usp=drive_link).
 
 ```{r}
+#| eval: FALSE
 
 readr::read_csv("median_post_evi_by_catchment-all.csv") |> 
   dplyr::mutate(
@@ -690,4 +691,12 @@ ogr2ogr -f "PostgreSQL" \
   -nlt PROMOTE_TO_MULTI \
   -overwrite
 
+```
+
+```{sql}
+#| eval: FALSE
+
+ALTER TABLE firearea.evi
+  ALTER COLUMN ig_date   TYPE date    USING NULLIF(TRIM(ig_date), '')::date,
+  ALTER COLUMN fire_year TYPE integer USING NULLIF(TRIM(fire_year), '')::integer;
 ```
