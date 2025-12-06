@@ -581,6 +581,24 @@ which is a table of catchments that overlap with the ecoregions. This
 firearea.catchment_ecoregion view provides the ecoregion attributes for those
 catchments.
 
+Note that the following sites are excluded from the output as they are outside
+the ecoregions dataset:
+
+- hanan_bell_3
+- hanan_bell_4
+- redb
+- sbc_lter_ata
+- sbc_lter_bel
+- sbc_lter_bur
+- sbc_lter_gav
+- sbc_lter_hon
+- sbc_lter_mis
+- sbc_lter_noo
+- sbc_lter_ped
+- sbc_lter_rat
+- sbc_lter_ref
+- sbc_lter_tec
+
 ```{sql}
 #| eval: FALSE
 #| connection: "pg"
