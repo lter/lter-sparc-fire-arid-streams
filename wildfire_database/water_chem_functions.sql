@@ -1278,6 +1278,210 @@ $$;
 
 -- SELECT firearea.create_analyte_q_pre_quartiles_largest_fire_mv('nitrate');
 
+-- chunk_15
+CREATE OR REPLACE FUNCTION firearea.export_analyte_covariates_pre_post(
+  analyte_name TEXT,
+  out_path TEXT DEFAULT NULL
+) RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  base_mv TEXT;
+  evi_table TEXT;
+  sql TEXT;
+BEGIN
+  -- Validate analyte identifier shape
+  IF analyte_name !~ '^[a-zA-Z_][a-zA-Z0-9_]*$' THEN
+    RETURN FORMAT('ERROR: Invalid analyte name: %s', analyte_name);
+  END IF;
+
+  -- Derive analyte-specific objects
+  base_mv := FORMAT('%s_q_pre_post_quartiles_largest_fire', analyte_name);
+  evi_table := FORMAT('evi_join_largest_%s', analyte_name);
+
+  -- Ensure base MV exists
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_matviews
+    WHERE schemaname = 'firearea' AND matviewname = base_mv
+  ) THEN
+    RETURN FORMAT('ERROR: Missing base MV firearea.%s', base_mv);
+  END IF;
+
+  -- Ensure EVI table exists
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_matviews
+    WHERE schemaname = 'firearea' AND matviewname = evi_table
+  ) THEN
+    RETURN FORMAT('ERROR: Missing EVI materialized view firearea.%s', evi_table);
+  END IF;
+
+  -- Build analyte-flexible query
+  sql := FORMAT($Q$
+WITH base AS (
+  SELECT
+    %1$I.usgs_site,
+    %1$I.year,
+    %1$I.start_date,
+    %1$I.end_date,
+    %1$I.segment,
+    %1$I.date,
+    %1$I.value_std,
+    %1$I.flow,
+    %1$I.quartile,
+    %1$I.before_count,
+    %1$I.after_count
+  FROM firearea.%1$I
+),
+nlcd_ranked AS (
+  SELECT
+    nlcd.usgs_site,
+    nlcd.class,
+    nlcd.class_percent,
+    nlcd.value,
+    ROW_NUMBER() OVER (
+      PARTITION BY nlcd.usgs_site
+      ORDER BY nlcd.class_percent DESC, nlcd.class ASC
+    ) AS rn
+  FROM firearea.nlcd
+),
+nlcd_largest_class AS (
+  SELECT
+    nlcd_ranked.usgs_site,
+    nlcd_ranked.class,
+    nlcd_ranked.class_percent,
+    nlcd_ranked.value
+  FROM nlcd_ranked
+  WHERE nlcd_ranked.rn = 1
+),
+ecoregion AS (
+  SELECT DISTINCT ON (catchment_ecoregion.usgs_site)
+    catchment_ecoregion.usgs_site,
+    catchment_ecoregion.na_l3name,
+    catchment_ecoregion.percent_overlap,
+    catchment_ecoregion.overlap_area_km2,
+    catchment_ecoregion.ogc_fid
+  FROM firearea.catchment_ecoregion
+  ORDER BY
+    catchment_ecoregion.usgs_site,
+    catchment_ecoregion.percent_overlap DESC,
+    catchment_ecoregion.overlap_area_km2 DESC,
+    catchment_ecoregion.ogc_fid ASC
+),
+ranges AS (
+  SELECT
+    ranges_agg.usgs_site,
+    ranges_agg.year,
+    ranges_agg.start_date,
+    ranges_agg.end_date,
+    ranges_agg.previous_end_date,
+    ranges_agg.next_start_date,
+    ranges_agg.days_since,
+    ranges_agg.days_until,
+    ranges_agg.events,
+    ranges_agg.cum_fire_area,
+    ranges_agg.catch_area,
+    ranges_agg.cum_per_cent_burned,
+    ranges_agg.all_fire_area,
+    ranges_agg.all_per_cent_burned,
+    ranges_agg.latitude,
+    ranges_agg.longitude
+  FROM firearea.ranges_agg
+),
+elev AS (
+  SELECT DISTINCT ON (elevation.usgs_site)
+    elevation.usgs_site,
+    elevation.elev_avg_m,
+    elevation.elev_median_m,
+    elevation.elev_min_m,
+    elevation.elev_max_m,
+    elevation.slope_avg_deg,
+    elevation.slope_median_deg,
+    elevation.slope_min_deg,
+    elevation.slope_max_deg
+  FROM firearea.elevation
+  ORDER BY elevation.usgs_site
+),
+evi AS (
+  SELECT DISTINCT ON (%2$I.usgs_site, %2$I.events)
+    %2$I.usgs_site,
+    %2$I.events,
+    %2$I.avg_median_post_evi
+  FROM firearea.%2$I
+  ORDER BY %2$I.usgs_site, %2$I.events
+)
+SELECT
+  base.usgs_site,
+  base.year,
+  base.start_date,
+  base.end_date,
+  base.segment,
+  base.date,
+  base.value_std,
+  base.flow,
+  base.quartile,
+  ecoregion.na_l3name,
+  ranges.previous_end_date,
+  ranges.next_start_date,
+  ranges.days_since,
+  ranges.days_until,
+  ranges.cum_fire_area,
+  ranges.catch_area,
+  ranges.cum_per_cent_burned,
+  ranges.all_fire_area,
+  ranges.all_per_cent_burned,
+  ranges.latitude,
+  ranges.longitude,
+  elev.elev_avg_m,
+  elev.elev_median_m,
+  elev.elev_min_m,
+  elev.elev_max_m,
+  elev.slope_avg_deg,
+  elev.slope_median_deg,
+  elev.slope_min_deg,
+  elev.slope_max_deg,
+  nlcd_largest_class.value AS lulc,
+  evi.avg_median_post_evi,
+  ranges.events
+FROM base
+LEFT JOIN ecoregion
+  ON base.usgs_site = ecoregion.usgs_site
+LEFT JOIN ranges
+  ON base.usgs_site = ranges.usgs_site
+  AND base.year = ranges.year
+  AND base.start_date = ranges.start_date
+  AND base.end_date = ranges.end_date
+LEFT JOIN elev
+  ON base.usgs_site = elev.usgs_site
+LEFT JOIN nlcd_largest_class
+  ON base.usgs_site = nlcd_largest_class.usgs_site
+LEFT JOIN evi
+  ON base.usgs_site = evi.usgs_site
+  AND ranges.events = evi.events
+ORDER BY
+  base.usgs_site,
+  base.year,
+  base.segment DESC,
+  base.date
+$Q$, base_mv, evi_table);
+
+  IF out_path IS NOT NULL AND out_path <> '' THEN
+    EXECUTE FORMAT('COPY (%s) TO %L WITH CSV HEADER;', sql, out_path);
+    RETURN FORMAT('SUCCESS: Exported %s covariates to %s', analyte_name, out_path);
+  ELSE
+    -- Return the SQL text; client can use \copy for safer permissions
+    RETURN sql;
+  END IF;
+
+EXCEPTION WHEN OTHERS THEN
+  RETURN FORMAT('ERROR: Failed to export %s covariates: %s', analyte_name, SQLERRM);
+END;
+$$;
+
+-- SELECT firearea.export_analyte_covariates_pre_post('nitrate', '/tmp/nitrate_largest_pre_post_covariates.csv');
+-- SELECT firearea.export_analyte_covariates_pre_post('ammonium', '/tmp/ammonium_largest_pre_post_covariates.csv');
+-- SELECT firearea.export_analyte_covariates_pre_post('orthop', '/tmp/orthop_largest_pre_post_covariates.csv');
+-- SELECT firearea.export_analyte_covariates_pre_post('spcond', '/tmp/spcond_largest_pre_post_covariates.csv');
+
 
 COMMIT;
 

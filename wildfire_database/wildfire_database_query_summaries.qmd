@@ -581,7 +581,9 @@ which is a table of catchments that overlap with the ecoregions. This
 firearea.catchment_ecoregion view provides the ecoregion attributes for those
 catchments.
 
-Note that the following sites are excluded from the output as they are outside
+### catchments outside ecoregion
+
+Note that data pertaining to the following sites are added manually because they fall outside of
 the ecoregions dataset:
 
 - hanan_bell_3
@@ -601,45 +603,128 @@ the ecoregions dataset:
 
 ```{sql}
 #| eval: FALSE
-#| connection: "pg"
+
+CREATE TABLE IF NOT EXISTS firearea.catchments_outside_ecoregion (
+  usgs_site   text PRIMARY KEY,
+  na_l3code   varchar,
+  na_l3name   varchar,
+  na_l2code   varchar,
+  na_l2name   varchar,
+  na_l1code   varchar,
+  na_l1name   varchar,
+  na_l3key    varchar,
+  na_l2key    varchar,
+  na_l1key    varchar,
+  shape_leng  double precision,
+  shape_area  double precision,
+  percent_overlap double precision,     -- set to 100 after load
+  overlap_area_km2 double precision     -- set to NULL
+);
+
+```
+
+'data/sbc_redb_ecos.csv' was generated manually in qgis by intersecting the
+catchment boundaries of e.g., the sbc sites and redb with the [ecoregions
+layer](https://drive.google.com/drive/folders/1iDI2fAicHqzVOkEe-a8qKkJ5smqsae-q?usp=drive_link)
+to get the ecoregion attributes.
+
+```{sh}
+#| eval: FALSE
+
+psql "$PGDATABASE" -h "$PGHOST" -U "$PGUSER" -c "
+COPY firearea.catchments_outside_ecoregion (
+  usgs_site,
+  na_l3code,
+  na_l3name,
+  na_l2code,
+  na_l2name,
+  na_l1code,
+  na_l1name,
+  na_l3key,
+  na_l2key,
+  na_l1key,
+  shape_leng,
+  shape_area
+)
+FROM '/data/sbc_redb_ecos.csv'
+WITH (FORMAT csv, HEADER true);
+UPDATE firearea.catchments_outside_ecoregion
+SET percent_overlap = 100
+WHERE percent_overlap IS NULL;
+"
+
+```
+
+
+```{sql}
+#| eval: FALSE
 
 DROP VIEW IF EXISTS firearea.catchment_ecoregion ;
 
-CREATE OR REPLACE VIEW firearea.catchment_ecoregion AS 
-SELECT
-  firearea.ecoregion_catchments.usgs_site,
-  firearea.ecoregions.ogc_fid,
-  firearea.ecoregions.na_l3code,
-  firearea.ecoregions.na_l3name,
-  firearea.ecoregions.na_l2code,
-  firearea.ecoregions.na_l2name,
-  firearea.ecoregions.na_l1code,
-  firearea.ecoregions.na_l1name,
-  firearea.ecoregions.na_l3key,
-  firearea.ecoregions.na_l2key,
-  firearea.ecoregions.na_l1key,
-  firearea.ecoregions.shape_leng,
-  firearea.ecoregions.shape_area,
-  firearea.ecoregions.ai_mode,
-  firearea.ecoregions.ai_mean,
-  firearea.ecoregions.ai_median,
-  firearea.ecoregions.ai_mean_narm,
-  ST_Area(
-    ST_Intersection(firearea.ecoregion_catchments.geometry, firearea.ecoregions.wkb_geometry),
-    TRUE
-  ) / 1000000.0 AS overlap_area_km2,
-  100.0 * ST_Area(
-    ST_Intersection(firearea.ecoregion_catchments.geometry, firearea.ecoregions.wkb_geometry),
-    TRUE
-  ) / NULLIF(ST_Area(firearea.ecoregion_catchments.geometry, TRUE), 0) AS percent_overlap
-FROM firearea.ecoregion_catchments
-JOIN firearea.ecoregions
-  ON ST_Intersects(firearea.ecoregion_catchments.geometry, firearea.ecoregions.wkb_geometry)
--- exclude duplicate Arizona/New Mexico Mountains
-WHERE firearea.ecoregions.ogc_fid != 68
-ORDER BY
-  firearea.ecoregion_catchments.usgs_site,
-  firearea.ecoregions.ogc_fid
+CREATE OR REPLACE VIEW firearea.catchment_ecoregion AS
+WITH base AS (
+  SELECT
+    ecoregion_catchments.usgs_site,
+    ecoregions.ogc_fid,
+    ecoregions.na_l3code,
+    ecoregions.na_l3name,
+    ecoregions.na_l2code,
+    ecoregions.na_l2name,
+    ecoregions.na_l1code,
+    ecoregions.na_l1name,
+    ecoregions.na_l3key,
+    ecoregions.na_l2key,
+    ecoregions.na_l1key,
+    ecoregions.shape_leng,
+    ecoregions.shape_area,
+    ecoregions.ai_mode,
+    ecoregions.ai_mean,
+    ecoregions.ai_median,
+    ecoregions.ai_mean_narm,
+    ST_Area(
+      ST_Intersection(firearea.ecoregion_catchments.geometry, firearea.ecoregions.wkb_geometry),
+      TRUE
+    ) / 1000000.0 AS overlap_area_km2,
+    100.0 * ST_Area(
+      ST_Intersection(firearea.ecoregion_catchments.geometry, firearea.ecoregions.wkb_geometry),
+      TRUE
+    ) / NULLIF(ST_Area(firearea.ecoregion_catchments.geometry, TRUE), 0) AS percent_overlap
+  FROM firearea.ecoregion_catchments
+  JOIN firearea.ecoregions
+    ON ST_Intersects(firearea.ecoregion_catchments.geometry, firearea.ecoregions.wkb_geometry)
+  WHERE firearea.ecoregions.ogc_fid != 68
+),
+manual_only AS (
+  SELECT
+    catchments_outside_ecoregion.usgs_site,
+    NULL::integer AS ogc_fid,
+    catchments_outside_ecoregion.na_l3code,
+    catchments_outside_ecoregion.na_l3name,
+    catchments_outside_ecoregion.na_l2code,
+    catchments_outside_ecoregion.na_l2name,
+    catchments_outside_ecoregion.na_l1code,
+    catchments_outside_ecoregion.na_l1name,
+    catchments_outside_ecoregion.na_l3key,
+    catchments_outside_ecoregion.na_l2key,
+    catchments_outside_ecoregion.na_l1key,
+    catchments_outside_ecoregion.shape_leng,
+    catchments_outside_ecoregion.shape_area,
+    NULL::double precision AS ai_mode,
+    NULL::double precision AS ai_mean,
+    NULL::double precision AS ai_median,
+    NULL::double precision AS ai_mean_narm,
+    firearea.catchments_outside_ecoregion.overlap_area_km2,
+    COALESCE(firearea.catchments_outside_ecoregion.percent_overlap, 100.0) AS percent_overlap
+  FROM firearea.catchments_outside_ecoregion
+  WHERE NOT EXISTS (
+    SELECT 1 FROM base
+    WHERE base.usgs_site = firearea.catchments_outside_ecoregion.usgs_site
+  )
+)
+SELECT * FROM base
+UNION ALL
+SELECT * FROM manual_only
+ORDER BY usgs_site
 ;
 
 ```
