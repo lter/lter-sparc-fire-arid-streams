@@ -6,11 +6,37 @@ format: gfm
 
 # overview ---------------------------------------------------------------------
 
-Documentation and general workflow overview for developing the wildfire database to support the CRASS 2.0 study that will investigate relationships between wildfire and aquatic biogeochemistry in the arid western United States. The focus here is strictly on development of the wildfire database that stores information such as the geometry of study catchments, discharge, and water chemistry data. Other workflows for harvesting, for example covariates, are detailed in other files within this repository. The workflow draws heavily on the [firearea](https://srearl.gitlab.io/firearea/index.html) package that also support this effort. Important is that this is not a reproducible workflow: there is a time-sensitive component to some of the `firearea` queries, especially those related to discharge, such that there could be different returns based on the date of query, and this workflow features iterative steps, such as querying data for USGS sites in individual sites but for multiple states that is not shown, and some, particularly, database actions are run once after initial table construction but not when data are added subsequently.
+Documentation and general workflow overview for developing the wildfire
+database to support the CRASS 2.0 study that will investigate relationships
+between wildfire and aquatic biogeochemistry in the arid western United States.
+The focus here is strictly on development of the wildfire database that stores
+information such as the geometry of study catchments, discharge, and water
+chemistry data. Other workflows for harvesting, for example covariates, are
+detailed in other files within this repository. The workflow draws heavily on
+the [firearea](https://srearl.gitlab.io/firearea/index.html) package that also
+support this effort. Important is that this is not a reproducible workflow:
+there is a time-sensitive component to some of the `firearea` queries,
+especially those related to discharge, such that there could be different
+returns based on the date of query, and this workflow features iterative steps,
+such as querying data for USGS sites in individual sites but for multiple
+states that is not shown, and some, particularly, database actions are run once
+after initial table construction but not when data are added subsequently.
 
-This workflow documents initial database implementation that featured data from the four-corner states, California, and Nevada. For each of these six states, the water chemistry was addressed (i.e., pulled from the web and added to the database) state-by-state but data in subsequent steps (e.g., discharge, catchments) were addressed by pulling seed data from all six states that had been added to the database initially.
+This workflow documents initial database implementation that featured data from
+the four-corner states, California, and Nevada. For each of these six states,
+the water chemistry was addressed (i.e., pulled from the web and added to the
+database) state-by-state but data in subsequent steps (e.g., discharge,
+catchments) were addressed by pulling seed data from all six states that had
+been added to the database initially.
 
-The number of sites pares quickly based on data availability. Using data from the six states listed above, there were 4941 unique USGS sites in the water_chem table, with the number of unique sites falling to 1508 in the discharge_daily table, and to 1423 in the catchments table. The large paring from the water_chem to discharge_daily tables appears due to availability of discharge data. While having discharge data was part of the conditions established in firearea::identify_sites_to_delineate, having but just a few or even one discharge data point would satisfy that condition.
+The number of sites pares quickly based on data availability. Using data from
+the six states listed above, there were 4941 unique USGS sites in the
+water_chem table, with the number of unique sites falling to 1508 in the
+discharge_daily table, and to 1423 in the catchments table. The large paring
+from the water_chem to discharge_daily tables appears due to availability of
+discharge data. While having discharge data was part of the conditions
+established in firearea::identify_sites_to_delineate, having but just a few or
+even one discharge data point would satisfy that condition.
 
 
 # database and schema ----------------------------------------------------------
@@ -34,9 +60,15 @@ DBI::dbExecute(pg, "CREATE SCHEMA IF NOT EXISTS firearea AUTHORIZATION _user_ ;"
 
 # water chemistry --------------------------------------------------------------
 
-For each state of interest, here California, identify USGS sites that fit a minimum set of criteria (see [firearea documentation](https://srearl.gitlab.io/firearea/reference/identify_sites_to_delineate.html)) for more details and harvest targeted water chemistry data for these sites. These data are loaded into the `water_chem` table of the firearea schema.
+For each state of interest, here California, identify USGS sites that fit a
+minimum set of criteria (see [firearea
+documentation](https://srearl.gitlab.io/firearea/reference/identify_sites_to_delineate.html))
+for more details and harvest targeted water chemistry data for these sites.
+These data are loaded into the `water_chem` table of the firearea schema.
 
-This is a good example of where this workflow is not reproducible (in the sense of sourcing this document) as this procedure is addressed state-by-state; we perform these steps iteratively for each state of interest.
+This is a good example of where this workflow is not reproducible (in the sense
+of sourcing this document) as this procedure is addressed state-by-state; we
+perform these steps iteratively for each state of interest.
 
 ```{r}
 #| eval: FALSE
@@ -51,7 +83,10 @@ usgs_water_chem <- split(
   {\(site) purrr::map_dfr(.x = site, ~ firearea::retrieve_usgs_chem(station_id = .x$usgs_site))}()
 ```
 
-Because of the large number of columns in the water chemistry output and because we want to preserve all of these data, easiest is to use the `DBI::dbWriteTable` function to create the table; we use the append parameter to add additional data to the table once it is created.
+Because of the large number of columns in the water chemistry output and
+because we want to preserve all of these data, easiest is to use the
+`DBI::dbWriteTable` function to create the table; we use the append parameter
+to add additional data to the table once it is created.
 
 ```{r}
 #| eval: FALSE
@@ -69,9 +104,12 @@ DBI::dbWriteTable(
 Upon initial creation, modify fields and generate an index before adding additional data.
 
 A note about timestamps:
-- `ActivityStartTime.Time` and `ActivityEndTime.Time` are local time where local is the time zone of the USGS site
+- `ActivityStartTime.Time` and `ActivityEndTime.Time` are local time where
+local is the time zone of the USGS site
 - `ActivityStartDateTime` and `ActivityEndDateTime` are UTC
-- Postgres assumes UTC for TYPE TIME WITHOUT TIME ZONE so date and time operations should not be performed on the fields where the time zone is local (because Postgres is assuming UTC).
+- Postgres assumes UTC for TYPE TIME WITHOUT TIME ZONE so date and time
+operations should not be performed on the fields where the time zone is local
+(because Postgres is assuming UTC).
 
 ```{r}
 #| eval: FALSE
@@ -96,11 +134,20 @@ A note about timestamps:
 
 # daily discharge --------------------------------------------------------------
 
-We use the available water chemistry data to inform harvesting daily discharge data for a given site where, for each site, we pull discharge data one month prior to the earliest record for any of our analytes of interest. 
+We use the available water chemistry data to inform harvesting daily discharge
+data for a given site where, for each site, we pull discharge data one month
+prior to the earliest record for any of our analytes of interest. 
 
-There are a couple of approaches to identifying the locations and temporal extents for which to harvest discharge data. We can address this iteratively, that is each time that we get `usgs_water_chem` for a given state, we can get the locations and corresponding earliest water chemistry data to pull from those data from that state, sensu:
+There are a couple of approaches to identifying the locations and temporal
+extents for which to harvest discharge data. We can address this iteratively,
+that is each time that we get `usgs_water_chem` for a given state, we can get
+the locations and corresponding earliest water chemistry data to pull from
+those data from that state, sensu:
 
-Note in the code blocks below is a rare case where we need to load a library as it is not clear how to namespace the call to `{r}%m-%` from lubridate; using a base-R approach (e.g., `{r}as.character(chem_earliest - months(1)`) generates unexpected NAs.
+Note in the code blocks below is a rare case where we need to load a library as
+it is not clear how to namespace the call to `{r}%m-%` from lubridate; using a
+base-R approach (e.g., `{r}as.character(chem_earliest - months(1)`) generates
+unexpected NAs.
 
 ```{r}
 #| eval: FALSE
@@ -117,7 +164,9 @@ water_chem_timing <- usgs_water_chem |>
 
 ```
 
-Alternatively, we can pull the sites (and earliest water chemistry of interest) for all or a subset of sites for which water chemistry data have been loaded into the database as in below. 
+Alternatively, we can pull the sites (and earliest water chemistry of interest)
+for all or a subset of sites for which water chemistry data have been loaded
+into the database as in below. 
 
 ```{r}
 #| eval: FALSE
@@ -147,7 +196,8 @@ water_chem_timing <- water_chem_timing |>
 
 ```
 
-With the water chemistry data for each site, we can then use the earliest record (minus one month) to harvest the corresponding discharge data.
+With the water chemistry data for each site, we can then use the earliest
+record (minus one month) to harvest the corresponding discharge data.
 
 ```{r}
 #| eval: FALSE
@@ -170,7 +220,9 @@ discharge_daily <- discharge_daily |>
   dplyr::select(dplyr::any_of(discharge_daily_expected_cols)) # constrain to expected columns
 ```
 
-As with water chemistry, easiest is to use the `DBI::dbWriteTable` function to create the table; we use the append parameter to add additional data to the table once it is created.
+As with water chemistry, easiest is to use the `DBI::dbWriteTable` function to
+create the table; we use the append parameter to add additional data to the
+table once it is created.
 
 ```{r}
 #| eval: FALSE
@@ -184,7 +236,8 @@ DBI::dbWriteTable(
 )
 ```
 
-Upon initial creation, modify fields and generate an index before adding additional data.
+Upon initial creation, modify fields and generate an index before adding
+additional data.
 
 ```{r}
 #| eval: FALSE
@@ -203,7 +256,10 @@ Upon initial creation, modify fields and generate an index before adding additio
 
 # delineated catchments --------------------------------------------------------
 
-Whereas the firearea vignette outlined an iterative state-by-state approach to identifying sites, harvesting chemistry, discharge, and delineating catchments, we can just as well identify the sites to delineate from discharge_daily (or water_chem) data in the R environment...
+Whereas the firearea vignette outlined an iterative state-by-state approach to
+identifying sites, harvesting chemistry, discharge, and delineating catchments,
+we can just as well identify the sites to delineate from discharge_daily (or
+water_chem) data in the R environment...
 
 ```{r}
 #| eval: FALSE
@@ -232,7 +288,11 @@ stream_sites_candidates$usgs_site <- gsub("USGS-", "", stream_sites_candidates$u
 ```
 
 
-Whereas the firearea vignettes focus on a workflow of delineating catchments generally, the workflow here is tailored specifically to developing the wilfire database and, as such, draws on firearea::write_usgs_catchment_delineation to delineate the catchment for a/each USGS site and load it in to the wildfire.firearea.catchments table.
+Whereas the firearea vignettes focus on a workflow of delineating catchments
+generally, the workflow here is tailored specifically to developing the wilfire
+database and, as such, draws on firearea::write_usgs_catchment_delineation to
+delineate the catchment for a/each USGS site and load it in to the
+wildfire.firearea.catchments table.
 
 ```{r}
 #| eval: FALSE
@@ -275,7 +335,8 @@ DBI::dbExecute(
 
 # MTBS -------------------------------------------------------------------------
 
-These MTBS data were downloaded 2023-12-08. Here we are keeping the source data's 4269 CRS.
+These MTBS data were downloaded 2023-12-08. Here we are keeping the source
+data's 4269 CRS.
 
 ```sh
 shp2pgsql -D -I -s 4269 mtbs_perims_DD.shp firearea.mtbs_fire_perimeters | psql -h localhost -U _user_ -d wildfire
@@ -299,13 +360,16 @@ WHERE mtbs_fire_perimeters.event_id IN (
 
 # ecoregions -------------------------------------------------------------------
 
-Add [ecoregions](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/site_selection/aridity_ecoregions.R) that define the study area.
+Add
+[ecoregions](https://github.com/lter/lter-sparc-fire-arid-streams/blob/main/site_selection/aridity_ecoregions.R)
+that define the study area.
 
 ```sh
 ogr2ogr -f PostgreSQL PG:"host=localhost user=_user_ dbname=wildfire_dev active_schema=firearea" aridland_ecoregions.geojson -nln ecoregions
 ```
 
-Collapse the collection of ecoregion polygons into a single polygon and filter catchments that intersect and have at least 75% overlap within that area:
+Collapse the collection of ecoregion polygons into a single polygon and filter
+catchments that intersect and have at least 75% overlap within that area:
 
 ```sql
 
@@ -338,7 +402,8 @@ ALTER TABLE firearea.ecoregion_catchments ADD PRIMARY KEY (usgs_site) ;
 
 # fires_catchments -------------------------------------------------------------
 
-Recreate this table as needed when new sites sites are added and/or if firearea.ecoregion_catchments changes.
+Recreate this table as needed when new sites sites are added and/or if
+firearea.ecoregion_catchments changes.
 
 ```sql
 DROP TABLE IF EXISTS firearea.fires_catchments ;
@@ -386,9 +451,15 @@ CREATE UNIQUE INDEX idx_fires_catchments_usgs_site_event_id ON firearea.fires_ca
 
 # pour points ------------------------------------------------------------------
 
-As with catchment delineations, the workflow here is tailored specifically to developing the wilfire database and, as such, draws on firearea::write_usgs_pour_point to identify the catchment for a/each USGS site and load it in to the wildfire.firearea.pour_points table.
+As with catchment delineations, the workflow here is tailored specifically to
+developing the wilfire database and, as such, draws on
+firearea::write_usgs_pour_point to identify the catchment for a/each USGS site
+and load it in to the wildfire.firearea.pour_points table.
 
-This workflow is specific to the four-corner states, Nevada, and California that were part of the initial database development. For additional sites, the workflow was modified such that pour points are written in the same step with catchments.
+This workflow is specific to the four-corner states, Nevada, and California
+that were part of the initial database development. For additional sites, the
+workflow was modified such that pour points are written in the same step with
+catchments.
 
 
 ```{r}
@@ -651,7 +722,7 @@ DBI::dbExecute(
 
 Workflow indicates ingesting file with median EVI data locally. The file was
 accessed locally but is bigger than what is appropriate to store under version
-control and so is stored externally. Link to file in Goole Drive: 
+control and so is stored externally. Link to file in Goole Drive:
 [here](https://drive.google.com/file/d/1AtuzWtwYDD_rligo1j3qw9l7w1XteWpi/view?usp=drive_link).
 
 ```{r}
