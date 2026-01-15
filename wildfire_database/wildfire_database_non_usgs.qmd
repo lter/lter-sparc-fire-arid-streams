@@ -1055,6 +1055,8 @@ DBI::dbWithTransaction(
 Omit Devereaux and San Onofre per Heili:
 https://github.com/lter/lter-sparc-fire-arid-streams/issues/27
 
+tag: santa barbara, "santa barbara"
+
 ## sbc: discharge
 
 ```{r}
