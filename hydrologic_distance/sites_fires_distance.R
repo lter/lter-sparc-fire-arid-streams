@@ -26,20 +26,27 @@ largest_fires <- purrr::map_dfr(
   .f = ~ DBI::dbGetQuery(pg, .x)
 )
 
-# data source: calculated distances
-distances <- readr::read_csv("combined_distances.csv")
-
+distances <- DBI::dbGetQuery(
+  conn      = pg,
+  statement = "
+  SELECT
+    usgs_site,
+    event_id,
+    distance_m AS distance,
+    status
+  FROM firearea.site_fire_distances
+   ;"
+)
 
 # computation: join largest fires to distances
 largest_distance <- dplyr::left_join(
-  largest_fires,
-  distances,
+  largest_fires |> dplyr::mutate(usgs_site = tolower(usgs_site)),
+  distances |> dplyr::mutate(usgs_site = tolower(usgs_site)),
   by = c(
     "usgs_site" = "usgs_site",
     "event"     = "event_id"
   )
 )
-
 
 # output: hits and misses
 largest_distance |>
@@ -56,32 +63,12 @@ largest_distance |>
     )
   ) |>
   dplyr::count(has_distance)
-  # dplyr::filter(is.na(distance)) |>
-# dplyr::distinct(usgs_site) # |>
-# readr::write_csv("/tmp/sans_distances.csv")
 
-# only able to calculate distance for ~40% of distinct(fire*catchment)
-# distance>=0	count	percent
-# False     	337 	61.50
-# True	      211 	38.50
+# has_distance   n
+#            0 116
+#            1 432
 
-# data source: distance calc logs
-failed_sites <- readr::read_csv("failed_sites.csv") |>
-  dplyr::mutate(usgs_site = paste0("USGS-", site))
-
-
-# data source: comid counts
-counts <- DBI::dbGetQuery(
-  pg,
-  "select
-    usgs_site,
-    count(nhdplus_comid) AS comid_count
-  from firearea.flowlines
-  group by usgs_site ;"
-  )
-
-
-# computation: sites sans distances (adjust distinct() as needed)
+# computation: sites sans distances
 sans_distances <- largest_distance |>
   dplyr::distinct(
     usgs_site,
@@ -95,18 +82,69 @@ sans_distances <- largest_distance |>
       TRUE ~ distance
     )
   ) |>
-  dplyr::filter(is.na(distance)) |>
-  dplyr::distinct(usgs_site) |>
-  dplyr::arrange(usgs_site)
-  # readr::write_csv("/tmp/sans_distances.csv")
+  dplyr::filter(is.na(distance))
 
 
-# data source: use a modified postres_to_geojson fn to get a lot of layer availability 
-
+#' Export Site-Level Spatial Layers and Availability Log
+#'
+#' Build a case-insensitive site-level spatial extract and an event-specific
+#' fire-catchment extract from Postgres, then write GeoJSON outputs and a
+#' per-site presence log to disk.
+#'
+#' @details
+#' `chem_sites` is expected to come from `sans_distances` and include both
+#' site and event identifiers. The function:
+#' 1) normalizes `usgs_site` to lowercase for case-insensitive matching,
+#' 2) queries `catchments`, `flowlines`, `hydrography`, and `pour_points`
+#'    by site,
+#' 3) queries `fires_catchments` by unique `(usgs_site, event)` pairs, and
+#' 4) writes `spatial_presence_log.csv` plus any non-empty GeoJSON layers.
+#'
+#' @param chem_sites A data frame with at least:
+#' \describe{
+#'   \item{usgs_site}{Character site identifier (for example, "usgs-06274300").}
+#'   \item{event}{Character fire event identifier used to match `event_id`.}
+#' }
+#' Duplicate rows are allowed; unique site and site-event combinations are used.
+#'
+#' @param path Character scalar. Output directory for log and GeoJSON files.
+#' Directory is created recursively if needed.
+#'
+#' @return Invisibly returns a list with:
+#' \describe{
+#'   \item{presence_log}{Data frame with one row per normalized site and columns
+#'     `has_catchment`, `has_fires_catchment`, `has_flowlines`,
+#'     `has_pour_point`, and `any_missing`.}
+#'   \item{files}{Named list of written GeoJSON file paths (only layers with
+#'     `nrow(.) > 0` are included).}
+#' }
+#'
+#' @section Side Effects:
+#' Writes files under `path`:
+#' \itemize{
+#'   \item `spatial_presence_log.csv`
+#'   \item `catchments.geojson` (if data present)
+#'   \item `fires_catchments.geojson` (if data present)
+#'   \item `flowlines.geojson` (if data present)
+#'   \item `hydrography.geojson` (if data present)
+#'   \item `pour_points.geojson` (if data present)
+#' }
+#'
+#' @examples
+#' \dontrun{
+#' failed_sites_resources <- postgres_to_geojson_log(
+#'   chem_sites = sans_distances,
+#'   path = "/tmp/geojson"
+#' )
+#' }
 postgres_to_geojson_log <- function(
   chem_sites,
   path
 ) {
+
+  stopifnot(is.data.frame(chem_sites))
+  stopifnot(all(c("usgs_site", "event") %in% names(chem_sites)))
+
   # normalize output directory path (ensure exists + trailing slash)
   if (!dir.exists(path)) {
     dir.create(path, recursive = TRUE)
@@ -114,32 +152,74 @@ postgres_to_geojson_log <- function(
   if (!grepl("/$", path)) {
     path <- paste0(path, "/")
   }
-  # initialize list to store presence/absence per site
-  presence_list <- list()
+
+  # normalize site ids once for case-insensitive matching
+  sans_sites <- chem_sites |>
+    dplyr::pull(usgs_site) |>
+    trimws() |>
+    tolower() |>
+    unique()
+
   catchments_usgs <- sf::st_read(
     dsn = pg,
     query = glue::glue_sql(
-      "SELECT * FROM firearea.catchments WHERE usgs_site IN ({ chem_sites* }) ;",
-      .con = DBI::ANSI()
+      "SELECT * FROM firearea.catchments WHERE LOWER(usgs_site) IN ({ sans_sites* }) ;",
+      .con = pg
     ),
     geometry_column = "geometry"
   )
   catchments <- catchments_usgs
 
-  fires_catchments <- sf::st_read(
-    dsn = pg,
-    query = glue::glue_sql(
-      "SELECT * FROM firearea.fires_catchments WHERE usgs_site IN ({ chem_sites* }) ;",
-      .con = DBI::ANSI()
-    ),
-    geometry_column = "geometry"
-  )
+  # chem_sites is the sans_distances data frame
+  pairs <- chem_sites |>
+    dplyr::distinct(usgs_site, event) |>
+    dplyr::transmute(
+      usgs_site = tolower(trimws(usgs_site)),
+      event_id  = trimws(event)
+    ) |>
+    dplyr::filter(!is.na(usgs_site), !is.na(event_id), usgs_site != "", event_id != "")
+
+  if (nrow(pairs) > 0) {
+    pair_sql <- purrr::pmap(
+      pairs,
+      \(usgs_site, event_id) glue::glue_sql("({usgs_site}, {event_id})", .con = pg)
+    )
+
+    fires_catchments <- sf::st_read(
+      dsn = pg,
+      query = glue::glue_sql(
+        "
+        SELECT fc.*
+        FROM firearea.fires_catchments fc
+        WHERE (lower(fc.usgs_site), fc.event_id) IN ({pair_sql*});
+        ",
+        pair_sql = pair_sql,
+        .con = pg
+      ),
+      geometry_column = "geometry"
+    )
+  } else {
+    fires_catchments <- sf::st_read(
+      dsn = pg,
+      query = "SELECT * FROM firearea.fires_catchments WHERE FALSE;",
+      geometry_column = "geometry"
+    )
+  }
 
   flowlines <- sf::st_read(
     dsn = pg,
     query = glue::glue_sql(
-      "SELECT * FROM firearea.flowlines WHERE usgs_site IN ({ chem_sites* }) ;",
-      .con = DBI::ANSI()
+      "SELECT * FROM firearea.flowlines WHERE LOWER(usgs_site) IN ({ sans_sites* }) ;",
+      .con = pg
+    ),
+    geometry_column = "geometry"
+  )
+
+  hydrography <- sf::st_read(
+    dsn = pg,
+    query = glue::glue_sql(
+      "SELECT * FROM firearea.hydrography WHERE LOWER(usgs_site) IN ({ sans_sites* }) ;",
+      .con = pg
     ),
     geometry_column = "geometry"
   )
@@ -147,8 +227,8 @@ postgres_to_geojson_log <- function(
   pour_points_usgs <- sf::st_read(
     dsn = pg,
     query = glue::glue_sql(
-      "SELECT * FROM firearea.pour_points WHERE usgs_site IN ({ chem_sites* }) ;",
-      .con = DBI::ANSI()
+      "SELECT * FROM firearea.pour_points WHERE LOWER(usgs_site) IN ({ sans_sites* }) ;",
+      .con = pg
     ),
     geometry_column = "geometry"
   )
@@ -158,19 +238,17 @@ postgres_to_geojson_log <- function(
   # presence_log: records whether each requested site has spatial data
   # columns: has_catchment, has_fires_catchment, has_flowlines, has_pour_point, any_missing
   # written to spatial_presence_log.csv in provided path and returned invisibly
-  unique_sites <- unique(chem_sites)
-  for (s in unique_sites) {
-    presence_list[[s]] <- data.frame(
-      usgs_site = s,
-      has_catchment       = any(catchments$usgs_site == s),
-      has_fires_catchment = any(fires_catchments$usgs_site == s),
-      has_flowlines       = any(flowlines$usgs_site == s),
-      has_pour_point      = any(pour_points$usgs_site == s),
-      stringsAsFactors = FALSE
+  presence_log <- data.frame(
+    usgs_site = sans_sites,
+    stringsAsFactors = FALSE
+  ) |>
+    dplyr::mutate(
+      has_catchment       = usgs_site %in% tolower(catchments$usgs_site),
+      has_fires_catchment = usgs_site %in% tolower(fires_catchments$usgs_site),
+      has_flowlines       = usgs_site %in% tolower(flowlines$usgs_site),
+      has_pour_point      = usgs_site %in% tolower(pour_points$usgs_site),
+      any_missing = !(has_catchment & has_fires_catchment & has_flowlines & has_pour_point)
     )
-  }
-  presence_log <- dplyr::bind_rows(presence_list)
-  presence_log$any_missing <- !(presence_log$has_catchment & presence_log$has_fires_catchment & presence_log$has_flowlines & presence_log$has_pour_point)
   # write log to path
   readr::write_csv(presence_log, file = file.path(path, "spatial_presence_log.csv"))
 
@@ -212,6 +290,18 @@ postgres_to_geojson_log <- function(
     message("No flowlines to write.")
   }
 
+  if (nrow(hydrography) > 0) {
+    sf::st_write(
+      obj = hydrography,
+      dsn = paste0(path, "hydrography.geojson"),
+      delete_dsn = TRUE,
+      quiet = TRUE
+    )
+    out_files$hydrography <- paste0(path, "hydrography.geojson")
+  } else {
+    message("No hydrography to write.")
+  }
+
   if (nrow(pour_points) > 0) {
     sf::st_write(
       obj = pour_points,
@@ -237,161 +327,6 @@ postgres_to_geojson_log <- function(
 }
 
 failed_sites_resources <- postgres_to_geojson_log(
-  chem_sites = sans_distances$usgs_site,
+  chem_sites = sans_distances,
   path       = "/tmp/geojson"
 )
-
-failed_sites_resources$presence_log
-
-
-# output: detailed hits and misses
-
-#   success:
-#     none  = no distances for any fire (probably a layer problem)
-#     all   = distances for all fires (all good)
-#     mixed = distances for some fires (likely a fire not on flowline)
-
-dplyr::left_join(
-largest_distance |>
-  dplyr::distinct(
-    usgs_site,
-    event,
-    distance
-  ) |>
-  dplyr::mutate(
-    has_distance = dplyr::case_when(
-      is.na(distance) ~ FALSE,
-      !is.na(distance) ~ TRUE,
-      TRUE ~ distance
-    )
-  ),
-  failed_sites,
-  by = "usgs_site"
-) |>
-dplyr::left_join(
-  counts,
-  by = "usgs_site"
-) |>
-dplyr::left_join(
-  failed_sites_resources$presence_log,
-  by = "usgs_site"
-) |>
-dplyr::left_join(
-largest_distance |>
-  dplyr::distinct(usgs_site, event, distance) |>
-  dplyr::mutate(has_distance = as.integer(!is.na(distance))) |>
-  dplyr::group_by(usgs_site) |>
-  dplyr::summarise(
-    min_has = min(has_distance),
-    max_has = max(has_distance),
-    .groups = "drop"
-  ) |>
-  dplyr::mutate(
-    success = dplyr::case_when(
-      min_has == 0 & max_has == 0 ~ "none",
-      min_has == 1 & max_has == 1 ~ "all",
-      min_has == 0 & max_has == 1 ~ "mixed"
-    )
-  ),
-  by = "usgs_site"
-) |>
-dplyr::arrange(usgs_site) |>
-dplyr::filter(success == "none") |>
-readr::write_csv("/tmp/sans_distances.csv")
-
-
-# helper: get geos (catch, fires, flows, pour) for a site
-get_geos <- function(chem_sites) {
-  catchments_usgs <- sf::st_read(
-    dsn = pg,
-    query = glue::glue_sql(
-      "SELECT * FROM firearea.catchments WHERE usgs_site IN ({ chem_sites* }) ;",
-      .con = DBI::ANSI()
-    ),
-    geometry_column = "geometry"
-  )
-  catchments <- catchments_usgs
-
-  fires_catchments <- sf::st_read(
-    dsn = pg,
-    query = glue::glue_sql(
-      "SELECT * FROM firearea.fires_catchments WHERE usgs_site IN ({ chem_sites* }) ;",
-      .con = DBI::ANSI()
-    ),
-    geometry_column = "geometry"
-  )
-
-  flowlines <- sf::st_read(
-    dsn = pg,
-    query = glue::glue_sql(
-      "SELECT * FROM firearea.flowlines WHERE usgs_site IN ({ chem_sites* }) ;",
-      .con = DBI::ANSI()
-    ),
-    geometry_column = "geometry"
-  )
-
-  pour_points_usgs <- sf::st_read(
-    dsn = pg,
-    query = glue::glue_sql(
-      "SELECT * FROM firearea.pour_points WHERE usgs_site IN ({ chem_sites* }) ;",
-      .con = DBI::ANSI()
-    ),
-    geometry_column = "geometry"
-  )
-  pour_points <- pour_points_usgs
-
-  return(
-    list(
-      catchments = catchments,
-      fires_catchments = fires_catchments,
-      flowlines = flowlines,
-      pour_points = pour_points
-    )
-  )
-
-}
-
-
-# investigate
-
-source("distance_helper_functions.R")
-
-this_site <- get_geos(chem_sites = c("USGS-11060400"))
-
-this_site <- get_geos(chem_sites = c("USGS-08402000"))
-simple_plot(chem_site = "USGS-08402000", interactive = TRUE)
-
-this_site <- get_geos(chem_sites = c("USGS-07110400"))
-simple_plot(chem_site = "USGS-07110400", interactive = TRUE)
-
-this_site <- get_geos(chem_sites = c("USGS-07103990")) # single fire without overlap
-simple_plot(chem_site = "USGS-07103990")
-
-# something is wrong with firearea::calculate_fire_flow_length (source it instead)
-source("~/localRepos/firearea/R/calculate_hydrologic_distance.R")
-
-# this_dist <- firearea::calculate_fire_flow_length(
-#   catchment           = this_site$catchments,
-#   catchment_fire      = this_site$fires_catchments,
-#   catchment_flowlines = this_site$flowlines,
-#   catchment_sampling  = this_site$pour_points
-# )
-
-catchment_fires_distances <- split(
-  x = this_site$fires_catchments,
-  f = this_site$fires_catchments$event_id
-) |>
-  {
-    \(fire) {
-      purrr::map(
-        .x = fire,
-        .f = ~ calculate_fire_flow_length(
-          catchment = this_site$catchments,
-          catchment_fire = .x,
-          catchment_flowlines = this_site$flowlines,
-          catchment_sampling = this_site$pour_points
-        )
-      )
-    }
-  }() |>
-  dplyr::bind_rows()
