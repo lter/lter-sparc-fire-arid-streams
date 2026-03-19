@@ -1,0 +1,8 @@
+"metric","value"
+"cache_file","data_cache/nhdplus_flowlines_so7_bbox.gpkg"
+"streamorder_min","7"
+"bbox_xmin","-121.4674981"
+"bbox_ymin","30.9691002"
+"bbox_xmax","-99.7905737"
+"bbox_ymax","44.8687279"
+"feature_count","14257"

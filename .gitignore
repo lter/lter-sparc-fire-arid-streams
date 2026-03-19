@@ -53,3 +53,6 @@ figures
 # Model fits
 *_template.rds
 *_template_R.rds
+
+# ignore all png files
+*.png
