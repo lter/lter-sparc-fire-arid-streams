@@ -52,7 +52,7 @@ if (length(missing) > 0) {
 }
 
 sf::sf_use_s2(TRUE)
-hydro_streamorder_min <- 7
+hydro_streamorder_min <- 5
 
 catch_path <- "catch.geojson"
 if (!file.exists(catch_path)) stop("Missing catch.geojson")
