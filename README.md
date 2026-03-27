@@ -61,7 +61,7 @@ Curated tables are exported for downstream R and Stan workflows. Model developme
 
 ## Relationship to the firearea Package
 
-This repository is complemented by the firearea R package in the companion repository. firearea provides reusable functions for watershed delineation, fire-perimeter preparation, flowline-buffer operations, and hydrologic-distance calculations that support upstream data preparation and downstream database integration.
+This repository is complemented by the [firearea](https://srearl.gitlab.io/firearea/index.html) R package. `firearea` provides reusable functions for watershed delineation, fire-perimeter preparation, flowline-buffer operations, and hydrologic-distance calculations that support upstream data preparation and downstream database integration.
 
 ## Reproducibility and Execution
 
