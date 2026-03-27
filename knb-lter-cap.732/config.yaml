@@ -1,0 +1,7 @@
+scope: knb-lter-cap
+identifier: 732
+baseURL: https://storage.googleapis.com/asuke-aws-gios-data/datasets/cap/
+project: ltrebProject
+title: 'Quantifying Interactive Effects of Fire and Precipitation Regimes on Catchment Biogeochemistry of Aridlands'
+maintenance: none
+geographic_description: 'Region of the southwestern USA with a median aridity index of 2000 and areas of the Arizona and New Mexico Mountains (ecoregion level III code = 13.1.1)'

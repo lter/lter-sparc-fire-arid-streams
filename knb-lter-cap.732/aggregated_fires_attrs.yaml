@@ -1,0 +1,172 @@
+|
+  usgs_site:
+    attributeName: usgs_site
+    attributeDefinition: 'unique catchment identifier'
+    propertyURI: ''
+    propertyLabel: ''
+    valueURI: ''
+    valueLabel: ''
+    columnClasses: character
+    definition: ''
+  year:
+    attributeName: year
+    attributeDefinition: 'year of fire'
+    propertyURI: ''
+    propertyLabel: ''
+    valueURI: ''
+    valueLabel: ''
+    columnClasses: Date
+    formatString: YYYY
+  start_date:
+    attributeName: start_date
+    attributeDefinition: 'start date of fire or fire period'
+    propertyURI: ''
+    propertyLabel: ''
+    valueURI: ''
+    valueLabel: ''
+    columnClasses: Date
+    formatString: YYYY-MM-DD
+  end_date:
+    attributeName: end_date
+    attributeDefinition: 'end date of fire or fire period'
+    propertyURI: ''
+    propertyLabel: ''
+    valueURI: ''
+    valueLabel: ''
+    columnClasses: Date
+    formatString: YYYY-MM-DD
+  previous_end_date:
+    attributeName: previous_end_date
+    attributeDefinition: 'end date of previous fire period'
+    propertyURI: ''
+    propertyLabel: ''
+    valueURI: ''
+    valueLabel: ''
+    columnClasses: Date
+    formatString: YYYY-MM-DD
+  next_start_date:
+    attributeName: next_start_date
+    attributeDefinition: 'start date of previous fire period'
+    propertyURI: ''
+    propertyLabel: ''
+    valueURI: ''
+    valueLabel: ''
+    columnClasses: Date
+    formatString: YYYY-MM-DD
+  days_since:
+    attributeName: days_since
+    attributeDefinition: 'days since previous fire'
+    propertyURI: ''
+    propertyLabel: ''
+    valueURI: ''
+    valueLabel: ''
+    unit: 'DAY'
+    numberType: natural
+    minimum: 1
+    maximum: 9580
+    columnClasses: numeric
+  days_until:
+    attributeName: days_until
+    attributeDefinition: 'days until next fire'
+    propertyURI: ''
+    propertyLabel: ''
+    valueURI: ''
+    valueLabel: ''
+    unit: 'DAY'
+    numberType: natural
+    minimum: 1
+    maximum: 9580
+    columnClasses: numeric
+  events:
+    attributeName: events
+    attributeDefinition: 'array of MTBS fire event IDs in the fire period'
+    propertyURI: ''
+    propertyLabel: ''
+    valueURI: ''
+    valueLabel: ''
+    columnClasses: character
+    definition: ''
+  cum_fire_area:
+    attributeName: cum_fire_area
+    attributeDefinition: 'cumulative burned area (square kilometers) for the fire period'
+    propertyURI: ''
+    propertyLabel: ''
+    valueURI: ''
+    valueLabel: ''
+    unit: 'KiloM2'
+    numberType: real
+    minimum: 0.0
+    maximum: 3214.42
+    columnClasses: numeric
+  catch_area:
+    attributeName: catch_area
+    attributeDefinition: 'catchment area (square kilometers)'
+    propertyURI: ''
+    propertyLabel: ''
+    valueURI: ''
+    valueLabel: ''
+    unit: 'KiloM2'
+    numberType: real
+    minimum: 0.13
+    maximum: 113316.77
+    columnClasses: numeric
+  cum_per_cent_burned:
+    attributeName: cum_per_cent_burned
+    attributeDefinition: 'cumulative percent of catchment burned'
+    propertyURI: ''
+    propertyLabel: ''
+    valueURI: ''
+    valueLabel: ''
+    unit: 'PERCENT'
+    numberType: real
+    minimum: 0.0
+    maximum: 100.0
+    columnClasses: numeric
+  all_fire_area:
+    attributeName: all_fire_area
+    attributeDefinition: 'total burned area (square kilometers) in catchment through end_date'
+    propertyURI: ''
+    propertyLabel: ''
+    valueURI: ''
+    valueLabel: ''
+    unit: 'KiloM2'
+    numberType: real
+    minimum: 0.0
+    maximum: 18302.99
+    columnClasses: numeric
+  all_per_cent_burned:
+    attributeName: all_per_cent_burned
+    attributeDefinition: 'percent of total catchment burned through end_date'
+    propertyURI: ''
+    propertyLabel: ''
+    valueURI: ''
+    valueLabel: ''
+    unit: 'PERCENT'
+    numberType: real
+    minimum: 0.0
+    maximum: 240.81
+    columnClasses: numeric
+  latitude:
+    attributeName: latitude
+    attributeDefinition: 'catchment centroid latitude'
+    propertyURI: ''
+    propertyLabel: ''
+    valueURI: ''
+    valueLabel: ''
+    unit: 'DEG'
+    numberType: real
+    minimum: 31.1928682
+    maximum: 43.811308
+    columnClasses: numeric
+  longitude:
+    attributeName: longitude
+    attributeDefinition: 'catchment centroid longitude'
+    propertyURI: ''
+    propertyLabel: ''
+    valueURI: ''
+    valueLabel: ''
+    unit: 'DEG'
+    numberType: real
+    minimum: -120.6722719
+    maximum: -100.2453495
+    columnClasses: numeric

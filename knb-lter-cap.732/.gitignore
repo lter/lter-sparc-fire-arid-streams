@@ -1,0 +1,3 @@
+# Ignore CSV and XML files in this directory and all subfolders
+*.csv
+*.xml

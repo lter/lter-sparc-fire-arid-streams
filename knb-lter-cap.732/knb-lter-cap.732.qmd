@@ -1,0 +1,101 @@
+---
+title: "capeml template"
+author: "information manager"
+date: Sys.Date()
+---
+
+```{r}
+#| eval: FALSE
+#| label: metadata
+
+readxl::read_excel(
+  path  = "*.xlsx",
+  sheet = "attributes"
+) |>
+  readr::write_csv("attributes.csv")
+
+readxl::read_excel(
+  path  = "*.xlsx",
+  sheet = "attribute_codes"
+) |>
+  readr::write_csv("attribute_codes.csv")
+
+readxl::read_excel(
+  path  = "*.xlsx",
+  sheet = "dataset"
+) |>
+  readr::write_csv("dataset.csv")
+
+readxl::read_excel(
+  path  = "*.xlsx",
+  sheet = "data_entities"
+) |>
+  readr::write_csv("data_entities.csv")
+
+```
+
+
+```{r}
+#| eval: TRUE
+#| label: ranges_agg
+
+aggregated_fires <- DBI::dbGetQuery(
+  conn = pg,
+  statement = "select * from firearea.ranges_agg ;"
+)
+
+# dplyr::mutate(
+#   Project = as.character(Project),
+#   LandUse = as.factor(LandUse),
+#   Site = as.factor(Site)
+# )
+
+try({
+  capeml::write_attributes(aggregated_fires, overwrite = FALSE)
+  capeml::write_factors(aggregated_fires, overwrite = FALSE)
+})
+
+```
+
+
+
+```{r}
+#| eval: TRUE
+#| label: coverages
+
+coverage <- EML::set_coverage(
+  begin                 = "1984-05-29",
+  end                   = "2020-11-17",
+  geographicDescription = capeml::read_package_configuration()[["geographic_description"]],
+  west                  = -120.91514095561378,
+  east                  = -99.95344612993489,
+  north                 = 44.687669062352164,
+  south                 = 31.262677258748568
+)
+
+```
+
+
+```{r}
+#| eval: TRUE
+#| label: build
+
+devtools::load_all("~/localRepos/capeml")
+
+dataset <- capeml::create_dataset()
+eml     <- capeml::create_eml()
+
+EML::eml_validate(eml)
+capeml::write_cap_eml()
+
+source("~/Documents/localSettings/edi.R")
+capeml::get_package_evaluation(full_report = FALSE)
+
+# report <- capeml::get_package_evaluation(full_report = TRUE)
+# xml2::write_xml(report, "/tmp/report.xml")
+
+capeml::create_package(environment = "staging")
+
+EDIutils::logout()
+```
+

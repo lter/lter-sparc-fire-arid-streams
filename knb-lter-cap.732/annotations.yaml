@@ -1,0 +1,36 @@
+- name: PERCENT
+  valueLabel: Percent
+  valueURI: http://qudt.org/vocab/unit/PERCENT
+  references: 8d2b86c89110b35f5e9528e6ab35a42f_12
+  propertyLabel: has unit
+  propertyURI: http://qudt.org/schema/qudt/hasUnit
+- name: PERCENT
+  valueLabel: Percent
+  valueURI: http://qudt.org/vocab/unit/PERCENT
+  references: 8d2b86c89110b35f5e9528e6ab35a42f_14
+  propertyLabel: has unit
+  propertyURI: http://qudt.org/schema/qudt/hasUnit
+- name: DEG
+  valueLabel: Degree
+  valueURI: http://qudt.org/vocab/unit/DEG
+  references: 8d2b86c89110b35f5e9528e6ab35a42f_15
+  propertyLabel: has unit
+  propertyURI: http://qudt.org/schema/qudt/hasUnit
+- name: DEG
+  valueLabel: Degree
+  valueURI: http://qudt.org/vocab/unit/DEG
+  references: 8d2b86c89110b35f5e9528e6ab35a42f_16
+  propertyLabel: has unit
+  propertyURI: http://qudt.org/schema/qudt/hasUnit
+- name: DAY
+  valueLabel: Day
+  valueURI: http://qudt.org/vocab/unit/DAY
+  references: 8d2b86c89110b35f5e9528e6ab35a42f_7
+  propertyLabel: has unit
+  propertyURI: http://qudt.org/schema/qudt/hasUnit
+- name: DAY
+  valueLabel: Day
+  valueURI: http://qudt.org/vocab/unit/DAY
+  references: 8d2b86c89110b35f5e9528e6ab35a42f_8
+  propertyLabel: has unit
+  propertyURI: http://qudt.org/schema/qudt/hasUnit

@@ -1,0 +1,9 @@
+aggregated_fires:
+  type: table
+  dfname: aggregated_fires
+  description: 'Range statistics calculated separately on summer and non-summer fires. Pre-processing includes filtering fires smaller than a certain percent of the catchment burned (0.00). Summer fires are defined as fires occurring DOY 110 through 250. For summer fires, the interval between the previous fire and latest fire are from the earliest fire in the summer period and latest fire in the summer period.'
+  dateRangeField: "start_date"
+  overwrite: TRUE
+  projectNaming: FALSE
+  missingValueCode: ~
+  additional_information: ~
