@@ -93,3 +93,6 @@ FROM usgs_discharge_daily
 WHERE usgs_site='USGS-09406000'
   AND parameter_code='00060'
   AND statistic_id='00003';
+
+-- Site USGS-09510200 import is maintained in a dedicated script:
+-- lter-sparc-fire-arid-streams/hydrologic_variability/usgs_manual_import_09510200.sql

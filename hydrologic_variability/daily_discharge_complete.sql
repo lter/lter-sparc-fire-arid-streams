@@ -13,8 +13,7 @@ dropping and recreation.
 - Idempotency: Uses DROP TABLE IF EXISTS for reproducible rebuilds. The derived
 table enforces UNIQUE(usgs_site, time).
 - Execution:
-  duckdb /home/srearl/desktop/wildfire_discharge.duckdb -c ".read
-  /home/srearl/desktop/sql/daily_discharge_complete.sql"
+  duckdb ~/Desktop/wildfire_discharge.duckdb ".read daily_discharge_complete.sql"
 - verification:
   - count rows: select count(*) from daily_discharge_complete;
   - sample coverage: select usgs_site, min(time), max(time), count(*) from
