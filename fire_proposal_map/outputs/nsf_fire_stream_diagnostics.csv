@@ -4,10 +4,10 @@ catch_bbox_xmin,-121.4674981
 catch_bbox_ymin,30.9691002
 catch_bbox_xmax,-99.7905737
 catch_bbox_ymax,44.8687279
-map_clip_lat,38
+map_clip_lat,38.83
 mtbs_source_path,/home/srearl/Desktop/fire_proposal_map/mtbs_perims_DD.shp
 mtbs_total_features,30730
-mtbs_selected_features,2053
+mtbs_selected_features,2120
 streams_downloaded_features,58698
 streams_selected_features,58698
-clip_area_sqkm,437730.49
+clip_area_sqkm,466904.87

@@ -35,11 +35,23 @@ if (length(missing_pkgs) > 0) {
 
 sf::sf_use_s2(TRUE)
 
-map_crs <- 5070
+map_crs <- 4326
 hydro_streamorder_min <- 5
-map_clip_lat <- suppressWarnings(as.numeric(Sys.getenv("MAP_CLIP_LAT", "38")))
+map_west_lon <- suppressWarnings(as.numeric(Sys.getenv("MAP_WEST_LON", "-124.50")))
+map_east_lon <- suppressWarnings(as.numeric(Sys.getenv("MAP_EAST_LON", "-101.75")))
+map_south_lat <- suppressWarnings(as.numeric(Sys.getenv("MAP_SOUTH_LAT", "31.33")))
+map_north_lat <- suppressWarnings(as.numeric(Sys.getenv("MAP_NORTH_LAT", "38.83")))
+map_right_gutter_frac <- suppressWarnings(as.numeric(Sys.getenv("MAP_RIGHT_GUTTER_FRAC", "0.18")))
+map_clip_lat <- suppressWarnings(as.numeric(Sys.getenv("MAP_CLIP_LAT", as.character(map_north_lat))))
 if (is.na(map_clip_lat)) {
-  map_clip_lat <- 38
+  map_clip_lat <- map_north_lat
+}
+
+if (any(is.na(c(map_west_lon, map_east_lon, map_south_lat, map_north_lat)))) {
+  stop("MAP_* extent environment values must be numeric.")
+}
+if (is.na(map_right_gutter_frac) || map_right_gutter_frac < 0) {
+  map_right_gutter_frac <- 0.18
 }
 
 project_root <- "."
@@ -196,12 +208,16 @@ build_major_cities <- function(clip_mask_5070) {
 
   cities <- maps::us.cities |>
     dplyr::as_tibble() |>
-    dplyr::filter(.data$pop >= 100000) |>
-    dplyr::filter(!.data$name %in% c("Long Beach CA", "Mesa AZ")) |>
+    dplyr::filter(.data$pop >= 300000) |>
+    dplyr::filter(!.data$name %in% c("Long Beach CA", "Mesa AZ", "Santa Ana CA", "Anaheim CA", "Riverside CA")) |>
+    dplyr::filter(
+      !stringr::str_detect(.data$name, "\\sCA$") |
+        .data$name %in% c("Fresno CA", "Los Angeles CA", "San Diego CA")
+    ) |>
     dplyr::transmute(city = .data$name, population = .data$pop, long = .data$long, lat = .data$lat)
 
   cities_sf <- sf::st_as_sf(cities, coords = c("long", "lat"), crs = 4326) |>
-    sf::st_transform(5070)
+    sf::st_transform(map_crs)
 
   inside <- suppressWarnings(sf::st_intersection(cities_sf, clip_bbox))
 
@@ -323,7 +339,6 @@ write_diagnostics <- function(
 }
 
 build_plots <- function(
-  hill_df,
   states,
   fires_clip,
   streams_clip,
@@ -332,26 +347,47 @@ build_plots <- function(
   clip_mask
 ) {
   clip_bbox <- sf::st_bbox(clip_mask)
-  x_pad <- as.numeric((clip_bbox[["xmax"]] - clip_bbox[["xmin"]]) * 0.18)
-  y_pad <- as.numeric((clip_bbox[["ymax"]] - clip_bbox[["ymin"]]) * 0.18)
+  x_span <- as.numeric(clip_bbox[["xmax"]] - clip_bbox[["xmin"]])
+  y_span <- as.numeric(clip_bbox[["ymax"]] - clip_bbox[["ymin"]])
 
   city_label_jigger <- suppressWarnings(as.numeric(Sys.getenv("CITY_LABEL_JIGGER", "1.75")))
   if (is.na(city_label_jigger) || city_label_jigger <= 0) {
     city_label_jigger <- 1.75
   }
 
+  # fonts
+  city_font_size <- suppressWarnings(as.numeric(Sys.getenv("CITY_FONT_SIZE", "4.0")))
+  if (is.na(city_font_size) || city_font_size <= 0) {
+    city_font_size <- 3.0
+  }
+
+  river_font_size <- suppressWarnings(as.numeric(Sys.getenv("RIVER_FONT_SIZE", "4.0")))
+  if (is.na(river_font_size) || river_font_size <= 0) {
+    river_font_size <- 3.0
+  }
+
+  legend_title_size <- suppressWarnings(as.numeric(Sys.getenv("LEGEND_TITLE_SIZE", "16")))
+  if (is.na(legend_title_size) || legend_title_size <= 0) {
+    legend_title_size <- 16
+  }
+
+  legend_text_size <- suppressWarnings(as.numeric(Sys.getenv("LEGEND_TEXT_SIZE", "14")))
+  if (is.na(legend_text_size) || legend_text_size <= 0) {
+    legend_text_size <- 14
+  }
+
   city_offsets <- tibble::tribble(
     ~city, ~label_dx, ~label_dy,
-    "Los Angeles CA", 30000, 12000,
-    "San Diego CA", 29000, 13000,
-    "Phoenix AZ", -45000, 27000,
-    "Tucson AZ", -30000, 25000,
-    "Las Vegas NV", -45000, 22000,
-    "El Paso TX", 24000, 17000,
-    "Albuquerque NM", 25000, 18000,
-    "Denver CO", 18000, 16000,
-    "Colorado Springs CO", 23000, 13000,
-    "Fresno CA", -32000, 18000
+    "Los Angeles CA", 0.30, 0.12,
+    "San Diego CA", 0.29, 0.13,
+    "Phoenix AZ", -0.25, -0.20,
+    "Tucson AZ", -0.05, -0.01,
+    "Las Vegas NV", -0.45, -0.22,
+    "El Paso TX", 0.24, 0.17,
+    "Albuquerque NM", -0.70, 0.18,
+    "Denver CO", 0.18, 0.16,
+    "Colorado Springs CO", 0.18, 0.13,
+    "Fresno CA", -0.30, 0.18
   )
 
   city_labels <- major_cities |>
@@ -364,16 +400,34 @@ build_plots <- function(
     dplyr::mutate(city_rank = dplyr::row_number()) |>
     dplyr::left_join(city_offsets, by = "city") |>
     dplyr::mutate(
-      symbol_jx = ((.data$city_rank - 1) %% 3 - 1) * 7000 * city_label_jigger,
-      symbol_jy = (((.data$city_rank - 1) %% 4) - 1.5) * 5500 * city_label_jigger,
-      symbol_x = .data$x + .data$symbol_jx,
-      symbol_y = .data$y + .data$symbol_jy,
-      label_dx = dplyr::coalesce(.data$label_dx, 30000) * city_label_jigger,
-      label_dy = dplyr::coalesce(.data$label_dy, 32000) * city_label_jigger
+      symbol_jx = ((.data$city_rank - 1) %% 3 - 1) * (x_span * 0.012) * city_label_jigger,
+      symbol_jy = (((.data$city_rank - 1) %% 4) - 1.5) * (y_span * 0.010) * city_label_jigger,
+      symbol_x = .data$x,
+      symbol_y = .data$y,
+      label_dx = dplyr::coalesce(.data$label_dx, 0.30) * city_label_jigger,
+      label_dy = dplyr::coalesce(.data$label_dy, 0.32) * city_label_jigger
     )
 
-  x_limits <- c(clip_bbox[["xmin"]] - x_pad, clip_bbox[["xmax"]] + x_pad)
-  y_limits <- c(clip_bbox[["ymin"]] - y_pad, clip_bbox[["ymax"]] + y_pad)
+  # Lock the map to requested geographic extents while retaining right-side gutter.
+  x_core_limits <- c(map_west_lon, map_east_lon)
+  y_limits <- c(map_south_lat, map_north_lat)
+  x_right_pad <- as.numeric(diff(x_core_limits) * map_right_gutter_frac)
+  x_limits <- c(x_core_limits[[1]], x_core_limits[[2]] + x_right_pad)
+  core_bbox <- sf::st_as_sfc(sf::st_bbox(c(
+    xmin = x_core_limits[[1]],
+    ymin = y_limits[[1]],
+    xmax = x_core_limits[[2]],
+    ymax = y_limits[[2]]
+  ), crs = sf::st_crs(clip_mask)))
+
+  states_plot <- suppressWarnings(sf::st_intersection(states, core_bbox))
+  fires_plot <- suppressWarnings(sf::st_intersection(fires_clip, core_bbox))
+  streams_plot <- suppressWarnings(sf::st_intersection(streams_clip, core_bbox))
+  river_labels_plot <- suppressWarnings(sf::st_intersection(river_labels, core_bbox))
+
+  city_labels <- city_labels |>
+    dplyr::filter(.data$symbol_x <= x_core_limits[[2]], .data$symbol_x >= x_core_limits[[1]])
+
   decade_breaks <- fires_clip |>
     sf::st_drop_geometry() |>
     dplyr::pull(.data$decade) |>
@@ -388,13 +442,13 @@ build_plots <- function(
 
   main_plot <- ggplot2::ggplot() +
     ggplot2::geom_sf(
-      data = states,
+      data = states_plot,
       fill = "grey95",
       color = "grey70",
       linewidth = 0.2
     ) +
     ggplot2::geom_sf(
-      data = fires_clip,
+      data = fires_plot,
       ggplot2::aes(fill = .data$decade),
       color = NA,
       alpha = 0.75
@@ -405,10 +459,19 @@ build_plots <- function(
       na.value = "grey70",
       name = "Fire Decade",
       breaks = decade_breaks,
-      labels = if (is.null(decade_breaks)) ggplot2::waiver() else paste0(decade_breaks, "s")
+      labels = if (is.null(decade_breaks)) {
+        ggplot2::waiver()
+      } else {
+        paste0(decade_breaks, "s")
+      },
+      guide = ggplot2::guide_colorbar(
+        title.position = "top",
+        title.hjust = 0.5,
+        barheight = grid::unit(70, "pt")
+      )
     ) +
     ggplot2::geom_sf(
-      data = streams_clip,
+      data = streams_plot,
       color = "#2b8cbe",
       linewidth = 0.26,
       alpha = 0.9
@@ -444,33 +507,38 @@ build_plots <- function(
       segment.alpha = 0.75,
       segment.size = 0.25,
       color = "#222222",
-      size = 2.8,
-      family = "sans"
+      size = city_font_size,
+      family = "sans",
+      fontface = "bold"
     ) +
     ggplot2::geom_sf_text(
-      data = river_labels,
+      data = river_labels_plot,
       ggplot2::aes(label = .data$gnis_name),
       color = "#08589e",
-      size = 3,
+      size = river_font_size,
       fontface = "bold",
       check_overlap = TRUE
     ) +
     ggspatial::annotation_north_arrow(
-      location = "tl",
+      location = "bl",
       which_north = "true",
       style = ggspatial::north_arrow_orienteering(
         line_col = "black",
         fill = c("white", "black")
       ),
       height = grid::unit(0.8, "cm"),
-      width = grid::unit(0.8, "cm")
+      width = grid::unit(0.8, "cm"),
+      pad_x = grid::unit(0.35, "cm"),
+      pad_y = grid::unit(1.05, "cm")
     ) +
     ggspatial::annotation_scale(
       location = "bl",
       text_col = "black",
       line_col = "black",
       bar_cols = c("grey15", "white"),
-      unit_category = "metric"
+      unit_category = "metric",
+      pad_x = grid::unit(0.35, "cm"),
+      pad_y = grid::unit(0.25, "cm")
     ) +
     ggplot2::coord_sf(xlim = x_limits, ylim = y_limits, expand = FALSE) +
     ggplot2::labs(
@@ -478,13 +546,29 @@ build_plots <- function(
       subtitle = NULL,
       x = NULL,
       y = NULL,
-      caption = "Sources: MTBS, NHDPlus, US Census TIGER/Line, elevatr"
+      caption = NULL
     ) +
     ggplot2::theme_minimal(base_size = 10) +
     ggplot2::theme(
-      panel.grid.major = ggplot2::element_line(color = "grey92", linewidth = 0.2),
+      panel.grid.major = ggplot2::element_line(
+        color = "grey92",
+        linewidth = 0.2
+      ),
       panel.grid.minor = ggplot2::element_blank(),
-      legend.position = "right",
+      # put legend inside panel near right edge
+      # legend.position.inside = c(0.90, 0.30),
+      legend.position = c(0.975, 0.30),
+      legend.justification = c(1, 0.5),
+      # Optional: tighten internal legend spacing
+      # legend.margin = ggplot2::margin(2, 2, 2, 2),
+      # legend.box.margin = ggplot2::margin(0, 0, 0, 0),
+      # legend.position = "right",
+      # legend.title = ggplot2::element_text(size = legend_title_size),
+      legend.title = ggplot2::element_text(
+        size = legend_title_size,
+        margin = ggplot2::margin(b = 8)
+      ),
+      legend.text = ggplot2::element_text(size = legend_text_size),
       axis.title = ggplot2::element_blank(),
       axis.text = ggplot2::element_blank(),
       axis.ticks = ggplot2::element_blank(),
@@ -496,10 +580,10 @@ build_plots <- function(
     dplyr::summarise()
 
   inset_bbox <- sf::st_as_sfc(sf::st_bbox(c(
-    xmin = clip_bbox[["xmin"]],
-    ymin = clip_bbox[["ymin"]],
-    xmax = clip_bbox[["xmax"]],
-    ymax = clip_bbox[["ymax"]]
+    xmin = x_core_limits[[1]],
+    ymin = y_limits[[1]],
+    xmax = x_core_limits[[2]],
+    ymax = y_limits[[2]]
   ), crs = sf::st_crs(clip_mask)))
 
   inset_plot <- ggplot2::ggplot() +
@@ -513,7 +597,8 @@ build_plots <- function(
     )
 
   cowplot::ggdraw(main_plot) +
-    cowplot::draw_plot(inset_plot, x = 0.75, y = 0.60, width = 0.20, height = 0.20)
+    # increase x to move right, increase y to move up
+    cowplot::draw_plot(inset_plot, x = 0.78, y = 0.50, width = 0.20, height = 0.20)
 }
 
 ensure_caches()
@@ -558,7 +643,6 @@ states_5070 <- clipped$states
 
 major_cities <- build_major_cities(clip_mask)
 river_labels <- build_major_river_labels(streams_clip)
-hill_df <- build_hillshade_df(hillshade_cache_path, clip_mask, states_5070)
 
 fire_counts <- build_fire_counts(fires_clip)
 readr::write_csv(fire_counts, file.path(outputs_dir, "fire_counts_by_decade.csv"))
@@ -574,7 +658,6 @@ write_diagnostics(
 )
 
 figure <- build_plots(
-  hill_df = hill_df,
   states = states_5070,
   fires_clip = fires_clip,
   streams_clip = streams_clip,
