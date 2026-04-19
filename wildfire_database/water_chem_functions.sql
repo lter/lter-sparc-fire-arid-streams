@@ -365,7 +365,7 @@ BEGIN
           WHEN btrim(evi.median_post_evi) ~ $re$^[+-]?([0-9]*\.?[0-9]+)([eE][+-]?[0-9]+)?$re$ THEN TRUE
           ELSE FALSE
         END AS is_numeric
-      FROM firearea.evi AS evi
+      FROM covariates.evi AS evi
     ),
     joined AS (
       SELECT
@@ -1342,7 +1342,7 @@ nlcd_ranked AS (
       PARTITION BY nlcd.usgs_site
       ORDER BY nlcd.class_percent DESC, nlcd.class ASC
     ) AS rn
-  FROM firearea.nlcd
+  FROM covariates.nlcd
 ),
 nlcd_largest_class AS (
   SELECT
@@ -1398,7 +1398,7 @@ elev AS (
     elevation.slope_median_deg,
     elevation.slope_min_deg,
     elevation.slope_max_deg
-  FROM firearea.elevation
+  FROM covariates.elevation
   ORDER BY elevation.usgs_site
 ),
 evi AS (
