@@ -1315,6 +1315,25 @@ BEGIN
     RETURN FORMAT('ERROR: Missing EVI materialized view firearea.%s', evi_table);
   END IF;
 
+  -- Guard: one row per (usgs_site, fire_classification) required before pivot
+  IF EXISTS (
+    SELECT 1
+    FROM covariates.fire_classifications
+    GROUP BY usgs_site, fire_classification
+    HAVING COUNT(*) > 1
+  ) THEN
+    RETURN 'ERROR: covariates.fire_classifications has duplicate (usgs_site, fire_classification) rows; expected one row per pair.';
+  END IF;
+
+  -- Guard: only expected fire classification labels are supported in pivot
+  IF EXISTS (
+    SELECT 1
+    FROM covariates.fire_classifications
+    WHERE fire_classification NOT IN ('return_interval', 'regime_group', 'veg_departure', 'fire_risk')
+  ) THEN
+    RETURN 'ERROR: covariates.fire_classifications has unexpected fire_classification values.';
+  END IF;
+
   -- Build analyte-flexible query
   sql := FORMAT($Q$
 WITH base AS (
@@ -1401,6 +1420,16 @@ elev AS (
   FROM covariates.elevation
   ORDER BY elevation.usgs_site
 ),
+fire_classifications_pivot AS (
+  SELECT
+    fire_classifications.usgs_site,
+    MAX(CASE WHEN fire_classifications.fire_classification = 'return_interval' THEN fire_classifications.classification_value END) AS return_interval,
+    MAX(CASE WHEN fire_classifications.fire_classification = 'regime_group' THEN fire_classifications.classification_value END) AS regime_group,
+    MAX(CASE WHEN fire_classifications.fire_classification = 'veg_departure' THEN fire_classifications.classification_value END) AS veg_departure,
+    MAX(CASE WHEN fire_classifications.fire_classification = 'fire_risk' THEN fire_classifications.classification_value END) AS fire_risk
+  FROM covariates.fire_classifications
+  GROUP BY fire_classifications.usgs_site
+),
 evi AS (
   SELECT DISTINCT ON (%2$I.usgs_site, %2$I.events)
     %2$I.usgs_site,
@@ -1440,6 +1469,10 @@ SELECT
   elev.slope_min_deg,
   elev.slope_max_deg,
   nlcd_largest_class.value AS lulc,
+  fire_classifications_pivot.return_interval,
+  fire_classifications_pivot.regime_group,
+  fire_classifications_pivot.veg_departure,
+  fire_classifications_pivot.fire_risk,
   evi.avg_median_post_evi,
   ranges.events
 FROM base
@@ -1454,6 +1487,8 @@ LEFT JOIN elev
   ON base.usgs_site = elev.usgs_site
 LEFT JOIN nlcd_largest_class
   ON base.usgs_site = nlcd_largest_class.usgs_site
+LEFT JOIN fire_classifications_pivot
+  ON base.usgs_site = fire_classifications_pivot.usgs_site
 LEFT JOIN evi
   ON base.usgs_site = evi.usgs_site
   AND ranges.events = evi.events

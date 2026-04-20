@@ -365,6 +365,17 @@ DBI::dbExecute(
   )
 
 
+# ------------------------------------------------------------------------------
+
+# I did not realize that I had already addressed all of the needed tasks in the
+# above work so redid all of it, albeit with a more modular approach for the
+# fire regime covariates. The above code is still valid and can be used as is,
+# but the below functions provide a more reusable and standardized way to read
+# and process the catchment fire regime covariate CSVs, and then consolidate
+# them into a single table for database export.
+
+# ------------------------------------------------------------------------------
+
 #' @title Read Catchment Fire Risk Mean
 #'
 #' @description Read and standardize catchment fire risk values from
