@@ -56,3 +56,5 @@ figures
 
 # ignore all png files
 *.png
+
+hydrologic_variability/data/
