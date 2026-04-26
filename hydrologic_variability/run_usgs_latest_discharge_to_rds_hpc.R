@@ -7,6 +7,19 @@
 
 options(repos = c(CRAN = "https://cloud.r-project.org"))
 
+configure_user_library <- function() {
+  r_ver <- paste0(R.version$major, ".", strsplit(R.version$minor, "\\.")[[1]][1])
+  user_lib <- Sys.getenv(
+    "R_LIBS_USER",
+    unset = file.path(Sys.getenv("HOME"), "R", paste0("library-", r_ver))
+  )
+
+  dir.create(user_lib, recursive = TRUE, showWarnings = FALSE)
+  .libPaths(unique(c(normalizePath(user_lib, mustWork = FALSE), .libPaths())))
+
+  message("Using R user library: ", .libPaths()[1])
+}
+
 required_packages <- c(
   "dataRetrieval",
   "dplyr",
@@ -20,7 +33,7 @@ required_packages <- c(
 install_if_missing <- function(pkgs) {
   missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
   if (length(missing) > 0L) {
-    install.packages(missing, dependencies = TRUE)
+    install.packages(missing, dependencies = TRUE, lib = .libPaths()[1])
   }
 }
 
@@ -34,6 +47,7 @@ get_script_dir <- function() {
   normalizePath(getwd(), mustWork = TRUE)
 }
 
+configure_user_library()
 install_if_missing(required_packages)
 
 script_dir <- get_script_dir()
