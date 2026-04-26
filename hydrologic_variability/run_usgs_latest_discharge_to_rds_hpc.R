@@ -42,32 +42,9 @@ source(workflow_file)
 
 sites_resource_path <- fs::path(script_dir, "data", "usgs_latest_discharge_sites.csv")
 
-# Optional output override via environment variable on HPC.
-# If unset, defaults from usgs_latest_discharge_to_rds.R are used.
-output_dir_env <- Sys.getenv("USGS_OUTPUT_DIR", unset = "")
-
-if (nzchar(output_dir_env)) {
-  output_rds_path <- fs::path(output_dir_env, "usgs_discharge_daily.rds")
-  log_csv_path <- fs::path(output_dir_env, "usgs_discharge_daily_log.csv")
-  duplicates_csv_path <- fs::path(output_dir_env, "usgs_discharge_daily_duplicates.csv")
-  checkpoint_csv_path <- fs::path(output_dir_env, "usgs_discharge_daily_checkpoint.csv")
-  per_site_dir <- fs::path(output_dir_env, "usgs_discharge_daily_by_site")
-
-  run_usgs_to_rds(
-    sites_resource_path = sites_resource_path,
-    output_rds_path = output_rds_path,
-    log_csv_path = log_csv_path,
-    duplicates_csv_path = duplicates_csv_path,
-    checkpoint_csv_path = checkpoint_csv_path,
-    per_site_dir = per_site_dir,
-    resume_from_checkpoint = TRUE,
-    verbose_api_messages = TRUE
-  )
-} else {
-  run_usgs_to_rds(
-    sites_resource_path = sites_resource_path,
-    resume_from_checkpoint = TRUE,
-    verbose_api_messages = TRUE
-  )
-}
+run_usgs_to_rds(
+  sites_resource_path = sites_resource_path,
+  resume_from_checkpoint = TRUE,
+  verbose_api_messages = TRUE
+)
 

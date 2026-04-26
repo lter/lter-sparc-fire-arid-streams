@@ -13,10 +13,8 @@ set -euo pipefail
 # Run from submission directory
 cd "$SLURM_SUBMIT_DIR"
 
-# Optional: load an R module if your cluster requires it
-# module load R
-
-# Optional: override output location on HPC scratch/storage
-# export USGS_OUTPUT_DIR="/path/to/output"
+module purge
+module load mamba/latest
+module load r-4.5.1-gcc-12.1.0
 
 Rscript run_usgs_latest_discharge_to_rds_hpc.R
