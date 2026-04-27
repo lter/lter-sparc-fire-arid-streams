@@ -79,6 +79,26 @@ run_usgs_to_rds(
   verbose_api_messages = TRUE
 )
 ```
+---
+
+## Santa Barbara source data
+
+ ```sql
+ sbc.csv derived from exiting data in wildfire database sensu:
+ \COPY (
+ SELECT *
+ FROM firearea.discharge
+ WHERE usgs_site IN (
+   'sbc_lter_mis',
+   'sbc_lter_rat',
+   'sbc_lter_bel',
+   'sbc_lter_gav',
+   'sbc_lter_ref',
+   'sbc_lter_hon'
+ )
+ ) to '/tmp/sbc.csv' with csv header ;
+
+```
 
 ---
 
@@ -177,6 +197,50 @@ combine_site_rds_to_single(
 ```
 
 This reads all `*.rds` files in the per-site directory, row-binds them, and writes a single consolidated RDS file.
+
+---
+
+## Merge Additional Sites Into Aggregated RDS
+
+Script: `merge_additional_sites_to_rds.R`
+
+### Purpose
+Integrates three supplemental source files into the baseline aggregated
+discharge RDS, projecting everything to a reduced 3-column schema
+(`usgs_site`, `time`, `value`) and writing a new dated output file.
+
+### Sources
+| File | Site(s) | Mapping |
+|------|---------|---------|
+| `data/sbc.csv` | `sbc_lter_bel`, `sbc_lter_gav`, `sbc_lter_hon`, `sbc_lter_mis`, `sbc_lter_rat`, `sbc_lter_ref` | `usgs_site` → `usgs_site`, `Date` → `time`, `Flow` → `value` |
+| `data/usgs_09406000.tab` | `USGS-09406000` | `datetime` → `time`, discharge column matching `00060_00003` → `value` |
+| `data/usgs_09510200.csv` | `USGS-09510200` | `monitoring_location_id` → `usgs_site`, `time` → `time`, `value` → `value` |
+
+### How it works
+1. Each source is parsed by a dedicated function, projected to
+   `usgs_site`/`time`/`value`, and validated (correct types, no missing keys).
+2. The baseline RDS is read and projected to the same 3 columns.
+3. An anti-join keeps only new keys (`usgs_site` + `time`) from the
+   supplemental sources; baseline rows always take precedence.
+4. A new dated RDS (e.g. `usgs_merged_20260427.rds`) is written — the
+   existing baseline is never overwritten.
+
+### Running
+```r
+source("merge_additional_sites_to_rds.R")
+
+out <- run_merge(
+  baseline_rds_path = "/home/srearl/Desktop/rds/usgs_20260427.rds",
+  output_dir        = "/home/srearl/Desktop/rds"
+)
+
+# Spot-check selected sites
+spot_check(out)
+```
+
+### To rerun with a different baseline
+Update `BASELINE_RDS_PATH` at the top of the script, or pass the path
+directly to `run_merge(baseline_rds_path = "...")`.
 
 ---
 
