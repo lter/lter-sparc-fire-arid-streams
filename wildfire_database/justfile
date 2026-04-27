@@ -25,6 +25,19 @@ docs QMD_FILE:
     @echo "📚 Generating documentation for {{QMD_FILE}}..."
     quarto render {{QMD_FILE}} --to gfm
 
+# Generate markdown docs from canonical SQL (recommended)
+docs-sql SQL_FILE:
+    @echo "📚 Generating markdown from {{SQL_FILE}}..."
+    python3 generate_md_from_sql.py {{SQL_FILE}}
+
+# Canonical SQL workflow: qmd -> sql -> md
+sync QMD_FILE:
+    @echo "📖 Extracting SQL from {{QMD_FILE}}..."
+    python3 extract_sql.py {{QMD_FILE}}
+    @echo "📚 Generating markdown from extracted SQL..."
+    python3 generate_md_from_sql.py {{replace(QMD_FILE, '.qmd', '.sql')}}
+    @echo "✅ Synced SQL and Markdown from {{QMD_FILE}}"
+
 # Complete workflow: extract, execute, and generate docs
 all QMD_FILE: (run QMD_FILE) (docs QMD_FILE)
     @echo "🎉 Complete workflow finished for {{QMD_FILE}}!"

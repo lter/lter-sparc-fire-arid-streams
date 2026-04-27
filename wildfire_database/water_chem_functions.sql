@@ -315,6 +315,8 @@ AS $$
 DECLARE
   mv_name TEXT;
   lf_mv_name TEXT;
+  strict_issue_count INTEGER;
+  zero_weight_count INTEGER;
   result_msg TEXT;
 BEGIN
   -- Resolve target MV and dependency names deterministically
@@ -332,6 +334,184 @@ BEGIN
 
   -- Drop target MV and indexes if present
   EXECUTE format('DROP MATERIALIZED VIEW IF EXISTS firearea.%I CASCADE', mv_name);
+
+  -- Strict quality check: grouped event sets cannot contain missing/non-numeric EVI
+  EXECUTE format($chk$
+    WITH lf AS (
+      SELECT
+        usgs_site,
+        events,
+        year,
+        start_date,
+        end_date
+      FROM firearea.%I
+    ),
+    lf_events AS (
+      SELECT
+        usgs_site,
+        year,
+        start_date,
+        end_date,
+        ARRAY(SELECT unnest(events) ORDER BY 1) AS events_sorted,
+        cardinality(events) AS event_count
+      FROM lf
+    ),
+    expanded_events AS (
+      SELECT
+        l.usgs_site,
+        l.year,
+        l.start_date,
+        l.end_date,
+        l.events_sorted,
+        l.event_count,
+        unnest(l.events_sorted) AS event_id
+      FROM lf_events AS l
+    ),
+    evi_validated AS (
+      SELECT
+        evi.usgs_site,
+        evi.event_id,
+        btrim(evi.median_post_evi) AS median_post_evi_trim,
+        CASE
+          WHEN btrim(evi.median_post_evi) IS NULL OR btrim(evi.median_post_evi) = '' THEN FALSE
+          WHEN btrim(evi.median_post_evi) ~ $re$^[+-]?([0-9]*\.?[0-9]+)([eE][+-]?[0-9]+)?$re$ THEN TRUE
+          ELSE FALSE
+        END AS is_numeric
+      FROM covariates.evi AS evi
+    ),
+    evi_weights AS (
+      SELECT
+        fc.usgs_site,
+        fc.event_id,
+        SUM((ST_Area(fc.geometry, TRUE) / 1000000.0)::DOUBLE PRECISION) AS fire_catch_area_km2
+      FROM firearea.fires_catchments AS fc
+      GROUP BY fc.usgs_site, fc.event_id
+    ),
+    joined AS (
+      SELECT
+        ex.usgs_site,
+        ex.year,
+        ex.start_date,
+        ex.end_date,
+        ex.events_sorted,
+        ex.event_count,
+        ex.event_id,
+        ev.median_post_evi_trim,
+        ev.is_numeric,
+        ew.fire_catch_area_km2
+      FROM expanded_events AS ex
+      LEFT JOIN evi_validated AS ev
+        ON ev.usgs_site = ex.usgs_site
+       AND ev.event_id = ex.event_id
+      LEFT JOIN evi_weights AS ew
+        ON ew.usgs_site = ex.usgs_site
+       AND ew.event_id = ex.event_id
+    ),
+    per_group AS (
+      SELECT
+        usgs_site,
+        year,
+        start_date,
+        end_date,
+        events_sorted AS events,
+        event_count,
+        COUNT(*) FILTER (WHERE is_numeric) AS numeric_count,
+        COUNT(*) FILTER (WHERE is_numeric IS DISTINCT FROM TRUE) AS bad_or_missing_count,
+        SUM(fire_catch_area_km2) AS total_event_area_km2
+      FROM joined
+      GROUP BY usgs_site, year, start_date, end_date, events_sorted, event_count
+    )
+    SELECT COUNT(*)
+    FROM per_group
+    WHERE event_count > 1
+      AND bad_or_missing_count > 0;
+  $chk$, lf_mv_name)
+  INTO strict_issue_count;
+
+  IF strict_issue_count > 0 THEN
+    RAISE EXCEPTION
+      'Strict EVI quality check failed for analyte %: % grouped event set(s) have missing/non-numeric median_post_evi.',
+      analyte, strict_issue_count;
+  END IF;
+
+  -- Strict quality check: grouped event sets must have positive total weight
+  EXECUTE format($chk$
+    WITH lf AS (
+      SELECT
+        usgs_site,
+        events,
+        year,
+        start_date,
+        end_date
+      FROM firearea.%I
+    ),
+    lf_events AS (
+      SELECT
+        usgs_site,
+        year,
+        start_date,
+        end_date,
+        ARRAY(SELECT unnest(events) ORDER BY 1) AS events_sorted,
+        cardinality(events) AS event_count
+      FROM lf
+    ),
+    expanded_events AS (
+      SELECT
+        l.usgs_site,
+        l.year,
+        l.start_date,
+        l.end_date,
+        l.events_sorted,
+        l.event_count,
+        unnest(l.events_sorted) AS event_id
+      FROM lf_events AS l
+    ),
+    evi_weights AS (
+      SELECT
+        fc.usgs_site,
+        fc.event_id,
+        SUM((ST_Area(fc.geometry, TRUE) / 1000000.0)::DOUBLE PRECISION) AS fire_catch_area_km2
+      FROM firearea.fires_catchments AS fc
+      GROUP BY fc.usgs_site, fc.event_id
+    ),
+    joined AS (
+      SELECT
+        ex.usgs_site,
+        ex.year,
+        ex.start_date,
+        ex.end_date,
+        ex.events_sorted,
+        ex.event_count,
+        ex.event_id,
+        ew.fire_catch_area_km2
+      FROM expanded_events AS ex
+      LEFT JOIN evi_weights AS ew
+        ON ew.usgs_site = ex.usgs_site
+       AND ew.event_id = ex.event_id
+    ),
+    per_group AS (
+      SELECT
+        usgs_site,
+        year,
+        start_date,
+        end_date,
+        events_sorted AS events,
+        event_count,
+        SUM(fire_catch_area_km2) AS total_event_area_km2
+      FROM joined
+      GROUP BY usgs_site, year, start_date, end_date, events_sorted, event_count
+    )
+    SELECT COUNT(*)
+    FROM per_group
+    WHERE COALESCE(total_event_area_km2, 0.0) <= 0.0;
+  $chk$, lf_mv_name)
+  INTO zero_weight_count;
+
+  IF zero_weight_count > 0 THEN
+    RAISE EXCEPTION
+      'Strict EVI weight check failed for analyte %: % grouped event set(s) have NULL/zero total fire-area weight.',
+      analyte, zero_weight_count;
+  END IF;
 
   -- Create MV: join EVI to largest valid fire event sets for the analyte
   EXECUTE format($fmt$ 
@@ -355,6 +535,17 @@ BEGIN
         cardinality(events) AS event_count
       FROM lf
     ),
+    expanded_events AS (
+      SELECT
+        l.usgs_site,
+        l.year,
+        l.start_date,
+        l.end_date,
+        l.events_sorted,
+        l.event_count,
+        unnest(l.events_sorted) AS event_id
+      FROM lf_events AS l
+    ),
     evi_validated AS (
       SELECT
         evi.usgs_site,
@@ -367,21 +558,33 @@ BEGIN
         END AS is_numeric
       FROM covariates.evi AS evi
     ),
+    evi_weights AS (
+      SELECT
+        fc.usgs_site,
+        fc.event_id,
+        SUM((ST_Area(fc.geometry, TRUE) / 1000000.0)::DOUBLE PRECISION) AS fire_catch_area_km2
+      FROM firearea.fires_catchments AS fc
+      GROUP BY fc.usgs_site, fc.event_id
+    ),
     joined AS (
       SELECT
-        l.usgs_site,
-        l.year,
-        l.start_date,
-        l.end_date,
-        l.events_sorted,
-        l.event_count,
-        ev.event_id,
+        ex.usgs_site,
+        ex.year,
+        ex.start_date,
+        ex.end_date,
+        ex.events_sorted,
+        ex.event_count,
+        ex.event_id,
         ev.median_post_evi_trim,
-        ev.is_numeric
-      FROM lf_events AS l
-      JOIN evi_validated AS ev
-        ON ev.usgs_site = l.usgs_site
-       AND ev.event_id = ANY(l.events_sorted)
+        ev.is_numeric,
+        ew.fire_catch_area_km2
+      FROM expanded_events AS ex
+      LEFT JOIN evi_validated AS ev
+        ON ev.usgs_site = ex.usgs_site
+       AND ev.event_id = ex.event_id
+      LEFT JOIN evi_weights AS ew
+        ON ew.usgs_site = ex.usgs_site
+       AND ew.event_id = ex.event_id
     ),
     per_group AS (
       SELECT
@@ -392,8 +595,12 @@ BEGIN
         events_sorted AS events,
         event_count,
         COUNT(*) FILTER (WHERE is_numeric) AS numeric_count,
-        COUNT(*) FILTER (WHERE NOT is_numeric OR median_post_evi_trim IS NULL OR median_post_evi_trim = '') AS bad_or_missing_count,
-        AVG(median_post_evi_trim::DOUBLE PRECISION) FILTER (WHERE is_numeric) AS avg_median_post_evi
+        COUNT(*) FILTER (WHERE is_numeric IS DISTINCT FROM TRUE) AS bad_or_missing_count,
+        SUM(fire_catch_area_km2) FILTER (WHERE is_numeric) AS valid_event_area_km2,
+        SUM(fire_catch_area_km2) AS total_event_area_km2,
+        SUM((median_post_evi_trim::DOUBLE PRECISION) * fire_catch_area_km2)
+          FILTER (WHERE is_numeric)
+          / NULLIF(SUM(fire_catch_area_km2) FILTER (WHERE is_numeric), 0.0) AS avg_median_post_evi
       FROM joined
       GROUP BY usgs_site, year, start_date, end_date, events_sorted, event_count
     )
@@ -404,7 +611,8 @@ BEGIN
       start_date,
       end_date,
       avg_median_post_evi,
-      (bad_or_missing_count > 0 AND bad_or_missing_count <> event_count) OR (bad_or_missing_count = event_count) AS has_missing_evi,
+      valid_event_area_km2 / NULLIF(total_event_area_km2, 0.0) AS evi_weight_coverage,
+      bad_or_missing_count > 0 AS has_missing_evi,
       (bad_or_missing_count > 0 AND numeric_count > 0) AS has_bad_data
     FROM per_group
     ORDER BY usgs_site, start_date, end_date;
@@ -1434,7 +1642,8 @@ evi AS (
   SELECT DISTINCT ON (%2$I.usgs_site, %2$I.events)
     %2$I.usgs_site,
     %2$I.events,
-    %2$I.avg_median_post_evi
+    %2$I.avg_median_post_evi,
+    %2$I.evi_weight_coverage
   FROM firearea.%2$I
   ORDER BY %2$I.usgs_site, %2$I.events
 )
@@ -1474,6 +1683,7 @@ SELECT
   fire_classifications_pivot.veg_departure,
   fire_classifications_pivot.fire_risk,
   evi.avg_median_post_evi,
+  evi.evi_weight_coverage,
   ranges.events
 FROM base
 LEFT JOIN ecoregion
