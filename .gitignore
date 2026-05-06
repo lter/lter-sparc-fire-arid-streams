@@ -58,3 +58,4 @@ figures
 *.png
 
 hydrologic_variability/data/
+.positai
