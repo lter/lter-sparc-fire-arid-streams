@@ -63,7 +63,7 @@ stepwise steps 1-4 from above in a single function)
 ## fn. view: usgs_water_chem_std (std chem)
 
 ```{sql}
-#| eval: FALSE
+--| eval: FALSE
 
 CREATE OR REPLACE FUNCTION firearea.rebuild_usgs_water_chem_std()
 RETURNS TEXT
@@ -132,7 +132,7 @@ from from both the USGS and non-USGS data sources.
 Convert NEON and SBC data (micromoles) to `mg NO3-N / L`.
 
 ```{sql}
-#| eval: FALSE
+--| eval: FALSE
 
 CREATE OR REPLACE FUNCTION firearea.create_nitrate_view()
 RETURNS TEXT
@@ -207,7 +207,7 @@ from from both the USGS and non-USGS data sources.
 Convert NEON and SBC data (micromoles) to `mg NH4-N / L`.
 
 ```{sql}
-#| eval: FALSE
+--| eval: FALSE
 
 CREATE OR REPLACE FUNCTION firearea.create_ammonium_view()
 RETURNS TEXT
@@ -278,7 +278,7 @@ Create a view of standardized (forms, units) specific conductance that
 reflects data from from both the USGS and non-USGS data sources.
 
 ```{sql}
-#| eval: FALSE
+--| eval: FALSE
 
 CREATE OR REPLACE FUNCTION firearea.create_spcond_view()
 RETURNS TEXT
@@ -345,7 +345,7 @@ reflects data from from both the USGS and non-USGS data sources.
 Convert SBC data (micromoles) to `mg PO4-P / L`.
 
 ```{sql}
-#| eval: FALSE
+--| eval: FALSE
 
 CREATE OR REPLACE FUNCTION firearea.create_orthop_view()
 RETURNS TEXT
@@ -428,7 +428,7 @@ Join post-fire EVI to the largest valid fire event set per site for any analyte.
   - Adds indexes on `usgs_site` and `start_date` for common filtering
 
 ```{sql}
-#| eval: FALSE
+--| eval: FALSE
 
 CREATE OR REPLACE FUNCTION firearea.create_evi_join_largest_analyte_mv(analyte TEXT)
 RETURNS TEXT
@@ -765,7 +765,7 @@ $$;
 ## fn. view: usgs_water_chem_std AND dependencies
 
 ```{sql}
-#| eval: FALSE
+--| eval: FALSE
 
 CREATE OR REPLACE FUNCTION firearea.rebuild_usgs_water_chem_std_and_dependencies()
 RETURNS TEXT
@@ -905,7 +905,7 @@ The number of observations reflects observations for which there is also a
 discharge measurement.
 
 ```{sql}
-#| eval: FALSE
+--| eval: FALSE
 
 CREATE OR REPLACE FUNCTION firearea.create_analyte_counts_view(analyte_name TEXT)
 RETURNS TEXT
@@ -1061,7 +1061,7 @@ technical notes:
   data.
 
 ```{sql}
-#| eval: FALSE
+--| eval: FALSE
 
 CREATE OR REPLACE FUNCTION firearea.create_largest_analyte_valid_fire_per_site_mv(analyte_name TEXT)
 RETURNS TEXT
@@ -1207,7 +1207,7 @@ output columns:
 | count_after_end     | Number of analyte observations after fire window      |
 
 ```{sql}
-#| eval: FALSE
+--| eval: FALSE
 
 -- DROP FUNCTION IF EXISTS firearea.export_analyte_summary_all_sites(TEXT);
 -- DROP FUNCTION IF EXISTS firearea.export_analyte_summary_all_sites(TEXT, TEXT);
@@ -1332,7 +1332,7 @@ output columns:
 | longitude           | Catchment centroid longitude                          |
 
 ```{sql}
-#| eval: FALSE
+--| eval: FALSE
 
 CREATE OR REPLACE FUNCTION firearea.export_analyte_largest_fire_sites(analyte_name TEXT, file_path TEXT DEFAULT NULL)
 RETURNS TEXT
@@ -1460,7 +1460,7 @@ The query result is saved as:
 `{analyte}_discharge_data_filtered_quartiles_234.csv`
 
 ```{sql}
-#| eval: FALSE
+--| eval: FALSE
 
 CREATE OR REPLACE FUNCTION firearea.export_analyte_q_pre_post_quartiles(analyte_name TEXT, file_path TEXT DEFAULT NULL)
 RETURNS TEXT
@@ -1676,7 +1676,7 @@ function context:
 - was formerly exported with query result saved as: `{analyte}_discharge_quartiles_234_max_fire.csv`
 
 ```{sql}
-#| eval: FALSE
+--| eval: FALSE
 
 CREATE OR REPLACE FUNCTION firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv(analyte_name TEXT)
 RETURNS TEXT
@@ -1856,7 +1856,7 @@ output columns:
 `{analyte}_discharge_before_quartiles_234_max_fire.csv`
 
 ```{sql}
-#| eval: FALSE
+--| eval: FALSE
 
 CREATE OR REPLACE FUNCTION firearea.create_analyte_q_pre_quartiles_largest_fire_mv(analyte_name TEXT)
 RETURNS TEXT
@@ -2038,7 +2038,7 @@ base MV row count
   + Replace nitrate with other analytes to export their covariate datasets
 
 ```{sql}
-#| eval: FALSE
+--| eval: FALSE
 
 CREATE OR REPLACE FUNCTION firearea.export_analyte_covariates_pre_post(
   analyte_name TEXT,
