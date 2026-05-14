@@ -639,6 +639,363 @@ $$;
 -- SELECT firearea.create_evi_join_largest_analyte_mv('orthop');
 
 -- chunk_7
+CREATE OR REPLACE FUNCTION firearea.create_fire_severity_join_largest_analyte_mv(analyte TEXT)
+RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  mv_name TEXT;
+  lf_mv_name TEXT;
+  strict_issue_count INTEGER;
+  zero_weight_count INTEGER;
+  result_msg TEXT;
+BEGIN
+  mv_name := format('fire_severity_join_largest_%s', analyte);
+  lf_mv_name := format('largest_%s_valid_fire_per_site', analyte);
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_matviews
+    WHERE schemaname = 'firearea' AND matviewname = lf_mv_name
+  ) THEN
+    RAISE EXCEPTION 'Dependency firearea.% does not exist. Build it first via create_largest_analyte_valid_fire_per_site_mv(%).', lf_mv_name, analyte;
+  END IF;
+
+  EXECUTE format('DROP MATERIALIZED VIEW IF EXISTS firearea.%I CASCADE', mv_name);
+
+  EXECUTE format($chk$
+    WITH lf AS (
+      SELECT
+        usgs_site,
+        events,
+        year,
+        start_date,
+        end_date
+      FROM firearea.%I
+    ),
+    lf_events AS (
+      SELECT
+        usgs_site,
+        year,
+        start_date,
+        end_date,
+        ARRAY(SELECT unnest(events) ORDER BY 1) AS events_sorted,
+        cardinality(events) AS event_count
+      FROM lf
+    ),
+    expanded_events AS (
+      SELECT
+        l.usgs_site,
+        l.year,
+        l.start_date,
+        l.end_date,
+        l.events_sorted,
+        l.event_count,
+        unnest(l.events_sorted) AS event_id
+      FROM lf_events AS l
+    ),
+    event_severity AS (
+      SELECT
+        fs.usgs_site,
+        fs.event_id,
+        COUNT(*) FILTER (WHERE fs.severity_value IS NULL) AS null_value_count,
+        COUNT(*) FILTER (
+          WHERE lower(btrim(fs.fire_severity)) NOT IN ('low', 'moderate', 'high')
+             OR fs.fire_severity IS NULL
+        ) AS unknown_category_count,
+        COUNT(DISTINCT CASE
+          WHEN lower(btrim(fs.fire_severity)) IN ('low', 'moderate', 'high')
+          THEN lower(btrim(fs.fire_severity)) END
+        ) AS category_count,
+        SUM(CASE WHEN lower(btrim(fs.fire_severity)) = 'low' THEN fs.severity_value ELSE 0 END) AS low_value,
+        SUM(CASE WHEN lower(btrim(fs.fire_severity)) = 'moderate' THEN fs.severity_value ELSE 0 END) AS moderate_value,
+        SUM(CASE WHEN lower(btrim(fs.fire_severity)) = 'high' THEN fs.severity_value ELSE 0 END) AS high_value
+      FROM covariates.fire_severity AS fs
+      GROUP BY fs.usgs_site, fs.event_id
+    ),
+    dd_weights AS (
+      SELECT
+        dd.usgs_site,
+        dd.event_id,
+        MAX(dd.fire_catch_area)::DOUBLE PRECISION AS fire_catch_area_km2
+      FROM firearea.dd_area_stats AS dd
+      GROUP BY dd.usgs_site, dd.event_id
+    ),
+    joined AS (
+      SELECT
+        ex.usgs_site,
+        ex.year,
+        ex.start_date,
+        ex.end_date,
+        ex.events_sorted,
+        ex.event_count,
+        ex.event_id,
+        es.null_value_count,
+        es.unknown_category_count,
+        es.category_count,
+        CASE
+          WHEN es.null_value_count = 0
+            AND es.unknown_category_count = 0
+            AND es.category_count = 1
+          THEN COALESCE(es.low_value, 0.0) + COALESCE(es.moderate_value, 0.0) + COALESCE(es.high_value, 0.0)
+          WHEN es.null_value_count = 0
+            AND es.unknown_category_count = 0
+            AND es.category_count >= 2
+          THEN (1.0 * COALESCE(es.low_value, 0.0))
+             + (2.0 * COALESCE(es.moderate_value, 0.0))
+             + (3.0 * COALESCE(es.high_value, 0.0))
+          ELSE NULL
+        END AS weighted_fsi,
+        w.fire_catch_area_km2
+      FROM expanded_events AS ex
+      LEFT JOIN event_severity AS es
+        ON es.usgs_site = ex.usgs_site
+       AND es.event_id = ex.event_id
+      LEFT JOIN dd_weights AS w
+        ON w.usgs_site = ex.usgs_site
+       AND w.event_id = ex.event_id
+    ),
+    per_group AS (
+      SELECT
+        usgs_site,
+        year,
+        start_date,
+        end_date,
+        events_sorted AS events,
+        event_count,
+        COUNT(*) FILTER (
+          WHERE weighted_fsi IS NULL
+             OR fire_catch_area_km2 IS NULL
+        ) AS bad_or_missing_count,
+        SUM(fire_catch_area_km2) FILTER (WHERE weighted_fsi IS NOT NULL) AS valid_event_area_km2,
+        SUM(fire_catch_area_km2) AS total_event_area_km2
+      FROM joined
+      GROUP BY usgs_site, year, start_date, end_date, events_sorted, event_count
+    )
+    SELECT COUNT(*)
+    FROM per_group
+    WHERE event_count > 1
+      AND bad_or_missing_count > 0;
+  $chk$, lf_mv_name)
+  INTO strict_issue_count;
+
+  IF strict_issue_count > 0 THEN
+    RAISE EXCEPTION
+      'Strict fire severity quality check failed for analyte %: % grouped event set(s) have missing/invalid severity data.',
+      analyte, strict_issue_count;
+  END IF;
+
+  EXECUTE format($chk$
+    WITH lf AS (
+      SELECT
+        usgs_site,
+        events,
+        year,
+        start_date,
+        end_date
+      FROM firearea.%I
+    ),
+    lf_events AS (
+      SELECT
+        usgs_site,
+        year,
+        start_date,
+        end_date,
+        ARRAY(SELECT unnest(events) ORDER BY 1) AS events_sorted
+      FROM lf
+    ),
+    expanded_events AS (
+      SELECT
+        l.usgs_site,
+        l.year,
+        l.start_date,
+        l.end_date,
+        l.events_sorted,
+        unnest(l.events_sorted) AS event_id
+      FROM lf_events AS l
+    ),
+    dd_weights AS (
+      SELECT
+        dd.usgs_site,
+        dd.event_id,
+        MAX(dd.fire_catch_area)::DOUBLE PRECISION AS fire_catch_area_km2
+      FROM firearea.dd_area_stats AS dd
+      GROUP BY dd.usgs_site, dd.event_id
+    ),
+    per_group AS (
+      SELECT
+        ex.usgs_site,
+        ex.year,
+        ex.start_date,
+        ex.end_date,
+        ex.events_sorted AS events,
+        SUM(w.fire_catch_area_km2) AS total_event_area_km2
+      FROM expanded_events AS ex
+      LEFT JOIN dd_weights AS w
+        ON w.usgs_site = ex.usgs_site
+       AND w.event_id = ex.event_id
+      GROUP BY ex.usgs_site, ex.year, ex.start_date, ex.end_date, ex.events_sorted
+    )
+    SELECT COUNT(*)
+    FROM per_group
+    WHERE COALESCE(total_event_area_km2, 0.0) <= 0.0;
+  $chk$, lf_mv_name)
+  INTO zero_weight_count;
+
+  IF zero_weight_count > 0 THEN
+    RAISE EXCEPTION
+      'Strict fire severity weight check failed for analyte %: % grouped event set(s) have NULL/zero total fire-area weight.',
+      analyte, zero_weight_count;
+  END IF;
+
+  EXECUTE format($fmt$
+    CREATE MATERIALIZED VIEW firearea.%I AS
+    WITH lf AS (
+      SELECT
+        usgs_site,
+        events,
+        year,
+        start_date,
+        end_date
+      FROM firearea.%I
+    ),
+    lf_events AS (
+      SELECT
+        usgs_site,
+        year,
+        start_date,
+        end_date,
+        ARRAY(SELECT unnest(events) ORDER BY 1) AS events_sorted,
+        cardinality(events) AS event_count
+      FROM lf
+    ),
+    expanded_events AS (
+      SELECT
+        l.usgs_site,
+        l.year,
+        l.start_date,
+        l.end_date,
+        l.events_sorted,
+        l.event_count,
+        unnest(l.events_sorted) AS event_id
+      FROM lf_events AS l
+    ),
+    event_severity AS (
+      SELECT
+        fs.usgs_site,
+        fs.event_id,
+        COUNT(*) FILTER (WHERE fs.severity_value IS NULL) AS null_value_count,
+        COUNT(*) FILTER (
+          WHERE lower(btrim(fs.fire_severity)) NOT IN ('low', 'moderate', 'high')
+             OR fs.fire_severity IS NULL
+        ) AS unknown_category_count,
+        COUNT(DISTINCT CASE
+          WHEN lower(btrim(fs.fire_severity)) IN ('low', 'moderate', 'high')
+          THEN lower(btrim(fs.fire_severity)) END
+        ) AS category_count,
+        SUM(CASE WHEN lower(btrim(fs.fire_severity)) = 'low' THEN fs.severity_value ELSE 0 END) AS low_value,
+        SUM(CASE WHEN lower(btrim(fs.fire_severity)) = 'moderate' THEN fs.severity_value ELSE 0 END) AS moderate_value,
+        SUM(CASE WHEN lower(btrim(fs.fire_severity)) = 'high' THEN fs.severity_value ELSE 0 END) AS high_value
+      FROM covariates.fire_severity AS fs
+      GROUP BY fs.usgs_site, fs.event_id
+    ),
+    dd_weights AS (
+      SELECT
+        dd.usgs_site,
+        dd.event_id,
+        MAX(dd.fire_catch_area)::DOUBLE PRECISION AS fire_catch_area_km2
+      FROM firearea.dd_area_stats AS dd
+      GROUP BY dd.usgs_site, dd.event_id
+    ),
+    joined AS (
+      SELECT
+        ex.usgs_site,
+        ex.year,
+        ex.start_date,
+        ex.end_date,
+        ex.events_sorted,
+        ex.event_count,
+        ex.event_id,
+        es.null_value_count,
+        es.unknown_category_count,
+        es.category_count,
+        CASE
+          WHEN es.null_value_count = 0
+            AND es.unknown_category_count = 0
+            AND es.category_count = 1
+          THEN COALESCE(es.low_value, 0.0) + COALESCE(es.moderate_value, 0.0) + COALESCE(es.high_value, 0.0)
+          WHEN es.null_value_count = 0
+            AND es.unknown_category_count = 0
+            AND es.category_count >= 2
+          THEN (1.0 * COALESCE(es.low_value, 0.0))
+             + (2.0 * COALESCE(es.moderate_value, 0.0))
+             + (3.0 * COALESCE(es.high_value, 0.0))
+          ELSE NULL
+        END AS weighted_fsi,
+        w.fire_catch_area_km2
+      FROM expanded_events AS ex
+      LEFT JOIN event_severity AS es
+        ON es.usgs_site = ex.usgs_site
+       AND es.event_id = ex.event_id
+      LEFT JOIN dd_weights AS w
+        ON w.usgs_site = ex.usgs_site
+       AND w.event_id = ex.event_id
+    ),
+    per_group AS (
+      SELECT
+        usgs_site,
+        year,
+        start_date,
+        end_date,
+        events_sorted AS events,
+        event_count,
+        COUNT(*) FILTER (
+          WHERE weighted_fsi IS NULL
+             OR fire_catch_area_km2 IS NULL
+        ) AS bad_or_missing_count,
+        SUM(fire_catch_area_km2) FILTER (WHERE weighted_fsi IS NOT NULL) AS valid_event_area_km2,
+        SUM(fire_catch_area_km2) AS total_event_area_km2,
+        SUM(weighted_fsi * fire_catch_area_km2)
+          FILTER (WHERE weighted_fsi IS NOT NULL)
+          / NULLIF(SUM(fire_catch_area_km2)
+          FILTER (WHERE weighted_fsi IS NOT NULL), 0.0) AS avg_weighted_fsi
+      FROM joined
+      GROUP BY usgs_site, year, start_date, end_date, events_sorted, event_count
+    )
+    SELECT
+      usgs_site,
+      events,
+      year,
+      start_date,
+      end_date,
+      avg_weighted_fsi,
+      valid_event_area_km2 / NULLIF(total_event_area_km2, 0.0) AS fire_severity_weight_coverage,
+      bad_or_missing_count > 0 AS has_missing_fire_severity,
+      (bad_or_missing_count > 0) AS has_bad_data
+    FROM per_group
+    ORDER BY usgs_site, start_date, end_date;
+  $fmt$, mv_name, lf_mv_name);
+
+  EXECUTE format('CREATE INDEX IF NOT EXISTS %I_usgs_site_idx ON firearea.%I (usgs_site)', mv_name, mv_name);
+  EXECUTE format('CREATE INDEX IF NOT EXISTS %I_start_date_idx ON firearea.%I (start_date)', mv_name, mv_name);
+
+  result_msg := format('SUCCESS: Created firearea.%s and indexes', mv_name);
+  RAISE NOTICE '%', result_msg;
+  RETURN result_msg;
+
+EXCEPTION
+  WHEN OTHERS THEN
+    RAISE EXCEPTION 'FAILED: Error creating fire severity join MV for analyte %: %', analyte, SQLERRM;
+END;
+$$;
+
+-- Examples:
+-- SELECT firearea.create_fire_severity_join_largest_analyte_mv('nitrate');
+-- SELECT firearea.create_fire_severity_join_largest_analyte_mv('ammonium');
+-- SELECT firearea.create_fire_severity_join_largest_analyte_mv('spcond');
+-- SELECT firearea.create_fire_severity_join_largest_analyte_mv('orthop');
+
+-- chunk_8
 CREATE OR REPLACE FUNCTION firearea.rebuild_usgs_water_chem_std_and_dependencies()
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -763,7 +1120,7 @@ $$;
 -- Complete rebuild of everything
 -- SELECT firearea.rebuild_usgs_water_chem_std_and_dependencies();
 
--- chunk_8
+-- chunk_9
 CREATE OR REPLACE FUNCTION firearea.create_analyte_counts_view(analyte_name TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -856,7 +1213,7 @@ EXCEPTION
 END;
 $$;
 
--- chunk_9
+-- chunk_10
 CREATE OR REPLACE FUNCTION firearea.create_largest_analyte_valid_fire_per_site_mv(analyte_name TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -974,7 +1331,7 @@ EXCEPTION
 END;
 $$;
 
--- chunk_10
+-- chunk_11
 -- DROP FUNCTION IF EXISTS firearea.export_analyte_summary_all_sites(TEXT);
 -- DROP FUNCTION IF EXISTS firearea.export_analyte_summary_all_sites(TEXT, TEXT);
 
@@ -1039,7 +1396,7 @@ $$;
 -- SELECT firearea.export_analyte_summary_all_sites('nitrate'::TEXT);
 -- SELECT firearea.export_analyte_summary_all_sites('nitrate'::TEXT, '/tmp/nitrate_summary.csv'::TEXT);
 
--- chunk_11
+-- chunk_12
 CREATE OR REPLACE FUNCTION firearea.export_analyte_largest_fire_sites(analyte_name TEXT, file_path TEXT DEFAULT NULL)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -1108,7 +1465,7 @@ $$;
 -- For any future analyte
 -- SELECT firearea.export_analyte_largest_fire_sites('phosphate'::TEXT, '/data/phosphate_fires.csv'::TEXT);
 
--- chunk_12
+-- chunk_13
 CREATE OR REPLACE FUNCTION firearea.export_analyte_q_pre_post_quartiles(analyte_name TEXT, file_path TEXT DEFAULT NULL)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -1247,7 +1604,7 @@ $$;
 -- For any future analyte
 -- SELECT firearea.export_analyte_q_pre_post_quartiles('phosphate'::TEXT, '/data/phosphate_quartiles.csv'::TEXT);
 
--- chunk_13
+-- chunk_14
 CREATE OR REPLACE FUNCTION firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv(analyte_name TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -1350,7 +1707,7 @@ $$;
 -- SELECT firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv('orthop');
 -- SELECT firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv('spcond');
 
--- chunk_14
+-- chunk_15
 CREATE OR REPLACE FUNCTION firearea.create_analyte_q_pre_quartiles_largest_fire_mv(analyte_name TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -1486,7 +1843,7 @@ $$;
 
 -- SELECT firearea.create_analyte_q_pre_quartiles_largest_fire_mv('nitrate');
 
--- chunk_15
+-- chunk_16
 CREATE OR REPLACE FUNCTION firearea.export_analyte_covariates_pre_post(
   analyte_name TEXT,
   out_path TEXT DEFAULT NULL
