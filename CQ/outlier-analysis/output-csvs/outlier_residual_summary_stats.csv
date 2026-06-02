@@ -1,0 +1,9 @@
+"slopedir","fire_period","n_obs","n_sites","mean_resid","sd_resid","med_resid","q25_resid","q75_resid"
+"all","Postfire",907,50,0.098,2.487,-0.266,-1.047,1.108
+"all","Prefire",800,50,0.008,1.171,0.08,-0.577,0.621
+"negative","Postfire",221,15,-0.558,0.89,-0.438,-0.829,-0.168
+"negative","Prefire",255,15,-0.006,0.534,0.109,-0.361,0.397
+"neutral","Postfire",419,19,-0.472,1.492,-0.588,-1.311,0.768
+"neutral","Prefire",307,21,0.017,1.186,-0.178,-0.556,0.647
+"positive","Postfire",267,16,1.536,3.738,1.431,0.469,2.179
+"positive","Prefire",238,14,0.01,1.581,-0.322,-1.077,1.112
