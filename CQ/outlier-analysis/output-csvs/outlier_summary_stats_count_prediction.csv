@@ -1,0 +1,9 @@
+"slopedir","fire_period","n_obs","n_sites","mean_pct_obs","sd_pct_obs","med_pct_obs","q25_pct_obs","q75_pct_obs"
+"all","Postfire",56,56,0.153,0.262,0,0,0.204
+"all","Prefire",56,56,0.01,0.021,0,0,0
+"negative","Postfire",16,16,0.144,0.216,0,0,0.21
+"negative","Prefire",16,16,0.013,0.021,0,0,0.031
+"neutral","Postfire",21,21,0.156,0.248,0.062,0,0.2
+"neutral","Prefire",21,21,0.013,0.025,0,0,0
+"positive","Postfire",19,19,0.156,0.319,0,0,0.132
+"positive","Prefire",19,19,0.005,0.014,0,0,0
