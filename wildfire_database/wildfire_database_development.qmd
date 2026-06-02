@@ -703,7 +703,7 @@ elev_slope <- readr::read_csv(here::here("data", "fire-arid_elevation.csv")) |>
 
 DBI::dbWriteTable(
   conn      = pg,
-  name      = c("firearea", "elevation"),
+  name      = c("covariates", "elevation"),
   value     = elev_slope,
   overwrite = FALSE,
   append    = FALSE,
@@ -712,7 +712,7 @@ DBI::dbWriteTable(
 
 DBI::dbExecute(
   conn      = pg,
-  statement = "ALTER TABLE firearea.elevation ADD PRIMARY KEY (usgs_site) ;"
+  statement = "ALTER TABLE covariates.elevation ADD PRIMARY KEY (usgs_site) ;"
 )
 
 ```
@@ -755,7 +755,7 @@ ogr2ogr -f "PostgreSQL" \
   -oo HEADERS=YES \
   -oo GEOM_POSSIBLE_NAMES='.geo' \
   -oo KEEP_GEOM_COLUMNS=NO \
-  -nln firearea.evi \
+  -nln covariates.evi \
   -lco GEOMETRY_NAME=geom \
   -lco FID=gid \
   -a_srs EPSG:4326 \
@@ -767,7 +767,8 @@ ogr2ogr -f "PostgreSQL" \
 ```{sql}
 #| eval: FALSE
 
-ALTER TABLE firearea.evi
+ALTER TABLE covariates.evi
   ALTER COLUMN ig_date   TYPE date    USING NULLIF(TRIM(ig_date), '')::date,
   ALTER COLUMN fire_year TYPE integer USING NULLIF(TRIM(fire_year), '')::integer;
+
 ```

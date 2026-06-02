@@ -14,6 +14,18 @@ Use just recipes to extract sql chunks from qmd files with option to execute
 the sql statements in the sql file as well. There is also a recipe to render
 qmd.
 
+### recommended: qmd-first docs
+
+Use the qmd source as canonical for docs and render Markdown with Quarto.
+
+- Generate Markdown from qmd:
+   - just docs water_chem_functions.qmd
+- Sync from qmd to sql + md in one command:
+   - just sync water_chem_functions.qmd
+
+This keeps SQL and Markdown aligned while preserving the narrative structure
+in the qmd document.
+
 **Work with different .qmd files**
 - just run water_chem_functions.qmd
 - just run wildfire_database_query_nitrate.qmd
