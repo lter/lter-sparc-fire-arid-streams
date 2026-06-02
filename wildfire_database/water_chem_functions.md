@@ -1,17 +1,78 @@
-# water_chem_functions
 
-Generated from SQL source. SQL is the canonical source for these docs.
 
-## Source Notes
+## overview
 
-- Generated from water_chem_functions.qmd
-- Execute all functions in a single transaction
+Functions for building and extracting water-chemistry resources. Note
+that the functions are built here but called elsewhere in the workflow.
 
-## firearea.rebuild_usgs_water_chem_std
+Queries generate either a view, materialized view, or export. Views
+should be reconstructed as needed based on database updates.
 
-- Source chunk: chunk_1
+### water chemistry alignment and products
 
-```sql
+stepwise:
+
+1.  (re)build standardized water chemistry (destroys all dependencies):
+
+- Generates firearea.usgs_water_chem_std from which all analyte views
+  are built
+- SELECT firearea.rebuild_usgs_water_chem_std();
+
+2.  (re)build analyte views:
+
+- Generates, e.g., firearea.nitrate, firearea.spcond, etc., which are
+  the standardized chemistry views for each analyte. Note that each
+  analyte has its own function to build its view.
+- SELECT firearea.create_nitrate_view();
+- SELECT firearea.create_spcond_view();
+- SELECT firearea.create_ammonium_view();
+- SELECT firearea.create_orthop_view();
+
+3.  (re)build counts views:
+
+- Generates firearea.{analyte}\_counts, which are the counts of samples
+  before and after (aggregated) fires. This is just one function where
+  the target analyte is passed as an argument. This view is not yet used
+  in the analyses.
+- SELECT firearea.create_analyte_counts_view(‘nitrate’);
+- SELECT firearea.create_analyte_counts_view(‘spcond’);
+- SELECT firearea.create_analyte_counts_view(‘ammonium’);
+- SELECT firearea.create_analyte_counts_view(‘orthop’);
+
+4.  (re)build largest fire materialized views:
+
+- Generates firearea.largest\_{analyte}\_valid_fire_per_site, which is
+  the date of the largest fire in a catchment that has data that meet
+  our selection criteria (e.g., pre- and post-fire samples in each of
+  three quartiles 3 years before and after fire). This is just one
+  function where the target analyte is passed as an argument.
+- SELECT
+  firearea.create_largest_analyte_valid_fire_per_site_mv(‘nitrate’);
+- SELECT
+  firearea.create_largest_analyte_valid_fire_per_site_mv(‘spcond’);
+- SELECT
+  firearea.create_largest_analyte_valid_fire_per_site_mv(‘ammonium’);
+- SELECT
+  firearea.create_largest_analyte_valid_fire_per_site_mv(‘orthop’);
+
+single site:
+
+- rebuild the full stack for only one analyte (e.g., nitrate):
+  - SELECT firearea.create_nitrate_view();
+  - SELECT firearea.create_analyte_counts_view(‘nitrate’);  
+  - SELECT
+    firearea.create_largest_analyte_valid_fire_per_site_mv(‘nitrate’);
+
+the whole game:
+
+- builds standardized chem; and views of aggregated values and counts,
+  and the largest fire materialized view for each analyte in a single
+  call (i.e., all of stepwise steps 1-4 from above in a single function)
+  - SELECT firearea.rebuild_usgs_water_chem_std_and_dependencies();
+
+## fn. view: usgs_water_chem_std (std chem)
+
+``` sql
 CREATE OR REPLACE FUNCTION firearea.rebuild_usgs_water_chem_std()
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -64,13 +125,21 @@ EXCEPTION
         RAISE EXCEPTION 'FAILED: Error rebuilding usgs_water_chem_std: %', SQLERRM;
 END;
 $$;
+
+-- Step 1: Rebuild base view only (destroys all dependencies)
+-- SELECT firearea.rebuild_usgs_water_chem_std();
 ```
 
-## firearea.create_nitrate_view
+## aggregated nutrient views
 
-- Source chunk: chunk_2
+### fn. view: combined nitrate
 
-```sql
+Create a view of standardized (forms, units) nitrate that reflects data
+from from both the USGS and non-USGS data sources.
+
+Convert NEON and SBC data (micromoles) to `mg NO3-N / L`.
+
+``` sql
 CREATE OR REPLACE FUNCTION firearea.create_nitrate_view()
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -132,13 +201,18 @@ EXCEPTION
         RAISE EXCEPTION 'FAILED: Error creating nitrate view: %', SQLERRM;
 END;
 $$;
+
+-- SELECT firearea.create_nitrate_view();
 ```
 
-## firearea.create_ammonium_view
+### fn. view: combined ammonium
 
-- Source chunk: chunk_3
+Create a view of standardized (forms, units) ammonium that reflects data
+from from both the USGS and non-USGS data sources.
 
-```sql
+Convert NEON and SBC data (micromoles) to `mg NH4-N / L`.
+
+``` sql
 CREATE OR REPLACE FUNCTION firearea.create_ammonium_view()
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -198,13 +272,16 @@ EXCEPTION
         RAISE EXCEPTION 'FAILED: Error creating ammonium view: %', SQLERRM;
 END;
 $$;
+
+-- SELECT firearea.create_ammonium_view();
 ```
 
-## firearea.create_spcond_view
+### fn. view: combined specific conductance
 
-- Source chunk: chunk_4
+Create a view of standardized (forms, units) specific conductance that
+reflects data from from both the USGS and non-USGS data sources.
 
-```sql
+``` sql
 CREATE OR REPLACE FUNCTION firearea.create_spcond_view()
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -258,13 +335,18 @@ EXCEPTION
         RAISE EXCEPTION 'FAILED: Error creating spcond view: %', SQLERRM;
 END;
 $$;
+
+-- SELECT firearea.create_spcond_view();
 ```
 
-## firearea.create_orthop_view
+### fn. view: combined orthop
 
-- Source chunk: chunk_5
+Create a view of standardized (forms, units) of orthophosphate that
+reflects data from from both the USGS and non-USGS data sources.
 
-```sql
+Convert SBC data (micromoles) to `mg PO4-P / L`.
+
+``` sql
 CREATE OR REPLACE FUNCTION firearea.create_orthop_view()
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -323,13 +405,34 @@ EXCEPTION
         RAISE EXCEPTION 'FAILED: Error creating orthop view: %', SQLERRM;
 END;
 $$;
+
+-- SELECT firearea.create_orthop_view();
 ```
 
-## firearea.create_evi_join_largest_analyte_mv
+## fn. mv: EVI join per analyte
 
-- Source chunk: chunk_6
+Join post-fire EVI to the largest valid fire event set per site for any
+analyte.
 
-```sql
+- Input: `{analyte}` string (e.g., `nitrate`, `ammonium`, `spcond`,
+  `orthop`)
+- Output MV: `firearea.evi_join_largest_{analyte}` with deterministic
+  ordering
+- Semantics:
+  - Matches on `usgs_site` and the normalized, order-insensitive
+    `events` array
+  - Computes `avg_median_post_evi` as a fire-area-weighted mean using
+    catchment-clipped event area from `firearea.fires_catchments`
+  - Enforces strict quality checks for grouped event sets
+    (`event_count > 1`): any missing/non-numeric EVI raises an error
+  - Raises an error when total grouped-event weight is `NULL` or zero
+  - Adds `evi_weight_coverage` as weighted valid area / total event area
+  - Retains `has_missing_evi` and `has_bad_data` flags for coherent
+    diagnostics
+  - Preserves `year`, `start_date`, `end_date` from the largest-fire MV
+  - Adds indexes on `usgs_site` and `start_date` for common filtering
+
+``` sql
 CREATE OR REPLACE FUNCTION firearea.create_evi_join_largest_analyte_mv(analyte TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -653,13 +756,62 @@ EXCEPTION
     RAISE EXCEPTION 'FAILED: Error creating EVI join MV for analyte %: %', analyte, SQLERRM;
 END;
 $$;
+
+-- Examples:
+-- SELECT firearea.create_evi_join_largest_analyte_mv('nitrate');
+-- SELECT firearea.create_evi_join_largest_analyte_mv('ammonium');
+-- SELECT firearea.create_evi_join_largest_analyte_mv('spcond');
+-- SELECT firearea.create_evi_join_largest_analyte_mv('orthop');
 ```
 
-## firearea.create_fire_severity_join_largest_analyte_mv
+## fn. mv: fire severity join per analyte
 
-- Source chunk: chunk_7
+Join post-fire severity summaries to the largest valid fire event set
+per site for any analyte.
 
-```sql
+- Input: `{analyte}` string (e.g., `nitrate`, `ammonium`, `spcond`,
+  `orthop`)
+- Output MV: `firearea.fire_severity_join_largest_{analyte}`
+- Semantics:
+  - Uses `covariates.fire_severity` values per event with category
+    weights: `1*low + 2*moderate + 3*high` *(see below for idea and
+    rationale)*
+  - Does not require all three categories per event; single-category
+    events use unweighted `severity_value`, while multi-category events
+    use category weights for categories that are present
+  - Requires non-NULL `severity_value` and known severity category
+    labels; invalid values still fail strict checks when a severity
+    record exists
+  - Aggregates per-event severity to grouped-event sets using fire-area
+    weights (`firearea.dd_area_stats.fire_catch_area`)
+  - Missing event-level severity is allowed and reflected in
+    `fire_severity_weight_coverage`
+  - Raises an error when grouped-event total weight is `NULL` or zero
+  - Adds `fire_severity_weight_coverage` as weighted valid area / total
+    event area
+  - Note: some very small burns can fall below Landsat pixel resolution,
+    resulting in missing event-level severity records; these events are
+    excluded from weighted severity averaging and may reduce coverage or
+    exclude sites where no valid weighted events remain
+
+**From Ash regarding a weighted CBI metric for fire severity:**
+
+> Sorry for the delay! I was thinking a weighted cbi metric might be
+> cleaner than having three different covariates-particularly if we’re
+> concerned about keeping the number of covariates low. I’ve done this
+> for another project using this snippet of code:
+>
+> gpfires5$weighted_cbi <- (1 * (gpfires5$Low /
+> gpfires5$catchment_area_m2 * 100))
+> + (2 * (gpfires5$Med /
+> gpfires5$catchment_area_m2 * 100)) + (3 * (gpfires5$High /
+> gpfires5\$catchment_area_m2 \* 100))
+>
+> The formula is weighted_cbi= 1*percent of catchment burned at low
+> severity + 2* percent of catchment burned at moderate severity +
+> 3\*percent of catchment burned at high severity.
+
+``` sql
 CREATE OR REPLACE FUNCTION firearea.create_fire_severity_join_largest_analyte_mv(analyte TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -751,6 +903,7 @@ BEGIN
         ex.events_sorted,
         ex.event_count,
         ex.event_id,
+        (es.event_id IS NOT NULL) AS has_severity_row,
         es.null_value_count,
         es.unknown_category_count,
         es.category_count,
@@ -785,6 +938,11 @@ BEGIN
         events_sorted AS events,
         event_count,
         COUNT(*) FILTER (
+          WHERE has_severity_row
+            AND (COALESCE(null_value_count, 0) > 0
+                 OR COALESCE(unknown_category_count, 0) > 0)
+        ) AS invalid_severity_count,
+        COUNT(*) FILTER (
           WHERE weighted_fsi IS NULL
              OR fire_catch_area_km2 IS NULL
         ) AS bad_or_missing_count,
@@ -796,7 +954,7 @@ BEGIN
     SELECT COUNT(*)
     FROM per_group
     WHERE event_count > 1
-      AND bad_or_missing_count > 0;
+      AND invalid_severity_count > 0;
   $chk$, lf_mv_name)
   INTO strict_issue_count;
 
@@ -937,6 +1095,7 @@ BEGIN
         ex.events_sorted,
         ex.event_count,
         ex.event_id,
+        (es.event_id IS NOT NULL) AS has_severity_row,
         es.null_value_count,
         es.unknown_category_count,
         es.category_count,
@@ -970,6 +1129,11 @@ BEGIN
         end_date,
         events_sorted AS events,
         event_count,
+        COUNT(*) FILTER (
+          WHERE has_severity_row
+            AND (COALESCE(null_value_count, 0) > 0
+                 OR COALESCE(unknown_category_count, 0) > 0)
+        ) AS invalid_severity_count,
         COUNT(*) FILTER (
           WHERE weighted_fsi IS NULL
              OR fire_catch_area_km2 IS NULL
@@ -1009,13 +1173,580 @@ EXCEPTION
     RAISE EXCEPTION 'FAILED: Error creating fire severity join MV for analyte %: %', analyte, SQLERRM;
 END;
 $$;
+
+-- Examples:
+-- SELECT firearea.create_fire_severity_join_largest_analyte_mv('nitrate');
+-- SELECT firearea.create_fire_severity_join_largest_analyte_mv('ammonium');
+-- SELECT firearea.create_fire_severity_join_largest_analyte_mv('spcond');
+-- SELECT firearea.create_fire_severity_join_largest_analyte_mv('orthop');
 ```
 
-## firearea.rebuild_usgs_water_chem_std_and_dependencies
+## fn. mv: landcover group join per analyte
 
-- Source chunk: chunk_8
+Join event-level burned-area landcover group composition to the largest
+valid fire event set per site for any analyte.
 
-```sql
+- Input: `{analyte}` string (e.g., `nitrate`, `ammonium`, `spcond`,
+  `orthop`)
+- Output MV: `firearea.landcover_group_join_largest_{analyte}`
+- Semantics:
+  - Uses `covariates.landcover_groups` event-level values for: `forest`,
+    `shrub`, `grass`, `urban`, `ag`, `barren`
+  - Aggregates per-event group values to grouped-event sets using
+    fire-area weights (`firearea.dd_area_stats.fire_catch_area`)
+  - Missing event-level landcover rows are allowed and reflected in
+    `landcover_group_weight_coverage`
+  - Invalid landcover rows (NULL values, unknown group labels, duplicate
+    rows per group/event) fail strict checks for grouped event sets
+  - Raises an error when grouped-event total weight is `NULL` or zero
+- ommited for the time being per TKH:
+
+> Hi Ash - Hope you had a great trip! Could use your input on fire
+> severity (and cat. vars. generally) - please see Slack thread with TKH
+> below:
+>
+> stevan: 3. Okay just let me know about DFFT. EVI came out well but I
+> am not sure about these other fire’ish things like fire_severity that
+> are categorical. For that and others like landcover_group each
+> site\*fire has multiple values, e.g., high, low, moderate or whatever.
+> We need to weight all of those (?) but then is each a separate column
+> in the output? That will be a staggering number of columns, and is
+> that amenable to Ara’s analyses?
+>
+> tamara: 3) Covariates: -% burn -severity: Ash wants to try calculating
+> some weighted burn severity index, so let’s let her figure that out.
+> We will use either this metric or the EVI. Need to plot up all the
+> covariates first. -catchment slope -ecoregion -something hydro- will
+> be DFFT metric and/or \# peaks -**and cover: we might just summarize
+> these for context rather than as covariates. I think we want this by
+> watershed, not by fire**
+
+``` sql
+CREATE OR REPLACE FUNCTION firearea.create_landcover_group_join_largest_analyte_mv(analyte TEXT)
+RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  mv_name TEXT;
+  lf_mv_name TEXT;
+  strict_issue_count INTEGER;
+  zero_weight_count INTEGER;
+  result_msg TEXT;
+BEGIN
+  mv_name := format('landcover_group_join_largest_%s', analyte);
+  lf_mv_name := format('largest_%s_valid_fire_per_site', analyte);
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_matviews
+    WHERE schemaname = 'firearea' AND matviewname = lf_mv_name
+  ) THEN
+    RAISE EXCEPTION 'Dependency firearea.% does not exist. Build it first via create_largest_analyte_valid_fire_per_site_mv(%).', lf_mv_name, analyte;
+  END IF;
+
+  EXECUTE format('DROP MATERIALIZED VIEW IF EXISTS firearea.%I CASCADE', mv_name);
+
+  EXECUTE format($chk$
+    WITH lf AS (
+      SELECT usgs_site, events, year, start_date, end_date
+      FROM firearea.%I
+    ),
+    lf_events AS (
+      SELECT
+        usgs_site,
+        year,
+        start_date,
+        end_date,
+        ARRAY(SELECT unnest(events) ORDER BY 1) AS events_sorted,
+        cardinality(events) AS event_count
+      FROM lf
+    ),
+    expanded_events AS (
+      SELECT
+        l.usgs_site,
+        l.year,
+        l.start_date,
+        l.end_date,
+        l.events_sorted,
+        l.event_count,
+        unnest(l.events_sorted) AS event_id
+      FROM lf_events AS l
+    ),
+    landcover_event AS (
+      SELECT
+        lc.usgs_site,
+        lc.event_id,
+        COUNT(*) FILTER (WHERE lc.group_value IS NULL) AS null_value_count,
+        COUNT(*) FILTER (
+          WHERE lower(btrim(lc.landcover_group)) NOT IN ('forest', 'shrub', 'grass', 'urban', 'ag', 'barren')
+             OR lc.landcover_group IS NULL
+        ) AS unknown_group_count,
+        COUNT(*) FILTER (WHERE lower(btrim(lc.landcover_group)) = 'forest') AS forest_rows,
+        COUNT(*) FILTER (WHERE lower(btrim(lc.landcover_group)) = 'shrub') AS shrub_rows,
+        COUNT(*) FILTER (WHERE lower(btrim(lc.landcover_group)) = 'grass') AS grass_rows,
+        COUNT(*) FILTER (WHERE lower(btrim(lc.landcover_group)) = 'urban') AS urban_rows,
+        COUNT(*) FILTER (WHERE lower(btrim(lc.landcover_group)) = 'ag') AS ag_rows,
+        COUNT(*) FILTER (WHERE lower(btrim(lc.landcover_group)) = 'barren') AS barren_rows,
+        SUM(CASE WHEN lower(btrim(lc.landcover_group)) = 'forest' THEN lc.group_value ELSE 0 END) AS forest_value,
+        SUM(CASE WHEN lower(btrim(lc.landcover_group)) = 'shrub' THEN lc.group_value ELSE 0 END) AS shrub_value,
+        SUM(CASE WHEN lower(btrim(lc.landcover_group)) = 'grass' THEN lc.group_value ELSE 0 END) AS grass_value,
+        SUM(CASE WHEN lower(btrim(lc.landcover_group)) = 'urban' THEN lc.group_value ELSE 0 END) AS urban_value,
+        SUM(CASE WHEN lower(btrim(lc.landcover_group)) = 'ag' THEN lc.group_value ELSE 0 END) AS ag_value,
+        SUM(CASE WHEN lower(btrim(lc.landcover_group)) = 'barren' THEN lc.group_value ELSE 0 END) AS barren_value
+      FROM covariates.landcover_groups AS lc
+      GROUP BY lc.usgs_site, lc.event_id
+    ),
+    dd_weights AS (
+      SELECT
+        dd.usgs_site,
+        dd.event_id,
+        MAX(dd.fire_catch_area)::DOUBLE PRECISION AS fire_catch_area_km2
+      FROM firearea.dd_area_stats AS dd
+      GROUP BY dd.usgs_site, dd.event_id
+    ),
+    joined AS (
+      SELECT
+        ex.usgs_site,
+        ex.year,
+        ex.start_date,
+        ex.end_date,
+        ex.events_sorted,
+        ex.event_count,
+        ex.event_id,
+        (le.event_id IS NOT NULL) AS has_landcover_row,
+        le.null_value_count,
+        le.unknown_group_count,
+        le.forest_rows,
+        le.shrub_rows,
+        le.grass_rows,
+        le.urban_rows,
+        le.ag_rows,
+        le.barren_rows,
+        le.forest_value,
+        le.shrub_value,
+        le.grass_value,
+        le.urban_value,
+        le.ag_value,
+        le.barren_value,
+        w.fire_catch_area_km2
+      FROM expanded_events AS ex
+      LEFT JOIN landcover_event AS le
+        ON le.usgs_site = ex.usgs_site
+       AND le.event_id = ex.event_id
+      LEFT JOIN dd_weights AS w
+        ON w.usgs_site = ex.usgs_site
+       AND w.event_id = ex.event_id
+    ),
+    per_group AS (
+      SELECT
+        usgs_site,
+        year,
+        start_date,
+        end_date,
+        events_sorted AS events,
+        event_count,
+        COUNT(*) FILTER (
+          WHERE has_landcover_row
+            AND (
+              COALESCE(null_value_count, 0) > 0
+              OR COALESCE(unknown_group_count, 0) > 0
+              OR COALESCE(forest_rows, 0) > 1
+              OR COALESCE(shrub_rows, 0) > 1
+              OR COALESCE(grass_rows, 0) > 1
+              OR COALESCE(urban_rows, 0) > 1
+              OR COALESCE(ag_rows, 0) > 1
+              OR COALESCE(barren_rows, 0) > 1
+            )
+        ) AS invalid_landcover_count
+      FROM joined
+      GROUP BY usgs_site, year, start_date, end_date, events_sorted, event_count
+    )
+    SELECT COUNT(*)
+    FROM per_group
+    WHERE event_count > 1
+      AND invalid_landcover_count > 0;
+  $chk$, lf_mv_name)
+  INTO strict_issue_count;
+
+  IF strict_issue_count > 0 THEN
+    RAISE EXCEPTION
+      'Strict landcover group quality check failed for analyte %: % grouped event set(s) have invalid landcover group data.',
+      analyte, strict_issue_count;
+  END IF;
+
+  EXECUTE format($chk$
+    WITH lf AS (
+      SELECT
+        usgs_site,
+        events,
+        year,
+        start_date,
+        end_date
+      FROM firearea.%I
+    ),
+    lf_events AS (
+      SELECT
+        usgs_site,
+        year,
+        start_date,
+        end_date,
+        ARRAY(SELECT unnest(events) ORDER BY 1) AS events_sorted
+      FROM lf
+    ),
+    expanded_events AS (
+      SELECT
+        l.usgs_site,
+        l.year,
+        l.start_date,
+        l.end_date,
+        l.events_sorted,
+        unnest(l.events_sorted) AS event_id
+      FROM lf_events AS l
+    ),
+    dd_weights AS (
+      SELECT
+        dd.usgs_site,
+        dd.event_id,
+        MAX(dd.fire_catch_area)::DOUBLE PRECISION AS fire_catch_area_km2
+      FROM firearea.dd_area_stats AS dd
+      GROUP BY dd.usgs_site, dd.event_id
+    ),
+    per_group AS (
+      SELECT
+        ex.usgs_site,
+        ex.year,
+        ex.start_date,
+        ex.end_date,
+        ex.events_sorted AS events,
+        SUM(w.fire_catch_area_km2) AS total_event_area_km2
+      FROM expanded_events AS ex
+      LEFT JOIN dd_weights AS w
+        ON w.usgs_site = ex.usgs_site
+       AND w.event_id = ex.event_id
+      GROUP BY ex.usgs_site, ex.year, ex.start_date, ex.end_date, ex.events_sorted
+    )
+    SELECT COUNT(*)
+    FROM per_group
+    WHERE COALESCE(total_event_area_km2, 0.0) <= 0.0;
+  $chk$, lf_mv_name)
+  INTO zero_weight_count;
+
+  IF zero_weight_count > 0 THEN
+    RAISE EXCEPTION
+      'Strict landcover group weight check failed for analyte %: % grouped event set(s) have NULL/zero total fire-area weight.',
+      analyte, zero_weight_count;
+  END IF;
+
+  EXECUTE format($fmt$
+    CREATE MATERIALIZED VIEW firearea.%I AS
+    WITH lf AS (
+      SELECT usgs_site, events, year, start_date, end_date
+      FROM firearea.%I
+    ),
+    lf_events AS (
+      SELECT
+        usgs_site,
+        year,
+        start_date,
+        end_date,
+        ARRAY(SELECT unnest(events) ORDER BY 1) AS events_sorted,
+        cardinality(events) AS event_count
+      FROM lf
+    ),
+    expanded_events AS (
+      SELECT
+        l.usgs_site,
+        l.year,
+        l.start_date,
+        l.end_date,
+        l.events_sorted,
+        l.event_count,
+        unnest(l.events_sorted) AS event_id
+      FROM lf_events AS l
+    ),
+    landcover_event AS (
+      SELECT
+        lc.usgs_site,
+        lc.event_id,
+        COUNT(*) FILTER (WHERE lc.group_value IS NULL) AS null_value_count,
+        COUNT(*) FILTER (
+          WHERE lower(btrim(lc.landcover_group)) NOT IN ('forest', 'shrub', 'grass', 'urban', 'ag', 'barren')
+             OR lc.landcover_group IS NULL
+        ) AS unknown_group_count,
+        COUNT(*) FILTER (WHERE lower(btrim(lc.landcover_group)) = 'forest') AS forest_rows,
+        COUNT(*) FILTER (WHERE lower(btrim(lc.landcover_group)) = 'shrub') AS shrub_rows,
+        COUNT(*) FILTER (WHERE lower(btrim(lc.landcover_group)) = 'grass') AS grass_rows,
+        COUNT(*) FILTER (WHERE lower(btrim(lc.landcover_group)) = 'urban') AS urban_rows,
+        COUNT(*) FILTER (WHERE lower(btrim(lc.landcover_group)) = 'ag') AS ag_rows,
+        COUNT(*) FILTER (WHERE lower(btrim(lc.landcover_group)) = 'barren') AS barren_rows,
+        SUM(CASE WHEN lower(btrim(lc.landcover_group)) = 'forest' THEN lc.group_value ELSE 0 END) AS forest_value,
+        SUM(CASE WHEN lower(btrim(lc.landcover_group)) = 'shrub' THEN lc.group_value ELSE 0 END) AS shrub_value,
+        SUM(CASE WHEN lower(btrim(lc.landcover_group)) = 'grass' THEN lc.group_value ELSE 0 END) AS grass_value,
+        SUM(CASE WHEN lower(btrim(lc.landcover_group)) = 'urban' THEN lc.group_value ELSE 0 END) AS urban_value,
+        SUM(CASE WHEN lower(btrim(lc.landcover_group)) = 'ag' THEN lc.group_value ELSE 0 END) AS ag_value,
+        SUM(CASE WHEN lower(btrim(lc.landcover_group)) = 'barren' THEN lc.group_value ELSE 0 END) AS barren_value
+      FROM covariates.landcover_groups AS lc
+      GROUP BY lc.usgs_site, lc.event_id
+    ),
+    dd_weights AS (
+      SELECT
+        dd.usgs_site,
+        dd.event_id,
+        MAX(dd.fire_catch_area)::DOUBLE PRECISION AS fire_catch_area_km2
+      FROM firearea.dd_area_stats AS dd
+      GROUP BY dd.usgs_site, dd.event_id
+    ),
+    joined AS (
+      SELECT
+        ex.usgs_site,
+        ex.year,
+        ex.start_date,
+        ex.end_date,
+        ex.events_sorted,
+        ex.event_count,
+        ex.event_id,
+        (le.event_id IS NOT NULL) AS has_landcover_row,
+        le.null_value_count,
+        le.unknown_group_count,
+        le.forest_rows,
+        le.shrub_rows,
+        le.grass_rows,
+        le.urban_rows,
+        le.ag_rows,
+        le.barren_rows,
+        le.forest_value,
+        le.shrub_value,
+        le.grass_value,
+        le.urban_value,
+        le.ag_value,
+        le.barren_value,
+        w.fire_catch_area_km2
+      FROM expanded_events AS ex
+      LEFT JOIN landcover_event AS le
+        ON le.usgs_site = ex.usgs_site
+       AND le.event_id = ex.event_id
+      LEFT JOIN dd_weights AS w
+        ON w.usgs_site = ex.usgs_site
+       AND w.event_id = ex.event_id
+    ),
+    per_group AS (
+      SELECT
+        usgs_site,
+        year,
+        start_date,
+        end_date,
+        events_sorted AS events,
+        event_count,
+        COUNT(*) FILTER (
+          WHERE has_landcover_row
+            AND (
+              COALESCE(null_value_count, 0) > 0
+              OR COALESCE(unknown_group_count, 0) > 0
+              OR COALESCE(forest_rows, 0) > 1
+              OR COALESCE(shrub_rows, 0) > 1
+              OR COALESCE(grass_rows, 0) > 1
+              OR COALESCE(urban_rows, 0) > 1
+              OR COALESCE(ag_rows, 0) > 1
+              OR COALESCE(barren_rows, 0) > 1
+            )
+        ) AS invalid_landcover_count,
+        COUNT(*) FILTER (
+          WHERE NOT has_landcover_row
+             OR fire_catch_area_km2 IS NULL
+             OR (
+               COALESCE(null_value_count, 0) > 0
+               OR COALESCE(unknown_group_count, 0) > 0
+               OR COALESCE(forest_rows, 0) > 1
+               OR COALESCE(shrub_rows, 0) > 1
+               OR COALESCE(grass_rows, 0) > 1
+               OR COALESCE(urban_rows, 0) > 1
+               OR COALESCE(ag_rows, 0) > 1
+               OR COALESCE(barren_rows, 0) > 1
+             )
+        ) AS bad_or_missing_count,
+        SUM(fire_catch_area_km2) FILTER (
+          WHERE has_landcover_row
+            AND COALESCE(null_value_count, 0) = 0
+            AND COALESCE(unknown_group_count, 0) = 0
+            AND COALESCE(forest_rows, 0) <= 1
+            AND COALESCE(shrub_rows, 0) <= 1
+            AND COALESCE(grass_rows, 0) <= 1
+            AND COALESCE(urban_rows, 0) <= 1
+            AND COALESCE(ag_rows, 0) <= 1
+            AND COALESCE(barren_rows, 0) <= 1
+        ) AS valid_event_area_km2,
+        SUM(fire_catch_area_km2) AS total_event_area_km2,
+        SUM(COALESCE(forest_value, 0) * fire_catch_area_km2) FILTER (
+          WHERE has_landcover_row
+            AND COALESCE(null_value_count, 0) = 0
+            AND COALESCE(unknown_group_count, 0) = 0
+            AND COALESCE(forest_rows, 0) <= 1
+            AND COALESCE(shrub_rows, 0) <= 1
+            AND COALESCE(grass_rows, 0) <= 1
+            AND COALESCE(urban_rows, 0) <= 1
+            AND COALESCE(ag_rows, 0) <= 1
+            AND COALESCE(barren_rows, 0) <= 1
+        ) / NULLIF(SUM(fire_catch_area_km2) FILTER (
+          WHERE has_landcover_row
+            AND COALESCE(null_value_count, 0) = 0
+            AND COALESCE(unknown_group_count, 0) = 0
+            AND COALESCE(forest_rows, 0) <= 1
+            AND COALESCE(shrub_rows, 0) <= 1
+            AND COALESCE(grass_rows, 0) <= 1
+            AND COALESCE(urban_rows, 0) <= 1
+            AND COALESCE(ag_rows, 0) <= 1
+            AND COALESCE(barren_rows, 0) <= 1
+        ), 0.0) AS forest,
+        SUM(COALESCE(shrub_value, 0) * fire_catch_area_km2) FILTER (
+          WHERE has_landcover_row
+            AND COALESCE(null_value_count, 0) = 0
+            AND COALESCE(unknown_group_count, 0) = 0
+            AND COALESCE(forest_rows, 0) <= 1
+            AND COALESCE(shrub_rows, 0) <= 1
+            AND COALESCE(grass_rows, 0) <= 1
+            AND COALESCE(urban_rows, 0) <= 1
+            AND COALESCE(ag_rows, 0) <= 1
+            AND COALESCE(barren_rows, 0) <= 1
+        ) / NULLIF(SUM(fire_catch_area_km2) FILTER (
+          WHERE has_landcover_row
+            AND COALESCE(null_value_count, 0) = 0
+            AND COALESCE(unknown_group_count, 0) = 0
+            AND COALESCE(forest_rows, 0) <= 1
+            AND COALESCE(shrub_rows, 0) <= 1
+            AND COALESCE(grass_rows, 0) <= 1
+            AND COALESCE(urban_rows, 0) <= 1
+            AND COALESCE(ag_rows, 0) <= 1
+            AND COALESCE(barren_rows, 0) <= 1
+        ), 0.0) AS shrub,
+        SUM(COALESCE(grass_value, 0) * fire_catch_area_km2) FILTER (
+          WHERE has_landcover_row
+            AND COALESCE(null_value_count, 0) = 0
+            AND COALESCE(unknown_group_count, 0) = 0
+            AND COALESCE(forest_rows, 0) <= 1
+            AND COALESCE(shrub_rows, 0) <= 1
+            AND COALESCE(grass_rows, 0) <= 1
+            AND COALESCE(urban_rows, 0) <= 1
+            AND COALESCE(ag_rows, 0) <= 1
+            AND COALESCE(barren_rows, 0) <= 1
+        ) / NULLIF(SUM(fire_catch_area_km2) FILTER (
+          WHERE has_landcover_row
+            AND COALESCE(null_value_count, 0) = 0
+            AND COALESCE(unknown_group_count, 0) = 0
+            AND COALESCE(forest_rows, 0) <= 1
+            AND COALESCE(shrub_rows, 0) <= 1
+            AND COALESCE(grass_rows, 0) <= 1
+            AND COALESCE(urban_rows, 0) <= 1
+            AND COALESCE(ag_rows, 0) <= 1
+            AND COALESCE(barren_rows, 0) <= 1
+        ), 0.0) AS grass,
+        SUM(COALESCE(urban_value, 0) * fire_catch_area_km2) FILTER (
+          WHERE has_landcover_row
+            AND COALESCE(null_value_count, 0) = 0
+            AND COALESCE(unknown_group_count, 0) = 0
+            AND COALESCE(forest_rows, 0) <= 1
+            AND COALESCE(shrub_rows, 0) <= 1
+            AND COALESCE(grass_rows, 0) <= 1
+            AND COALESCE(urban_rows, 0) <= 1
+            AND COALESCE(ag_rows, 0) <= 1
+            AND COALESCE(barren_rows, 0) <= 1
+        ) / NULLIF(SUM(fire_catch_area_km2) FILTER (
+          WHERE has_landcover_row
+            AND COALESCE(null_value_count, 0) = 0
+            AND COALESCE(unknown_group_count, 0) = 0
+            AND COALESCE(forest_rows, 0) <= 1
+            AND COALESCE(shrub_rows, 0) <= 1
+            AND COALESCE(grass_rows, 0) <= 1
+            AND COALESCE(urban_rows, 0) <= 1
+            AND COALESCE(ag_rows, 0) <= 1
+            AND COALESCE(barren_rows, 0) <= 1
+        ), 0.0) AS urban,
+        SUM(COALESCE(ag_value, 0) * fire_catch_area_km2) FILTER (
+          WHERE has_landcover_row
+            AND COALESCE(null_value_count, 0) = 0
+            AND COALESCE(unknown_group_count, 0) = 0
+            AND COALESCE(forest_rows, 0) <= 1
+            AND COALESCE(shrub_rows, 0) <= 1
+            AND COALESCE(grass_rows, 0) <= 1
+            AND COALESCE(urban_rows, 0) <= 1
+            AND COALESCE(ag_rows, 0) <= 1
+            AND COALESCE(barren_rows, 0) <= 1
+        ) / NULLIF(SUM(fire_catch_area_km2) FILTER (
+          WHERE has_landcover_row
+            AND COALESCE(null_value_count, 0) = 0
+            AND COALESCE(unknown_group_count, 0) = 0
+            AND COALESCE(forest_rows, 0) <= 1
+            AND COALESCE(shrub_rows, 0) <= 1
+            AND COALESCE(grass_rows, 0) <= 1
+            AND COALESCE(urban_rows, 0) <= 1
+            AND COALESCE(ag_rows, 0) <= 1
+            AND COALESCE(barren_rows, 0) <= 1
+        ), 0.0) AS ag,
+        SUM(COALESCE(barren_value, 0) * fire_catch_area_km2) FILTER (
+          WHERE has_landcover_row
+            AND COALESCE(null_value_count, 0) = 0
+            AND COALESCE(unknown_group_count, 0) = 0
+            AND COALESCE(forest_rows, 0) <= 1
+            AND COALESCE(shrub_rows, 0) <= 1
+            AND COALESCE(grass_rows, 0) <= 1
+            AND COALESCE(urban_rows, 0) <= 1
+            AND COALESCE(ag_rows, 0) <= 1
+            AND COALESCE(barren_rows, 0) <= 1
+        ) / NULLIF(SUM(fire_catch_area_km2) FILTER (
+          WHERE has_landcover_row
+            AND COALESCE(null_value_count, 0) = 0
+            AND COALESCE(unknown_group_count, 0) = 0
+            AND COALESCE(forest_rows, 0) <= 1
+            AND COALESCE(shrub_rows, 0) <= 1
+            AND COALESCE(grass_rows, 0) <= 1
+            AND COALESCE(urban_rows, 0) <= 1
+            AND COALESCE(ag_rows, 0) <= 1
+            AND COALESCE(barren_rows, 0) <= 1
+        ), 0.0) AS barren
+      FROM joined
+      GROUP BY usgs_site, year, start_date, end_date, events_sorted, event_count
+    )
+    SELECT
+      usgs_site,
+      events,
+      year,
+      start_date,
+      end_date,
+      forest,
+      shrub,
+      grass,
+      urban,
+      ag,
+      barren,
+      valid_event_area_km2 / NULLIF(total_event_area_km2, 0.0) AS landcover_group_weight_coverage,
+      bad_or_missing_count > 0 AS has_missing_landcover_group,
+      (bad_or_missing_count > 0) AS has_bad_data
+    FROM per_group
+    ORDER BY usgs_site, start_date, end_date;
+  $fmt$, mv_name, lf_mv_name);
+
+  EXECUTE format('CREATE INDEX IF NOT EXISTS %I_usgs_site_idx ON firearea.%I (usgs_site)', mv_name, mv_name);
+  EXECUTE format('CREATE INDEX IF NOT EXISTS %I_start_date_idx ON firearea.%I (start_date)', mv_name, mv_name);
+
+  result_msg := format('SUCCESS: Created firearea.%s and indexes', mv_name);
+  RAISE NOTICE '%', result_msg;
+  RETURN result_msg;
+
+EXCEPTION
+  WHEN OTHERS THEN
+    RAISE EXCEPTION 'FAILED: Error creating landcover group join MV for analyte %: %', analyte, SQLERRM;
+END;
+$$;
+
+-- Examples:
+-- SELECT firearea.create_landcover_group_join_largest_analyte_mv('nitrate');
+-- SELECT firearea.create_landcover_group_join_largest_analyte_mv('ammonium');
+-- SELECT firearea.create_landcover_group_join_largest_analyte_mv('spcond');
+-- SELECT firearea.create_landcover_group_join_largest_analyte_mv('orthop');
+```
+
+## fn. view: usgs_water_chem_std AND dependencies
+
+``` sql
 CREATE OR REPLACE FUNCTION firearea.rebuild_usgs_water_chem_std_and_dependencies()
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -1136,13 +1867,24 @@ EXCEPTION
         -- Transaction will automatically roll back on exception
 END;
 $$;
+
+-- Complete rebuild of everything
+-- SELECT firearea.rebuild_usgs_water_chem_std_and_dependencies();
 ```
 
-## firearea.create_analyte_counts_view
+## fn. view: analyte_counts (summer)
 
-- Source chunk: chunk_9
+Generate a view of summary statistics surrounding analyte data
+availability (number of samples pre, post fire).
 
-```sql
+The `num_pre_fire` and `num_post_fire` reflect the number of
+observations in the period prior to and after fire or aggregated fires
+of interest.
+
+The number of observations reflects observations for which there is also
+a discharge measurement.
+
+``` sql
 CREATE OR REPLACE FUNCTION firearea.create_analyte_counts_view(analyte_name TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -1236,11 +1978,67 @@ END;
 $$;
 ```
 
-## firearea.create_largest_analyte_valid_fire_per_site_mv
+## fn. m.view: analyte largest fire
 
-- Source chunk: chunk_10
+purpose:
 
-```sql
+Function to create a materialized view that identifies the largest
+wildfire per watershed (`usgs_site`) that meets strict pre- and
+post-fire data quality criteria for water quality analysis. It enables
+fast, repeatable queries for analyzing wildfire impacts on analyte and
+discharge patterns.
+
+use case:
+
+- Supports analysis of analyte and streamflow responses to wildfire.
+- Used to restrict focus to watersheds with both extensive monitoring
+  coverage and a single, largest impactful fire.
+- Reused in downstream workflows for filtering, reporting, or dashboard
+  visualizations.
+
+logic summary:
+
+1.  Join analyte and discharge records by site and date.
+2.  Match those records to fire windows from `ranges_agg`.
+3.  Apply Data Sufficiency Filters:
+
+- Must have analyte + discharge data in the 3 years before and after
+  each fire.
+- Must include observations in flow quartiles 2, 3, and 4 in both
+  windows.
+
+4.  Group results by fire event (site, year, start/end date).
+5.  Select only the largest valid fire per watershed, ranked by
+    `cum_fire_area`.
+
+fields included:
+
+| Column Name | Description |
+|----|----|
+| `usgs_site` | Watershed site identifier |
+| `year` | Fire year (based on ignition date) |
+| `start_date` | Start date of fire event group |
+| `end_date` | End date of fire event group |
+| `cum_fire_area` | Cumulative fire-affected area (km²) for the grouped event |
+| `before_count` | Count of analyte observations in 3-year window before fire |
+| `after_count` | Count of analyte observations in 3-year window after fire |
+| `bq2`, `bq3`, `bq4` | Count of pre-fire flow quartile 2, 3, and 4 observations |
+| `aq2`, `aq3`, `aq4` | Count of post-fire flow quartile 2, 3, and 4 observations |
+
+technical notes:
+
+- Source tables:
+  - `firearea.{analyte}`
+  - `firearea.discharge`
+  - `firearea.ranges_agg`
+- Computation-intensive: uses joins, date filters, aggregation, and
+  conditional `HAVING` clauses.
+- Materialized to avoid recomputation and accelerate downstream query
+  performance.
+- Refresh as needed to reflect updates to analyte, discharge, or fire
+  data.
+
+``` sql
 CREATE OR REPLACE FUNCTION firearea.create_largest_analyte_valid_fire_per_site_mv(analyte_name TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -1359,9 +2157,35 @@ END;
 $$;
 ```
 
-## firearea.export_analyte_summary_all_sites
+## fn. export: summary all analyte sites
 
-```sql
+output columns:
+
+| Column              | Description                                           |
+|---------------------|-------------------------------------------------------|
+| usgs_site           | Catchment/site identifier                             |
+| year                | Fire year                                             |
+| start_date          | Start date of fire period                             |
+| end_date            | End date of fire period                               |
+| previous_end_date   | End date of previous fire period                      |
+| next_start_date     | Start date of next fire period                        |
+| days_since          | Days since previous fire                              |
+| days_until          | Days until next fire                                  |
+| events              | Array of event IDs in this fire period                |
+| cum_fire_area       | Cumulative burned area (km²) for the fire period      |
+| catch_area          | Catchment area (km²)                                  |
+| cum_per_cent_burned | Cumulative percent of catchment burned                |
+| all_fire_area       | Total burned area (km²) in catchment through end_date |
+| all_per_cent_burned | Percent of total catchment burned through end_date    |
+| latitude            | Catchment centroid latitude                           |
+| longitude           | Catchment centroid longitude                          |
+| count_before_start  | Number of analyte observations before fire window     |
+| count_after_end     | Number of analyte observations after fire window      |
+
+``` sql
+-- DROP FUNCTION IF EXISTS firearea.export_analyte_summary_all_sites(TEXT);
+-- DROP FUNCTION IF EXISTS firearea.export_analyte_summary_all_sites(TEXT, TEXT);
+
 CREATE OR REPLACE FUNCTION firearea.export_analyte_summary_all_sites(analyte_name TEXT, file_path TEXT DEFAULT NULL)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -1418,13 +2242,70 @@ EXCEPTION
         RETURN FORMAT('ERROR: Failed to export %s summary: %s', analyte_name, SQLERRM);
 END;
 $$;
+
+-- examples (default path is '/tmp')
+-- SELECT firearea.export_analyte_summary_all_sites('nitrate'::TEXT);
+-- SELECT firearea.export_analyte_summary_all_sites('nitrate'::TEXT, '/tmp/nitrate_summary.csv'::TEXT);
 ```
 
-## firearea.export_analyte_largest_fire_sites
+## fn. export: summary largest fire sites
 
-- Source chunk: chunk_12
+purpose:
 
-```sql
+This function generates a query that retrieves comprehensive fire event
+information for each watershed (`usgs_site`) based on the largest
+wildfire that also meets analyte-discharge data sufficiency criteria. It
+ensures that only those events selected for water quality analysis are
+described in detail using the `ranges_agg` view.
+
+context:
+
+- The `ranges_agg` view aggregates fires by watershed and year,
+  summarizing burn area, duration, spatial extent, and event IDs.
+- The companion materialized view
+  `firearea.largest_{analyte}_valid_fire_per_site` filters these to a
+  single, largest valid fire per watershed with adequate analyte and
+  discharge monitoring.
+- This query joins the two views on `usgs_site`, `start_date`, and
+  `end_date` to return only the selected fires.
+
+query logic:
+
+1.  Pull all rows from `firearea.ranges_agg`, which includes fire
+    grouping metadata per site.
+2.  Filter the results to only the fire windows (start + end dates)
+    identified in the analyte validation materialized view.
+3.  Return the entire record for each matched fire.
+
+input tables:
+
+- `firearea.ranges_agg`: View of grouped and summarized fire events by
+  site.
+- `firearea.largest_{analyte}_valid_fire_per_site`: Materialized view of
+  sites with validated analyte+discharge data coverage.
+
+output columns:
+
+| Column              | Description                                           |
+|---------------------|-------------------------------------------------------|
+| usgs_site           | Catchment/site identifier                             |
+| year                | Fire year                                             |
+| start_date          | Start date of fire period                             |
+| end_date            | End date of fire period                               |
+| previous_end_date   | End date of previous fire period                      |
+| next_start_date     | Start date of next fire period                        |
+| days_since          | Days since previous fire                              |
+| days_until          | Days until next fire                                  |
+| events              | Array of event IDs in this fire period                |
+| cum_fire_area       | Cumulative burned area (km²) for the fire period      |
+| catch_area          | Catchment area (km²)                                  |
+| cum_per_cent_burned | Cumulative percent of catchment burned                |
+| all_fire_area       | Total burned area (km²) in catchment through end_date |
+| all_per_cent_burned | Percent of total catchment burned through end_date    |
+| latitude            | Catchment centroid latitude                           |
+| longitude           | Catchment centroid longitude                          |
+
+``` sql
 CREATE OR REPLACE FUNCTION firearea.export_analyte_largest_fire_sites(analyte_name TEXT, file_path TEXT DEFAULT NULL)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -1480,13 +2361,77 @@ EXCEPTION
         RETURN FORMAT('ERROR: Failed to export %s largest fire sites: %s', analyte_name, SQLERRM);
 END;
 $$;
+
+-- Use default path
+-- SELECT firearea.export_analyte_largest_fire_sites('nitrate'::TEXT);
+
+-- Use custom path  
+-- SELECT firearea.export_analyte_largest_fire_sites('nitrate'::TEXT, '/home/user/data/nitrate_largest_fires.csv'::TEXT);
+
+-- For spcond
+-- SELECT firearea.export_analyte_largest_fire_sites('spcond'::TEXT);
+
+-- For any future analyte
+-- SELECT firearea.export_analyte_largest_fire_sites('phosphate'::TEXT, '/data/phosphate_fires.csv'::TEXT);
 ```
 
-## firearea.export_analyte_q_pre_post_quartiles
+## fn. export: q+c pre-post-quartiles
 
-- Source chunk: chunk_13
+synopsis:
 
-```sql
+This function generates a query (`{analyte}_q_upper_quartiles`) that
+extracts paired analyte and discharge observations from USGS and
+non-USGS monitoring sites focusing on the periods before and after fire.
+It applies **strict filtering**.
+
+- **Joins**: Combines standardized analyte data (`firearea.{analyte}`),
+  combined discharge data (`firearea.discharge`), and fire metadata
+  (`firearea.ranges_agg`).
+- **Time Windows**: Selects observations within 3 years before each fire
+  window’s `start_date` and 3 years after each `end_date`.
+- **Segment Labeling**: Labels each observation as `'before'` or
+  `'after'` the fire window.
+- **Strict Inclusion Criteria**: For each site/fire window, requires:
+  - analyte–discharge observations in both the 3-year pre- and post-fire
+    windows
+  - analyte–discharge observations must include flow quartiles 2, 3, and
+    4 in both windows
+- **Output**: Returns all qualifying observations, along with counts and
+  quartile information.
+
+processing note:
+
+Filtering the observations to include flow spanning quartiles 2-3 in
+each of the windows before and after a fire is a heavy lift
+computationally. This lift is addressed by the materialized view of the
+largest fire when we are filtering by both quartiles and selecting only
+the largest fire in a catchment (e.g., see [here]()). As a result, the
+query to select observations where we filter to the largest fire is much
+faster. So, if there is interest to explore patterns other than only
+those associated with the largest fire in a catchment, consider
+offloading the filtering of flow quartiles to another table,
+materialized view, or even make this query a table or materialized view.
+
+output:
+
+| Column | Description |
+|----|----|
+| `usgs_site` | USGS site ID |
+| `year` | Fire year from `ranges_agg` |
+| `start_date` | Fire window start date |
+| `end_date` | Fire window end date |
+| `segment` | `'before'` or `'after'` fire window, indicating observation timing |
+| `date` | Observation date |
+| `value_std` | Standardized analyte concentration |
+| `"Flow"` | Daily discharge value |
+| `quartile` | Discharge quartile (1–4) for the observation |
+| `before_count` | Number of valid analyte–discharge observations in the 3 years before fire |
+| `after_count` | Number of valid analyte–discharge observations in the 3 years after fire |
+
+The query result is saved as:
+`{analyte}_discharge_data_filtered_quartiles_234.csv`
+
+``` sql
 CREATE OR REPLACE FUNCTION firearea.export_analyte_q_pre_post_quartiles(analyte_name TEXT, file_path TEXT DEFAULT NULL)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -1612,13 +2557,98 @@ EXCEPTION
         RETURN FORMAT('ERROR: Failed to export %s pre-post quartiles data: %s', analyte_name, SQLERRM);
 END;
 $$;
+
+-- Use default path
+-- SELECT firearea.export_analyte_q_pre_post_quartiles('nitrate'::TEXT);
+
+-- Use custom path  
+-- SELECT firearea.export_analyte_q_pre_post_quartiles('nitrate'::TEXT, '/home/user/data/nitrate_q_quartiles.csv'::TEXT);
+
+-- For spcond
+-- SELECT firearea.export_analyte_q_pre_post_quartiles('spcond'::TEXT);
+
+-- For any future analyte
+-- SELECT firearea.export_analyte_q_pre_post_quartiles('phosphate'::TEXT, '/data/phosphate_quartiles.csv'::TEXT);
 ```
 
-## firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv
+## fn. m. view: q+c pre-post-quartiles largest fire
 
-- Source chunk: chunk_14
+purpose:
 
-```sql
+Analyte and discharge observations from USGS sites surrounding
+wildfires. It isolates data for only the largest valid fire per
+watershed, where validity is defined by the presence of adequate water
+quality monitoring data before and after the fire.
+
+key objectives:
+
+- Limit analysis to only the most impactful fire per watershed, based on
+  fire area (`cum_fire_area`).
+- ensure fires are sufficiently monitored, with:
+  - At least 3 years of data before and after the fire.
+  - Presence of streamflow across flow quartiles 2, 3, and 4 in both
+    windows.
+
+core logic steps:
+
+1.  Join analyte and discharge records by site and date.
+2.  Filter for valid data windows:
+    - Records must fall within 3 years before or after each fire.
+    - Each fire must have discharge records in quartiles 2–4 in both
+      windows.
+3.  Select valid fires per watershed from `ranges_agg`, ensuring they
+    meet all data coverage criteria.
+4.  Identify the largest fire per `usgs_site` by selecting the maximum
+    `cum_fire_area` among valid events.
+5.  Return analyte + discharge records for the selected fire per
+    watershed, with an additional field (`segment`) labeling records as
+    “before” or “after” the fire.
+
+processing note:
+
+joins to `largest_{analyte}_valid_fire_per_site`:
+
+1.  The materialized view only contains fires that have already passed
+    the quartile filtering
+2.  The join on usgs_site will only return data for sites/fires that met
+    the criteria
+3.  The date filtering in the export function ensures only the 3-year
+    windows around those validated fires are included
+
+inputs:
+
+- `firearea.{analyte}`: View of USGS and non-USGS analyte observations
+- `firearea.discharge`: Daily streamflow and derived quartile
+  classification
+- `firearea.ranges_agg`: Pre-aggregated wildfire periods and fire area
+  metrics per watershed
+
+outputs:
+
+| column name    | description                                      |
+|----------------|--------------------------------------------------|
+| `usgs_site`    | Site identifier                                  |
+| `year`         | Fire event year                                  |
+| `start_date`   | Fire event start date                            |
+| `end_date`     | Fire event end date                              |
+| `segment`      | Temporal label: `'before'` or `'after'` fire     |
+| `date`         | analyte/discharge observation date               |
+| `value_std`    | Standardized analyte concentration               |
+| `"Flow"`       | Discharge (cfs)                                  |
+| `quartile`     | Discharge flow quartile (1–4)                    |
+| `before_count` | Count of observations in 3 years before the fire |
+| `after_count`  | Count of observations in 3 years after the fire  |
+
+function context:
+
+- materialized view constructed as:
+  `{analyte}_q_pre_post_quartiles_largest_fire`
+- joins against: `firearea.largest_{analyte}_valid_fire_per_site` for
+  largest valid fire per site selection
+- was formerly exported with query result saved as:
+  `{analyte}_discharge_quartiles_234_max_fire.csv`
+
+``` sql
 CREATE OR REPLACE FUNCTION firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv(analyte_name TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -1715,13 +2745,89 @@ EXCEPTION WHEN OTHERS THEN
     RETURN FORMAT('ERROR: Failed to create MV for %s: %s', analyte_name, SQLERRM);
 END;
 $$;
+
+-- SELECT firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv('nitrate');
+-- SELECT firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv('ammonium');
+-- SELECT firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv('orthop');
+-- SELECT firearea.create_analyte_q_pre_post_quartiles_largest_fire_mv('spcond');
 ```
 
-## firearea.create_analyte_q_pre_quartiles_largest_fire_mv
+## fn. m. view: q+c pre-quartiles largest fire
 
-- Source chunk: chunk_15
+purpose:
 
-```sql
+Retrieves analyte and discharge records for USGS sites (`usgs_site`)
+surrounding wildfires. It ensures strong sampling coverage before the
+fire, requiring observations in flow quartiles 2, 3, and 4, while
+placing no constraint on post-fire sampling coverage.
+
+\*\* It is important to note that the results of this query are NOT a
+superset of the results of the query where we are also constraining the
+post-fire values to having representative values from quartiles 2, 3,
+and 4. The reason is that largest fire for a given site is not
+necessarily the same across the two queries.
+
+For example, the largest fire in catchment USGS-06259000 for *nitrate*
+occurred on 2011-07-22 when both before and after fire windows must
+contain quartiles 2, 3, and 4 but on 2021-08-19 when only the pre-fire
+data needed to reflect values in quartiles 2, 3, and 4. \*\*
+
+Note that we are not using these results for analyses but serves as the
+base for subsequent queries to pull discharge and fire details for the
+sites.
+
+context:
+
+- This approach enables inclusion of fires where post-fire data may be
+  sparse, but pre-disturbance flow conditions are well characterized.
+- It is ideal for analyses focused on establishing a robust pre-fire
+  baseline for analyte concentrations.
+
+query logic:
+
+1.  Join `firearea.{analyte}`, `firearea.discharge`, and
+    `firearea.ranges_agg`.
+2.  Identify all fire windows per site (`usgs_site`) and evaluate 3-year
+    sampling windows:
+    - Pre-fire window must contain observations in flow quartiles 2, 3,
+      and 4. Post-fire window is included regardless of flow
+      distribution.
+3.  From qualifying fire windows, select the largest fire event per site
+    using `cum_fire_area DESC`.
+4.  Return analyte–discharge samples from the 3-year pre- and post-fire
+    windows, with labeled segment (`'before'` or `'after'`).
+
+input tables:
+
+- `firearea.{analyte}`: Standardized analyte observations by site and
+  date.
+- `firearea.discharge`: Discharge flow volume and quartile per site and
+  date.
+- `firearea.ranges_agg`: Aggregated fire events per site, with timing
+  and spatial metrics.
+
+output columns:
+
+| Column Name    | Description                            |
+|----------------|----------------------------------------|
+| `usgs_site`    | Watershed site identifier              |
+| `year`         | Year of the fire event group           |
+| `start_date`   | Start of fire window                   |
+| `end_date`     | End of fire window                     |
+| `segment`      | `'before'` or `'after'` the fire event |
+| `date`         | Observation date                       |
+| `value_std`    | Standardized analyte concentration     |
+| `"Flow"`       | Discharge volume (cfs)                 |
+| `quartile`     | Flow quartile category (1–4)           |
+| `before_count` | Total records in pre-fire window       |
+| `after_count`  | Total records in post-fire window      |
+
+- materialized view constructed as:
+  `{analyte}_q_pre_quartiles_largest_fire`
+- was formerly an export statement with query result saved as:
+  `{analyte}_discharge_before_quartiles_234_max_fire.csv`
+
+``` sql
 CREATE OR REPLACE FUNCTION firearea.create_analyte_q_pre_quartiles_largest_fire_mv(analyte_name TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -1854,13 +2960,61 @@ EXCEPTION
         RETURN FORMAT('ERROR: Failed to create MV for %s: %s', analyte_name, SQLERRM);
 END;
 $$;
+
+-- SELECT firearea.create_analyte_q_pre_quartiles_largest_fire_mv('nitrate');
 ```
 
-## firearea.export_analyte_covariates_pre_post
+## fn. export: q+c pre-post-quartiles + largest fire + covariates
 
-- Source chunk: chunk_16
+- Function: firearea.export_analyte_covariates_pre_post(analyte_name
+  TEXT, out_path TEXT DEFAULT NULL)
+- Purpose: Export analyte records joined with covariates to CSV
+  (server-side COPY); if out_path is NULL, returns the SQL text for
+  client-side .
+- Analyte param: nitrate \| ammonium \| orthop \| spcond
+- Base layer: firearea.{analyte}\_q_pre_post_quartiles_largest_fire
+  (materialized view)
+- Covariates (LEFT joins):
+  - firearea.catchment_ecoregion: dominant per site via DISTINCT ON
+    (usgs_site) ordered by percent_overlap DESC, overlap_area_km2 DESC,
+    ogc_fid ASC
+  - firearea.ranges_agg: full range attributes keyed by usgs_site, year,
+    start_date, end_date
+  - covariates.fire_classifications: pivoted to one row per usgs_site
+    with return_interval, regime_group, veg_departure, fire_risk
+  - covariates.elevation: aggregated elevation/slope metrics;
+    constrained to one row per usgs_site via DISTINCT ON
+  - covariates.nlcd: largest class_percent per usgs_site via
+    ROW_NUMBER(); emits value as LULC
+  - firearea.evi_join_largest\_{analyte}: EVI metrics joined by
+    usgs_site + events; constrained via DISTINCT ON (usgs_site, events)
+  - firearea.fire_severity_join_largest\_{analyte}: fire severity
+    metrics joined by usgs_site + events; constrained via DISTINCT ON
+    (usgs_site, events)
+- Duplicate guards: Applied to ecoregion, elevation, NLCD, EVI, and fire
+  severity joins to preserve base MV row count
+- Ordering: usgs_site, year, segment DESC, date
+- Usage:
+  - Server-side: SELECT
+    firearea.export_analyte_covariates_pre_post(‘nitrate’,
+    ‘/tmp/nitrate_covariates.csv’);
+  - Client-side: SELECT
+    firearea.export_analyte_covariates_pre_post(‘nitrate’); then (
+    …returned SQL… ) TO ‘/tmp/nitrate_covariates.csv’ WITH CSV HEADER
+- Requirements:
+  - firearea.evi_join_largest\_{analyte},
+    firearea.fire_severity_join_largest\_{analyte}, and base MV must
+    exist (validated via pg_matviews)
+  - covariates.fire_classifications must have one row per (usgs_site,
+    fire_classification) and only expected fire_classification values
+  - Server must have write permissions for out_path for server-side COPY
+- Notes:
+  - All joins are LEFT to maintain base MV row count; missing covariates
+    yield NULLs
+  - Replace nitrate with other analytes to export their covariate
+    datasets
 
-```sql
+``` sql
 CREATE OR REPLACE FUNCTION firearea.export_analyte_covariates_pre_post(
   analyte_name TEXT,
   out_path TEXT DEFAULT NULL
@@ -1870,6 +3024,7 @@ AS $$
 DECLARE
   base_mv TEXT;
   evi_table TEXT;
+  severity_table TEXT;
   sql TEXT;
 BEGIN
   -- Validate analyte identifier shape
@@ -1880,6 +3035,7 @@ BEGIN
   -- Derive analyte-specific objects
   base_mv := FORMAT('%s_q_pre_post_quartiles_largest_fire', analyte_name);
   evi_table := FORMAT('evi_join_largest_%s', analyte_name);
+  severity_table := FORMAT('fire_severity_join_largest_%s', analyte_name);
 
   -- Ensure base MV exists
   IF NOT EXISTS (
@@ -1895,6 +3051,14 @@ BEGIN
     WHERE schemaname = 'firearea' AND matviewname = evi_table
   ) THEN
     RETURN FORMAT('ERROR: Missing EVI materialized view firearea.%s', evi_table);
+  END IF;
+
+  -- Ensure fire severity table exists
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_matviews
+    WHERE schemaname = 'firearea' AND matviewname = severity_table
+  ) THEN
+    RETURN FORMAT('ERROR: Missing fire severity materialized view firearea.%s', severity_table);
   END IF;
 
   -- Guard: one row per (usgs_site, fire_classification) required before pivot
@@ -2020,6 +3184,15 @@ evi AS (
     %2$I.evi_weight_coverage
   FROM firearea.%2$I
   ORDER BY %2$I.usgs_site, %2$I.events
+),
+severity AS (
+  SELECT DISTINCT ON (%3$I.usgs_site, %3$I.events)
+    %3$I.usgs_site,
+    %3$I.events,
+    %3$I.avg_weighted_fsi,
+    %3$I.fire_severity_weight_coverage
+  FROM firearea.%3$I
+  ORDER BY %3$I.usgs_site, %3$I.events
 )
 SELECT
   base.usgs_site,
@@ -2058,6 +3231,8 @@ SELECT
   fire_classifications_pivot.fire_risk,
   evi.avg_median_post_evi,
   evi.evi_weight_coverage,
+  severity.avg_weighted_fsi,
+  severity.fire_severity_weight_coverage,
   ranges.events
 FROM base
 LEFT JOIN ecoregion
@@ -2076,12 +3251,15 @@ LEFT JOIN fire_classifications_pivot
 LEFT JOIN evi
   ON base.usgs_site = evi.usgs_site
   AND ranges.events = evi.events
+LEFT JOIN severity
+  ON base.usgs_site = severity.usgs_site
+  AND ranges.events = severity.events
 ORDER BY
   base.usgs_site,
   base.year,
   base.segment DESC,
   base.date
-$Q$, base_mv, evi_table);
+$Q$, base_mv, evi_table, severity_table);
 
   IF out_path IS NOT NULL AND out_path <> '' THEN
     EXECUTE FORMAT('COPY (%s) TO %L WITH CSV HEADER;', sql, out_path);
@@ -2095,4 +3273,9 @@ EXCEPTION WHEN OTHERS THEN
   RETURN FORMAT('ERROR: Failed to export %s covariates: %s', analyte_name, SQLERRM);
 END;
 $$;
+
+-- SELECT firearea.export_analyte_covariates_pre_post('nitrate', '/tmp/nitrate_largest_pre_post_covariates.csv');
+-- SELECT firearea.export_analyte_covariates_pre_post('ammonium', '/tmp/ammonium_largest_pre_post_covariates.csv');
+-- SELECT firearea.export_analyte_covariates_pre_post('orthop', '/tmp/orthop_largest_pre_post_covariates.csv');
+-- SELECT firearea.export_analyte_covariates_pre_post('spcond', '/tmp/spcond_largest_pre_post_covariates.csv');
 ```

@@ -14,17 +14,17 @@ Use just recipes to extract sql chunks from qmd files with option to execute
 the sql statements in the sql file as well. There is also a recipe to render
 qmd.
 
-### recommended: sql-first docs
+### recommended: qmd-first docs
 
-Use SQL as canonical and generate Markdown from SQL for GitHub viewing.
+Use the qmd source as canonical for docs and render Markdown with Quarto.
 
-- Generate Markdown from SQL:
-   - just docs-sql water_chem_functions.sql
-- Sync from qmd to sql to md in one command:
+- Generate Markdown from qmd:
+   - just docs water_chem_functions.qmd
+- Sync from qmd to sql + md in one command:
    - just sync water_chem_functions.qmd
 
-This avoids Quarto rendering issues in docs generation while keeping SQL and
-Markdown aligned.
+This keeps SQL and Markdown aligned while preserving the narrative structure
+in the qmd document.
 
 **Work with different .qmd files**
 - just run water_chem_functions.qmd
