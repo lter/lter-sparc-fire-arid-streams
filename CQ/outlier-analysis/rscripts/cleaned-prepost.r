@@ -3,18 +3,27 @@
 library(tidyverse)
 library(pwr)
 
-df <- read.csv("CQ/outlier-analysis/data/test_data.csv")
-nitrate_df <- read.csv("CQ/outlier-analysis/data/nitrate_working_old.csv")
+
+
+df <- read.csv("../data/nitrate-summary.csv")
+nitrate_df <- read.csv("../data/nitrate_working_prediction.csv")
 
 ###########look at difference in number of outliers
 ##wgt is the percent of obs that are outliers
+#data <- df
+#label <- "negative"
 paired_tests <- function(data, label) { 
 
-  wide <- data %>%
+  if (label == "all sites") {
+    wide <- data %>% 
     select(usgs_site, fire_period, wgt) %>%
     pivot_wider(names_from = fire_period, values_from = wgt) %>%
     drop_na()
-
+  } else { wide <- data %>% filter(slopedir == label) %>%
+      select(usgs_site, fire_period, wgt) %>%
+      pivot_wider(names_from = fire_period, values_from = wgt) %>%
+      drop_na()
+  }
   pre  <- wide$Prefire
   post <- wide$Postfire
   n    <- nrow(wide)
@@ -22,8 +31,18 @@ paired_tests <- function(data, label) {
 
   wilcox <- wilcox.test(pre, post, paired = TRUE, exact = FALSE)
   ttest  <- t.test(pre, post, paired = TRUE)
-  list(label = label, n = n, d = d,
-       wilcox_p = wilcox$p.value, t_p = ttest$p.value)
+  # list(label = label, n = n, d = d,
+  #      wilcox_p = wilcox$p.value, t_p = ttest$p.value)
+    current <- pwr.t.test(d = abs(d), n = n, sig.level = 0.05, type = "paired")$power
+  n_80    <- ceiling(pwr.t.test(d = abs(d), power = 0.80, sig.level = 0.05, type = "paired")$n)
+  n_90    <- ceiling(pwr.t.test(d = abs(d), power = 0.90, sig.level = 0.05, type = "paired")$n)
+ 
+  list(label = label, n = n, d = d, power = current, n_80 = n_80, n_90 = n_90,
+       wilcox_p = wtest$p.value, t_p = ttest$p.value,
+       mean_diff = mean(post - pre), sd_diff = sd(post - pre),
+       pre_median = median(pre), post_median = median(post),
+       pre_mean = mean(pre), post_mean = mean(post))
+  
 }
 
 ###power summary that can be run off the paired function
@@ -57,54 +76,30 @@ slope_result
 ##across all sites
 result_all <- paired_tests(df, "all sites")
 power_summary(result_all)
+slope_result <- rbind(slope_result, result_all)
 
-###power curves, values from slope_result
-slope_params <- list(
-  list(label = "Negative (d = 0.424)", d = 0.424, col = "#3266ad", lty = 1),
-  list(label = "Positive (d = 0.309)", d = 0.309, col = "#1d9e75", lty = 2),
-  list(label = "Neutral (d = 0.328)",  d = 0.328, col = "#ba7517", lty = 4),
-  list(label = "All sites (d = 0.344)", d = 0.344, col = "#7f77dd", lty = 3)
-)
+count_results <- list()
+count_results[["all"]]   <- paired_tests(df, "all sites")
+count_results[["negative"]] <- paired_tests(df, "negative")
+count_results[["positive"]] <- paired_tests(df, "positive")
+count_results[["neutral"]]  <- paired_tests(df, "neutral")
 
-n_seq <- 5:150
-
-###this is old code that plots in base
-png("../figures/power_curves_number_base.png", width = 800, height = 500, res = 120)
-par(mar = c(5, 5, 3, 2))
-
-plot(NULL, xlim = c(5, 150), ylim = c(0, 1),
-     xlab = "Sample size (paired sites)", ylab = "Statistical power",
-     main = "Power curves — paired t-test (alpha = 0.05)",
-     las = 1, bty = "l")
-
-abline(h = 0.80, col = "#e24b4a", lty = 5, lwd = 1.2)
-text(148, 0.81, "80%", col = "#e24b4a", adj = 1, cex = 0.8)
-abline(h = 0.90, col = "#e24b4a", lty = 5, lwd = 0.8)
-text(148, 0.91, "90%", col = "#e24b4a", adj = 1, cex = 0.8)
-
-for (sp in slope_params) {
-  powers <- sapply(n_seq, function(n)
-    pwr.t.test(d = sp$d, n = n, sig.level = 0.05, type = "paired")$power)
-  lines(n_seq, powers, col = sp$col, lty = sp$lty, lwd = 2)
-}
-current_ns <- list(
-  list(d = 0.424, n = 16, col = "#3266ad"),
-  list(d = 0.309, n = 19, col = "#1d9e75"),
-  list(d = 0.328, n = 21, col = "#ba7517"),
-  list(d = 0.344, n = 56, col = "#7f77dd")
-)
-for (pt in current_ns) {
-  pwr <- pwr.t.test(d = pt$d, n = pt$n, sig.level = 0.05, type = "paired")$power
-  points(pt$n, pwr, pch = 19, col = pt$col, cex = 1.4)
-}
-legend("bottomright",
-  legend = sapply(slope_params, `[[`, "label"),
-  col    = sapply(slope_params, `[[`, "col"),
-  lty    = sapply(slope_params, `[[`, "lty"),
-  lwd    = 2, bty = "n", cex = 0.85)
-
-dev.off()
-
+power_count <- Filter(Negate(is.null), count_results)
+power_table_count <- do.call(rbind, lapply(power_count, function(r) {
+  data.frame(
+    group        = r$label,
+    n_paired     = r$n,
+    cohens_d     = round(r$d, 3),
+    wilcox_p     = round(r$wilcox_p, 4),
+    t_p          = round(r$t_p, 4),
+    power_pct    = round(r$power * 100, 1),
+    n_for_80pct  = r$n_80,
+    n_for_90pct  = r$n_90
+  )
+}))
+ 
+write.csv(power_table_count, "../output-csvs/outlier_power_table_count.csv", row.names = FALSE)
+###summarise for table
 summary_stats <- df %>%
   group_by(slopedir, fire_period) %>%
   summarise(
@@ -140,49 +135,18 @@ summary_full <- bind_rows(summary_stats, summary_all) %>%
 print(summary_full, n = Inf)
  
 # save as CSV
-write.csv(summary_full, "../output-csvs/outlier_summary_stats_count.csv", row.names = FALSE)
+write.csv(summary_full, "../output-csvs/outlier_summary_stats_count_prediction.csv", row.names = FALSE)
 
 ##nitrate residuals 
 
-##add slopedir
-slopedir_lookup <- df %>%
-  select(usgs_site, slopedir) %>%
-  distinct()
-
-nitrate_df <- nitrate_df %>%
-  left_join(slopedir_lookup, by = "usgs_site")
-
-str(nitrate_df)
-#j <- sts[1]
-sts <- unique(nitrate_df$usgs_site)
-
-####build c-q on prefire then compute residuals of all observations
-comb_flagged <- c()
-for (j in sts){
-    one <- nitrate_df[nitrate_df$usgs_site == j,]
-    ##build the model on prefire 
-    onepre <- one[one$fire_period == "Prefire",]
-    modl <- lm(log(value_std) ~ log(Flow), data=onepre)
-    pred <- predict(modl, newdata=one, interval = "confidence")
-    one$lwr   = exp(pred[, "lwr"])
-    one$upr    = exp(pred[, "upr"])
-    one$fit = pred[, "fit"]
-    #keep in log
-    one$rs <- log(one$value_std) - one$fit
-    one$status <- ifelse(one$value_std < one$lwr | one$value_std > one$upr, "Outside CI", "Inside CI")
-    one$slopedir <- ifelse(modl$coefficients[2] >= .2, "positive", ifelse(modl$coefficients[2] <= -.2 , "negative", "neutral"))
-    comb_flagged <- rbind(comb_flagged, one)
-}
-str(comb_flagged)
-
-##can just skip to here instead:
-write.csv(comb_flagged, "../data/nitrate_working_testing.csv")
-
 ##get outliers
-outliers <- comb_flagged %>%
-  filter(status == "Outside CI")
+outliers <- nitrate_df %>%
+  filter(status == "Outside PI")
 
 print(outliers %>% count(fire_period))
+#   fire_period   n
+# 1    Postfire 155
+# 2     Prefire  36
 
 ##pre-post for all obs
 wide <- outliers %>%
@@ -199,11 +163,11 @@ wide <- outliers %>%
   d    <- mean(post - pre) / sd(post - pre) ##cohen's d
 
   wtest <- wilcox.test(pre, post, paired = TRUE, exact = FALSE)
- # data:  pre and post
-#V = 679, p-value = 0.2256
+# data:  pre and post
+# V = 15, p-value = 0.4017
   ttest <- t.test(pre, post, paired = TRUE)
 # data:  pre and post
-# t = 0.76798, df = 46, p-value = 0.4464
+# t = 0.9631, df = 5, p-value = 0.3797
 
 # unpaired Mann-Whitney on all outlier values 
 pre_vals  <- outliers %>% filter(fire_period == "Prefire")  %>% pull(rs)
@@ -237,40 +201,6 @@ for (slope in c("negative", "positive", "neutral")) {
   pooled_sd <- sqrt((sd(pre)^2 + sd(post)^2) / 2)
   d_s <- (mean(post) - mean(pre)) / pooled_sd
 }
-##outlier magnitude
-
-# png("../figures/outlier_magnitude.png", width = 900, height = 500, res = 120)
-# par(mfrow = c(1, 2), mar = c(5, 5, 3, 2))
-
-# # Panel 1: all sites combined 
-# boxplot(rs ~ fire_period, data = outliers,
-#         col  = c("#b5d4f4", "#9fe1cb"),
-#         main = "All sites combined",
-#         ylab = "Nitrate (value_std)", xlab = "",
-#         outline = TRUE, las = 1)
-# mtext("Outlier magnitude: Pre vs Post fire", side = 3, line = -1.5, outer = TRUE, font = 2)
-
-# # Panel 2: by slope direction
-# outliers$group <- paste(outliers$slopedir, outliers$fire_period, sep = "\n")
-# slope_order <- c(
-#   "negative\nPrefire", "negative\nPostfire",
-#   "positive\nPrefire", "positive\nPostfire",
-#   "neutral\nPrefire",  "neutral\nPostfire"
-# )
-# outliers$group <- factor(outliers$group, levels = slope_order)
-
-# cols <- rep(c("#b5d4f4", "#9fe1cb"), 3)
-# boxplot(rs ~ group, data = outliers,
-#         col  = cols,
-#         main = "By slope direction",
-#         ylab = "Nitrate (rs)", xlab = "",
-#         outline = TRUE, las = 2, cex.axis = 0.75)
-
-# legend("topright", legend = c("Prefire", "Postfire"),
-#        fill = c("#b5d4f4", "#9fe1cb"), bty = "n", cex = 0.85)
-
-# dev.off()
-
 
 ##paired stats - idk why the other function isn't working
 run_paired_resid <- function(subset, label) {
@@ -348,7 +278,7 @@ summary_full <- bind_rows(summary_stats, summary_all) %>%
 print(summary_full, n = Inf)
  
 # save as CSV
-write.csv(summary_full, "../output-csvs/outlier_residual_summary_stats.csv", row.names = FALSE)
+write.csv(summary_full, "../output-csvs/outlier_residual_summary_stats_prediction.csv", row.names = FALSE)
 
 #power table 
 power_rows <- Filter(Negate(is.null), resid_results)
@@ -366,7 +296,7 @@ power_table <- do.call(rbind, lapply(power_rows, function(r) {
 }))
  
 print(power_table, row.names = FALSE)
-write.csv(power_table, "../output-csvs/outlier_power_table_count.csv", row.names = FALSE) 
+write.csv(power_table, "../output-csvs/outlier_power_table_magnitude.csv", row.names = FALSE) 
 
 ###unpaired Mann-Whitney for reference 
 pre_r  <- outliers %>% filter(fire_period == "Prefire")  %>% pull(rs)
@@ -376,61 +306,6 @@ utest     <- wilcox.test(pre_r, post_r, paired = FALSE, exact = FALSE)
 pooled_sd <- sqrt((sd(pre_r)^2 + sd(post_r)^2) / 2)
 d_u       <- (mean(post_r) - mean(pre_r)) / pooled_sd
 
-group_cols <- c(
-  "All sites" = "#7f77dd",
-  "negative"  = "#3266ad",
-  "positive"  = "#1d9e75",
-  "neutral"   = "#ba7517"
-)
-group_ltys <- c("All sites" = 3, "negative" = 1, "positive" = 2, "neutral" = 4)
- 
-slope_params_resid <- lapply(Filter(Negate(is.null), resid_results), function(r) {
-  list(
-    label = sprintf("%s (d = %.3f)", r$label, r$d),
-    d     = abs(r$d),
-    col   = group_cols[r$label],
-    lty   = group_ltys[r$label]
-  )
-})
- 
-current_pts <- lapply(Filter(Negate(is.null), resid_results), function(r) {
-  list(d = abs(r$d), n = r$n, col = group_cols[r$label])
-})
- 
-n_seq <- 5:300
- 
-png("../figures/outlier_power_curves.png", width = 800, height = 500, res = 120)
-par(mar = c(5, 5, 3, 2))
- 
-plot(NULL, xlim = c(5, 300), ylim = c(0, 1),
-     xlab = "Sample size (paired sites)",
-     ylab = "Statistical power",
-     main = "Power curves — C-Q residual magnitude (paired t, alpha = 0.05)",
-     las = 1, bty = "l")
- 
-abline(h = 0.80, col = "#e24b4a", lty = 5, lwd = 1.2)
-text(298, 0.81, "80%", col = "#e24b4a", adj = 1, cex = 0.8)
-abline(h = 0.90, col = "#e24b4a", lty = 5, lwd = 0.8)
-text(298, 0.91, "90%", col = "#e24b4a", adj = 1, cex = 0.8)
- 
-for (sp in slope_params_resid) {
-  powers <- sapply(n_seq, function(n)
-    pwr.t.test(d = sp$d, n = n, sig.level = 0.05, type = "paired")$power)
-  lines(n_seq, powers, col = sp$col, lty = sp$lty, lwd = 2)
-}
- 
-for (pt in current_pts) {
-  pwr_pt <- pwr.t.test(d = pt$d, n = pt$n, sig.level = 0.05, type = "paired")$power
-  points(pt$n, pwr_pt, pch = 19, col = pt$col, cex = 1.4)
-}
- 
-legend("bottomright",
-  legend = sapply(slope_params_resid, `[[`, "label"),
-  col    = sapply(slope_params_resid, `[[`, "col"),
-  lty    = sapply(slope_params_resid, `[[`, "lty"),
-  lwd    = 2, bty = "n", cex = 0.85)
- 
-dev.off()
 
 #########all plots#######
 fire_colours <- c("Prefire" = "#b5d4f4", "Postfire" = "#9fe1cb")
@@ -501,13 +376,13 @@ p_resid_combined <- cowplot::plot_grid(
 
 p_resid_combined 
 
-ggsave("../figures/outlier_residuals_gg.png", p_resid_combined, width = 10, height = 4.5, dpi = 150)
+ggsave("../figures/outlier_residuals_magnitude_predict.png", p_resid_combined, width = 10, height = 4.5, dpi = 150)
  
 #plot2
 
-colnames(comb_flagged)
-comb_flagged$inx <- 1
-outlier_counts <- comb_flagged %>%
+colnames(nitrate_df)
+nitrate_df$inx <- 1
+outlier_counts <- nitrate_df %>%
   mutate(
     fire_period = factor(fire_period, levels = c("Prefire", "Postfire")),
     slopedir    = factor(slopedir, levels = c("negative", "positive", "neutral"),
@@ -515,7 +390,7 @@ outlier_counts <- comb_flagged %>%
   ) %>%
   group_by(usgs_site, fire_period, slopedir) %>%
   summarise(
-    n_outliers = sum(inx[status == "Outside CI"]),
+    n_outliers = sum(inx[status == "Outside PI"]),
     n_total    = n(),
     pct_out    = n_outliers / n_total,
     .groups    = "drop"
@@ -532,7 +407,9 @@ p_count_all <- ggplot(outlier_counts,
   ) +
   theme_fire +
   theme(legend.position = "none")
- 
+
+p_count_all
+
 p_count_slope <- ggplot(outlier_counts,
                         aes(x = fire_period, y = pct_out, fill = fire_period)) +
   geom_boxplot(outlier.size = 0.8, outlier.alpha = 0.4, width = 0.5) +
@@ -545,7 +422,9 @@ p_count_slope <- ggplot(outlier_counts,
   ) +
   theme_fire +
   theme(legend.position = "none")
- 
+
+p_count_slope
+
 p_count_combined <- cowplot::plot_grid(
   p_count_all, p_count_slope,
   ncol       = 2,
@@ -554,7 +433,7 @@ p_count_combined <- cowplot::plot_grid(
   label_size = 12
 )
 
-ggsave("../figures/outlier_counts.png", p_count_combined, width = 10, height = 4.5, dpi = 150)
+ggsave("../figures/outlier_counts_prediction.png", p_count_combined, width = 10, height = 4.5, dpi = 150)
  
 #plot3 power curves 
  
@@ -634,8 +513,10 @@ p_power <- ggplot(power_curve_df, aes(x = n, y = power,
   ) +
   theme_fire +
   theme(legend.position = "right")
- 
-ggsave("../figures/outlier_power_curves_magnitude.png", p_power, width = 8, height = 5, dpi = 150)
+
+p_power
+
+ggsave("../figures/outlier_power_curves_magnitude-prediction.png", p_power, width = 8, height = 5, dpi = 150)
 
  # plot4
 count_results <- list()
@@ -663,7 +544,8 @@ for (grp_name in c("all", "negative", "positive", "neutral")) {
     label = lbl, n = n, d = d_c, power = cp, n_80 = n80, n_90 = n90
   )
 }
-resid_results
+
+#resid_results
 power_rows <- Filter(Negate(is.null), count_results)
 power_table <- do.call(rbind, lapply(power_rows, function(r) {
   data.frame(
@@ -679,7 +561,7 @@ power_table <- do.call(rbind, lapply(power_rows, function(r) {
 }))
  
 print(power_table, row.names = FALSE)
-write.csv(power_table, "../output-csvs/outlier_power_table.csv", row.names = FALSE) 
+write.csv(power_table, "../output-csvs/outlier_power_magnitude_table_prediction.csv", row.names = FALSE) 
  
 count_curve_df <- do.call(rbind, lapply(Filter(Negate(is.null), count_results), function(r) {
   ns <- 5:300
@@ -738,5 +620,180 @@ p_power_count <- ggplot(count_curve_df, aes(x = n, y = power,
   ) +
   theme_fire +
   theme(legend.position = "right")
+
+p_power_count
+
+ggsave("../figures/count_power_curves_prediction.png", p_power_count, width = 8, height = 5, dpi = 150)
+
+
+#############old ignore########
+###power curves, values from slope_result
+# slope_params <- list(
+#   list(label = "Negative (d = 0.424)", d = 0.424, col = "#3266ad", lty = 1),
+#   list(label = "Positive (d = 0.309)", d = 0.309, col = "#1d9e75", lty = 2),
+#   list(label = "Neutral (d = 0.328)",  d = 0.328, col = "#ba7517", lty = 4),
+#   list(label = "All sites (d = 0.344)", d = 0.344, col = "#7f77dd", lty = 3)
+# )
+
+# n_seq <- 5:150
+
+# ###this is old code that plots in base
+# png("../figures/power_curves_number_base.png", width = 800, height = 500, res = 120)
+# par(mar = c(5, 5, 3, 2))
+
+# plot(NULL, xlim = c(5, 150), ylim = c(0, 1),
+#      xlab = "Sample size (paired sites)", ylab = "Statistical power",
+#      main = "Power curves — paired t-test (alpha = 0.05)",
+#      las = 1, bty = "l")
+
+# abline(h = 0.80, col = "#e24b4a", lty = 5, lwd = 1.2)
+# text(148, 0.81, "80%", col = "#e24b4a", adj = 1, cex = 0.8)
+# abline(h = 0.90, col = "#e24b4a", lty = 5, lwd = 0.8)
+# text(148, 0.91, "90%", col = "#e24b4a", adj = 1, cex = 0.8)
+
+# for (sp in slope_params) {
+#   powers <- sapply(n_seq, function(n)
+#     pwr.t.test(d = sp$d, n = n, sig.level = 0.05, type = "paired")$power)
+#   lines(n_seq, powers, col = sp$col, lty = sp$lty, lwd = 2)
+# }
+# current_ns <- list(
+#   list(d = 0.424, n = 16, col = "#3266ad"),
+#   list(d = 0.309, n = 19, col = "#1d9e75"),
+#   list(d = 0.328, n = 21, col = "#ba7517"),
+#   list(d = 0.344, n = 56, col = "#7f77dd")
+# )
+# for (pt in current_ns) {
+#   pwr <- pwr.t.test(d = pt$d, n = pt$n, sig.level = 0.05, type = "paired")$power
+#   points(pt$n, pwr, pch = 19, col = pt$col, cex = 1.4)
+# }
+# legend("bottomright",
+#   legend = sapply(slope_params, `[[`, "label"),
+#   col    = sapply(slope_params, `[[`, "col"),
+#   lty    = sapply(slope_params, `[[`, "lty"),
+#   lwd    = 2, bty = "n", cex = 0.85)
+
+# dev.off()
+
+# ##add slopedir
+# slopedir_lookup <- df %>%
+#   select(usgs_site, slopedir) %>%
+#   distinct()
+
+# nitrate_df <- nitrate_df %>%
+#   left_join(slopedir_lookup, by = "usgs_site")
+
+# str(nitrate_df)
+# #j <- sts[1]
+# sts <- unique(nitrate_df$usgs_site)
+
+# ####build c-q on prefire then compute residuals of all observations
+# comb_flagged <- c()
+# for (j in sts){
+#     one <- nitrate_df[nitrate_df$usgs_site == j,]
+#     ##build the model on prefire 
+#     onepre <- one[one$fire_period == "Prefire",]
+#     modl <- lm(log(value_std) ~ log(Flow), data=onepre)
+#     pred <- predict(modl, newdata=one, interval = "confidence")
+#     one$lwr   = exp(pred[, "lwr"])
+#     one$upr    = exp(pred[, "upr"])
+#     one$fit = pred[, "fit"]
+#     #keep in log
+#     one$rs <- log(one$value_std) - one$fit
+#     one$status <- ifelse(one$value_std < one$lwr | one$value_std > one$upr, "Outside CI", "Inside CI")
+#     one$slopedir <- ifelse(modl$coefficients[2] >= .2, "positive", ifelse(modl$coefficients[2] <= -.2 , "negative", "neutral"))
+#     comb_flagged <- rbind(comb_flagged, one)
+# }
+# str(comb_flagged)
+
+# ##can just skip to here instead:
+# write.csv(comb_flagged, "../data/nitrate_working_testing.csv")
+
+# ##outlier magnitude
+
+# # png("../figures/outlier_magnitude.png", width = 900, height = 500, res = 120)
+# # par(mfrow = c(1, 2), mar = c(5, 5, 3, 2))
+
+# # # Panel 1: all sites combined 
+# # boxplot(rs ~ fire_period, data = outliers,
+# #         col  = c("#b5d4f4", "#9fe1cb"),
+# #         main = "All sites combined",
+# #         ylab = "Nitrate (value_std)", xlab = "",
+# #         outline = TRUE, las = 1)
+# # mtext("Outlier magnitude: Pre vs Post fire", side = 3, line = -1.5, outer = TRUE, font = 2)
+
+# # # Panel 2: by slope direction
+# # outliers$group <- paste(outliers$slopedir, outliers$fire_period, sep = "\n")
+# # slope_order <- c(
+# #   "negative\nPrefire", "negative\nPostfire",
+# #   "positive\nPrefire", "positive\nPostfire",
+# #   "neutral\nPrefire",  "neutral\nPostfire"
+# # )
+# # outliers$group <- factor(outliers$group, levels = slope_order)
+
+# # cols <- rep(c("#b5d4f4", "#9fe1cb"), 3)
+# # boxplot(rs ~ group, data = outliers,
+# #         col  = cols,
+# #         main = "By slope direction",
+# #         ylab = "Nitrate (rs)", xlab = "",
+# #         outline = TRUE, las = 2, cex.axis = 0.75)
+
+# # legend("topright", legend = c("Prefire", "Postfire"),
+# #        fill = c("#b5d4f4", "#9fe1cb"), bty = "n", cex = 0.85)
+
+# # dev.off()
+
+# # group_cols <- c(
+# #   "All sites" = "#7f77dd",
+# #   "negative"  = "#3266ad",
+# #   "positive"  = "#1d9e75",
+# #   "neutral"   = "#ba7517"
+# # )
+# # group_ltys <- c("All sites" = 3, "negative" = 1, "positive" = 2, "neutral" = 4)
  
-ggsave("../figures/count_power_curves.png", p_power_count, width = 8, height = 5, dpi = 150)
+# # slope_params_resid <- lapply(Filter(Negate(is.null), resid_results), function(r) {
+# #   list(
+# #     label = sprintf("%s (d = %.3f)", r$label, r$d),
+# #     d     = abs(r$d),
+# #     col   = group_cols[r$label],
+# #     lty   = group_ltys[r$label]
+# #   )
+# # })
+ 
+# # current_pts <- lapply(Filter(Negate(is.null), resid_results), function(r) {
+# #   list(d = abs(r$d), n = r$n, col = group_cols[r$label])
+# # })
+ 
+# # n_seq <- 5:300
+ 
+# # png("../figures/outlier_power_curves.png", width = 800, height = 500, res = 120)
+# # par(mar = c(5, 5, 3, 2))
+ 
+# # plot(NULL, xlim = c(5, 300), ylim = c(0, 1),
+# #      xlab = "Sample size (paired sites)",
+# #      ylab = "Statistical power",
+# #      main = "Power curves — C-Q residual magnitude (paired t, alpha = 0.05)",
+# #      las = 1, bty = "l")
+ 
+# # abline(h = 0.80, col = "#e24b4a", lty = 5, lwd = 1.2)
+# # text(298, 0.81, "80%", col = "#e24b4a", adj = 1, cex = 0.8)
+# # abline(h = 0.90, col = "#e24b4a", lty = 5, lwd = 0.8)
+# # text(298, 0.91, "90%", col = "#e24b4a", adj = 1, cex = 0.8)
+ 
+# # for (sp in slope_params_resid) {
+# #   powers <- sapply(n_seq, function(n)
+# #     pwr.t.test(d = sp$d, n = n, sig.level = 0.05, type = "paired")$power)
+# #   lines(n_seq, powers, col = sp$col, lty = sp$lty, lwd = 2)
+# # }
+ 
+# # for (pt in current_pts) {
+# #   pwr_pt <- pwr.t.test(d = pt$d, n = pt$n, sig.level = 0.05, type = "paired")$power
+# #   points(pt$n, pwr_pt, pch = 19, col = pt$col, cex = 1.4)
+# # }
+ 
+# # legend("bottomright",
+# #   legend = sapply(slope_params_resid, `[[`, "label"),
+# #   col    = sapply(slope_params_resid, `[[`, "col"),
+# #   lty    = sapply(slope_params_resid, `[[`, "lty"),
+# #   lwd    = 2, bty = "n", cex = 0.85)
+ 
+# # dev.off()
