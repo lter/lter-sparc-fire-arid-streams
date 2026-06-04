@@ -25,6 +25,14 @@ docs QMD_FILE:
     @echo "📚 Generating documentation for {{QMD_FILE}}..."
     quarto render {{QMD_FILE}} --to gfm
 
+# Canonical sync workflow: qmd -> sql + md
+sync QMD_FILE:
+    @echo "📖 Extracting SQL from {{QMD_FILE}}..."
+    python3 extract_sql.py {{QMD_FILE}}
+    @echo "📚 Rendering Markdown from {{QMD_FILE}}..."
+    quarto render {{QMD_FILE}} --to gfm
+    @echo "✅ Synced SQL and Markdown from {{QMD_FILE}}"
+
 # Complete workflow: extract, execute, and generate docs
 all QMD_FILE: (run QMD_FILE) (docs QMD_FILE)
     @echo "🎉 Complete workflow finished for {{QMD_FILE}}!"

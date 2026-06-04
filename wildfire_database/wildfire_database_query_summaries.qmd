@@ -560,6 +560,18 @@ ORDER BY
   dd_stats.event_id
 ;
 
+COMMENT ON COLUMN firearea.dd_area_stats.fire_area IS
+'Total MTBS burn boundary area for the fire event (burnbndac converted from acres to square kilometers, km^2).';
+
+COMMENT ON COLUMN firearea.dd_area_stats.catch_area IS
+'Total catchment area for the site, computed from combined catchment geometry in square kilometers (km^2).';
+
+COMMENT ON COLUMN firearea.dd_area_stats.fire_catch_area IS
+'Area of fire geometry intersecting the catchment (catchment-clipped burned area) in square kilometers (km^2).';
+
+COMMENT ON COLUMN firearea.dd_area_stats.per_cent_burned IS
+'Percent of catchment burned by the event, calculated as (fire_catch_area / catch_area) * 100; units are percent (%).';
+
 ```
 
 

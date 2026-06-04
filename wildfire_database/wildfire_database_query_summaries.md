@@ -1,4 +1,6 @@
-
+``` {r}
+#| child: _setup.qmd
+```
 
 ## overview
 
@@ -17,7 +19,10 @@ that these queries will be run infrequently and selectively.
 A view of discharge that reflects the combined records of data from USGS
 and otherwise sites.
 
-``` sql
+``` {sql}
+#| eval: FALSE
+#| connection: "pg"
+
 DROP TABLE IF EXISTS firearea.discharge ;
 
 CREATE TABLE firearea.discharge AS
@@ -114,7 +119,10 @@ evaluated thoroughly. That is, for example, how a water-chemistry sample
 is categorized (pre, post) if it were to fall on the day of the fire has
 not been tested.
 
-``` sql
+``` {sql}
+#| eval: FALSE
+#| connection: "pg"
+
 DROP VIEW IF EXISTS firearea.ranges ;
 
 CREATE VIEW firearea.ranges AS 
@@ -206,10 +214,10 @@ JOIN post_fire_cte ON (
 ;
 ```
 
-## m.view: ranges_agg (aggregated fires)
+## m.view: ranges\_agg (aggregated fires)
 
-Whereas the \[## individual fires\] ranges calculates range statistics
-based on all site and all fires, \[## summer fires\] addresses some
+Whereas the \[\#\# individual fires\] ranges calculates range statistics
+based on all site and all fires, \[\#\# summer fires\] addresses some
 pre-processing and calculates range statistics separately on summer and
 non-summer fires. Pre-processing includes filtering fires smaller than a
 certain percent of the catchment burned (0.00). Summer fires are defined
@@ -231,26 +239,29 @@ not been tested.
 
 output columns:
 
-| Column              | Description                                           |
-|---------------------|-------------------------------------------------------|
-| usgs_site           | Catchment/site identifier                             |
-| year                | Fire year                                             |
-| start_date          | Start date of fire period                             |
-| end_date            | End date of fire period                               |
-| previous_end_date   | End date of previous fire period                      |
-| next_start_date     | Start date of next fire period                        |
-| days_since          | Days since previous fire                              |
-| days_until          | Days until next fire                                  |
-| events              | Array of event IDs in this fire period                |
-| cum_fire_area       | Cumulative burned area (km²) for the fire period      |
-| catch_area          | Catchment area (km²)                                  |
-| cum_per_cent_burned | Cumulative percent of catchment burned                |
-| all_fire_area       | Total burned area (km²) in catchment through end_date |
-| all_per_cent_burned | Percent of total catchment burned through end_date    |
-| latitude            | Catchment centroid latitude                           |
-| longitude           | Catchment centroid longitude                          |
+| Column                 | Description                                            |
+| ---------------------- | ------------------------------------------------------ |
+| usgs\_site             | Catchment/site identifier                              |
+| year                   | Fire year                                              |
+| start\_date            | Start date of fire period                              |
+| end\_date              | End date of fire period                                |
+| previous\_end\_date    | End date of previous fire period                       |
+| next\_start\_date      | Start date of next fire period                         |
+| days\_since            | Days since previous fire                               |
+| days\_until            | Days until next fire                                   |
+| events                 | Array of event IDs in this fire period                 |
+| cum\_fire\_area        | Cumulative burned area (km²) for the fire period       |
+| catch\_area            | Catchment area (km²)                                   |
+| cum\_per\_cent\_burned | Cumulative percent of catchment burned                 |
+| all\_fire\_area        | Total burned area (km²) in catchment through end\_date |
+| all\_per\_cent\_burned | Percent of total catchment burned through end\_date    |
+| latitude               | Catchment centroid latitude                            |
+| longitude              | Catchment centroid longitude                           |
 
-``` sql
+``` {sql}
+#| eval: FALSE
+#| connection: "pg"
+
 -- REFRESH MATERIALIZED VIEW firearea.ranges_agg;
 
 DROP VIEW IF EXISTS firearea.ranges_agg CASCADE ;
@@ -434,11 +445,14 @@ CREATE INDEX idx_ranges_agg_usgs_site ON firearea.ranges_agg (usgs_site);
 CREATE INDEX idx_ranges_agg_dates ON firearea.ranges_agg (start_date, end_date);
 ```
 
-## view: dd_area_stats (discharge & areal stats)
+## view: dd\_area\_stats (discharge & areal stats)
 
 A view of statistics around discharge, and catchment and fire areas.
 
-``` sql
+``` {sql}
+#| eval: FALSE
+#| connection: "pg"
+
 DROP VIEW IF EXISTS firearea.dd_area_stats ;
 
 CREATE VIEW firearea.dd_area_stats AS 
@@ -530,40 +544,279 @@ ORDER BY
   dd_stats.usgs_site,
   dd_stats.event_id
 ;
+
+COMMENT ON COLUMN firearea.dd_area_stats.fire_area IS
+'Total MTBS burn boundary area for the fire event (burnbndac converted from acres to square kilometers, km^2).';
+
+COMMENT ON COLUMN firearea.dd_area_stats.catch_area IS
+'Total catchment area for the site, computed from combined catchment geometry in square kilometers (km^2).';
+
+COMMENT ON COLUMN firearea.dd_area_stats.fire_catch_area IS
+'Area of fire geometry intersecting the catchment (catchment-clipped burned area) in square kilometers (km^2).';
+
+COMMENT ON COLUMN firearea.dd_area_stats.per_cent_burned IS
+'Percent of catchment burned by the event, calculated as (fire_catch_area / catch_area) * 100; units are percent (%).';
 ```
 
-## export: ecoregions
+## view: catchment\_ecoregion
 
-Join (spatially) usgs_site to firearea.ecoregions table. Note that these
-geometries are as 4326. Changing to a projected CRS (e.g., 5070) does
-generate different (and probably more accurate) results but the
+Ecoregion attributes for each catchment in
+firearea.ecoregion\_catchments.
+
+Join (spatially) usgs\_site to firearea.ecoregions table. Note that
+these geometries are as 4326. Changing to a projected CRS (e.g., 5070)
+does generate different (and probably more accurate) results but the
 differences are trivial.
 
-``` sql
-\COPY (
+Note that we exclude the ecoregion with ogc\_fid = 68, which is a
+duplicate of the Arizona/New Mexico Mountains ecoregion ogc\_fid = 52.
+It is unclear how a duplicate was introduced into the ecoregions table
+so we will simply exclude it here until any issues with the ecoregions
+table are resolved.
+
+This view is not to be confused with the firearea.ecoregion\_catchments
+table, which is a table of catchments that overlap with the ecoregions.
+This firearea.catchment\_ecoregion view provides the ecoregion
+attributes for those catchments.
+
+### catchments outside ecoregion
+
+Note that data pertaining to the following sites are added manually
+because they fall outside of the ecoregions dataset:
+
+  - hanan\_bell\_3
+  - hanan\_bell\_4
+  - redb
+  - sbc\_lter\_ata
+  - sbc\_lter\_bel
+  - sbc\_lter\_bur
+  - sbc\_lter\_gav
+  - sbc\_lter\_hon
+  - sbc\_lter\_mis
+  - sbc\_lter\_noo
+  - sbc\_lter\_ped
+  - sbc\_lter\_rat
+  - sbc\_lter\_ref
+  - sbc\_lter\_tec
+
+<!-- end list -->
+
+``` {sql}
+#| eval: FALSE
+
+CREATE TABLE IF NOT EXISTS firearea.catchments_outside_ecoregion (
+  usgs_site   text PRIMARY KEY,
+  na_l3code   varchar,
+  na_l3name   varchar,
+  na_l2code   varchar,
+  na_l2name   varchar,
+  na_l1code   varchar,
+  na_l1name   varchar,
+  na_l3key    varchar,
+  na_l2key    varchar,
+  na_l1key    varchar,
+  shape_leng  double precision,
+  shape_area  double precision,
+  percent_overlap double precision,     -- set to 100 after load
+  overlap_area_km2 double precision     -- set to NULL
+);
+```
+
+‘data/sbc\_redb\_ecos.csv’ was generated manually in qgis by
+intersecting the catchment boundaries of e.g., the sbc sites and redb
+with the [ecoregions
+layer](https://drive.google.com/drive/folders/1iDI2fAicHqzVOkEe-a8qKkJ5smqsae-q?usp=drive_link)
+to get the ecoregion attributes.
+
+``` {sh}
+#| eval: FALSE
+
+psql "$PGDATABASE" -h "$PGHOST" -U "$PGUSER" -c "
+COPY firearea.catchments_outside_ecoregion (
+  usgs_site,
+  na_l3code,
+  na_l3name,
+  na_l2code,
+  na_l2name,
+  na_l1code,
+  na_l1name,
+  na_l3key,
+  na_l2key,
+  na_l1key,
+  shape_leng,
+  shape_area
+)
+FROM '/data/sbc_redb_ecos.csv'
+WITH (FORMAT csv, HEADER true);
+UPDATE firearea.catchments_outside_ecoregion
+SET percent_overlap = 100
+WHERE percent_overlap IS NULL;
+"
+```
+
+``` {sql}
+#| eval: FALSE
+
+DROP VIEW IF EXISTS firearea.catchment_ecoregion ;
+
+CREATE OR REPLACE VIEW firearea.catchment_ecoregion AS
+WITH base AS (
+  SELECT
+    ecoregion_catchments.usgs_site,
+    ecoregions.ogc_fid,
+    ecoregions.na_l3code,
+    ecoregions.na_l3name,
+    ecoregions.na_l2code,
+    ecoregions.na_l2name,
+    ecoregions.na_l1code,
+    ecoregions.na_l1name,
+    ecoregions.na_l3key,
+    ecoregions.na_l2key,
+    ecoregions.na_l1key,
+    ecoregions.shape_leng,
+    ecoregions.shape_area,
+    ecoregions.ai_mode,
+    ecoregions.ai_mean,
+    ecoregions.ai_median,
+    ecoregions.ai_mean_narm,
+    ST_Area(
+      ST_Intersection(firearea.ecoregion_catchments.geometry, firearea.ecoregions.wkb_geometry),
+      TRUE
+    ) / 1000000.0 AS overlap_area_km2,
+    100.0 * ST_Area(
+      ST_Intersection(firearea.ecoregion_catchments.geometry, firearea.ecoregions.wkb_geometry),
+      TRUE
+    ) / NULLIF(ST_Area(firearea.ecoregion_catchments.geometry, TRUE), 0) AS percent_overlap
+  FROM firearea.ecoregion_catchments
+  JOIN firearea.ecoregions
+    ON ST_Intersects(firearea.ecoregion_catchments.geometry, firearea.ecoregions.wkb_geometry)
+  WHERE firearea.ecoregions.ogc_fid != 68
+),
+manual_only AS (
+  SELECT
+    catchments_outside_ecoregion.usgs_site,
+    NULL::integer AS ogc_fid,
+    catchments_outside_ecoregion.na_l3code,
+    catchments_outside_ecoregion.na_l3name,
+    catchments_outside_ecoregion.na_l2code,
+    catchments_outside_ecoregion.na_l2name,
+    catchments_outside_ecoregion.na_l1code,
+    catchments_outside_ecoregion.na_l1name,
+    catchments_outside_ecoregion.na_l3key,
+    catchments_outside_ecoregion.na_l2key,
+    catchments_outside_ecoregion.na_l1key,
+    catchments_outside_ecoregion.shape_leng,
+    catchments_outside_ecoregion.shape_area,
+    NULL::double precision AS ai_mode,
+    NULL::double precision AS ai_mean,
+    NULL::double precision AS ai_median,
+    NULL::double precision AS ai_mean_narm,
+    firearea.catchments_outside_ecoregion.overlap_area_km2,
+    COALESCE(firearea.catchments_outside_ecoregion.percent_overlap, 100.0) AS percent_overlap
+  FROM firearea.catchments_outside_ecoregion
+  WHERE NOT EXISTS (
+    SELECT 1 FROM base
+    WHERE base.usgs_site = firearea.catchments_outside_ecoregion.usgs_site
+  )
+)
+SELECT * FROM base
+UNION ALL
+SELECT * FROM manual_only
+ORDER BY usgs_site
+;
+```
+
+## view: catchment\_dominant\_ecoregion
+
+Identifies, for each catchment (`usgs_site`), the single ecoregion
+record from `firearea.catchment_ecoregion` with the largest spatial
+overlap. This provides an attribution of a “dominant” Level III
+ecoregion to each catchment when more than one ecoregion intersects the
+catchment boundary.
+
+### logic & tie handling
+
+1.  Source: Uses the previously defined `firearea.catchment_ecoregion`
+    view (which already excludes the duplicate Arizona/New Mexico
+    Mountains polygon `ogc_fid = 68`).
+2.  Ranking: Window function ranks rows per `usgs_site` by
+      - `percent_overlap` (descending)
+      - `overlap_area_km2` (descending) for rare ties on percent caused
+        by rounding
+      - `ogc_fid` (ascending) as a final deterministic tiebreaker
+3.  Selection: Keeps the top-ranked (`ROW_NUMBER() = 1`) ecoregion per
+    site.
+
+### scientific note
+
+Because the dominant assignment is based strictly on areal proportion,
+sites at ecotones may have a relatively modest maximum percent (e.g.,
+\<60%). Researchers should consult full overlap distributions if
+ecological heterogeneity is relevant to modeling decisions. The
+exclusion of the duplicate polygon prevents artificial inflation of
+`percent_overlap` sums but overlapping original source polygons in the
+dataset (if any) could still theoretically produce sums \>100%.
+
+``` {sql}
+#| eval: FALSE
+#| connection: "pg"
+
+DROP VIEW IF EXISTS firearea.catchment_dominant_ecoregion ;
+
+CREATE OR REPLACE VIEW firearea.catchment_dominant_ecoregion AS 
+WITH ranked AS (
+  SELECT
+    firearea.catchment_ecoregion.usgs_site,
+    firearea.catchment_ecoregion.ogc_fid,
+    firearea.catchment_ecoregion.na_l3code,
+    firearea.catchment_ecoregion.na_l3name,
+    firearea.catchment_ecoregion.na_l2code,
+    firearea.catchment_ecoregion.na_l2name,
+    firearea.catchment_ecoregion.na_l1code,
+    firearea.catchment_ecoregion.na_l1name,
+    firearea.catchment_ecoregion.na_l3key,
+    firearea.catchment_ecoregion.na_l2key,
+    firearea.catchment_ecoregion.na_l1key,
+    firearea.catchment_ecoregion.shape_leng,
+    firearea.catchment_ecoregion.shape_area,
+    firearea.catchment_ecoregion.ai_mode,
+    firearea.catchment_ecoregion.ai_mean,
+    firearea.catchment_ecoregion.ai_median,
+    firearea.catchment_ecoregion.ai_mean_narm,
+    firearea.catchment_ecoregion.overlap_area_km2,
+    firearea.catchment_ecoregion.percent_overlap,
+    ROW_NUMBER() OVER (
+      PARTITION BY firearea.catchment_ecoregion.usgs_site
+      ORDER BY
+        firearea.catchment_ecoregion.percent_overlap DESC,
+        firearea.catchment_ecoregion.overlap_area_km2 DESC,
+        firearea.catchment_ecoregion.ogc_fid ASC
+    ) AS rn
+  FROM firearea.catchment_ecoregion
+)
 SELECT
-  ecoregion_catchments.usgs_site,
-  ecoregions.ogc_fid,
-  ecoregions.na_l3code,
-  ecoregions.na_l3name,
-  ecoregions.na_l2code,
-  ecoregions.na_l2name,
-  ecoregions.na_l1code,
-  ecoregions.na_l1name,
-  ecoregions.na_l3key,
-  ecoregions.na_l2key,
-  ecoregions.na_l1key,
-  ecoregions.shape_leng,
-  ecoregions.shape_area,
-  ecoregions.ai_mode,
-  ecoregions.ai_mean,
-  ecoregions.ai_median,
-  ecoregions.ai_mean_narm,
-  100.0 * ST_Area(ST_Intersection(ecoregion_catchments.geometry, ecoregions.wkb_geometry)) / NULLIF(ST_Area(ecoregion_catchments.geometry), 0) AS percent_overlap
-FROM firearea.ecoregion_catchments
-JOIN firearea.ecoregions
-  ON ST_Intersects(ecoregion_catchments.geometry, ecoregions.wkb_geometry)
-) to '/tmp/study_sites_ecoregions.csv' WITH CSV HEADER
+  ranked.usgs_site,
+  ranked.ogc_fid,
+  ranked.na_l3code,
+  ranked.na_l3name,
+  ranked.na_l2code,
+  ranked.na_l2name,
+  ranked.na_l1code,
+  ranked.na_l1name,
+  ranked.na_l3key,
+  ranked.na_l2key,
+  ranked.na_l1key,
+  ranked.shape_leng,
+  ranked.shape_area,
+  ranked.ai_mode,
+  ranked.ai_mean,
+  ranked.ai_median,
+  ranked.ai_mean_narm,
+  ranked.overlap_area_km2,
+  ranked.percent_overlap
+FROM ranked
+WHERE ranked.rn = 1
+ORDER BY ranked.usgs_site
 ;
 ```
 
@@ -576,46 +829,55 @@ the study domain.
 
 **input data sources** - `firearea.catchments` - USGS catchment
 geometries - `firearea.non_usgs_catchments` - Non-USGS research network
-catchment geometries (NEON, SBC-LTER) -
-`firearea.ecoregion_catchments` - Study site definitions (filters USGS
-catchments to study domain)
+catchment geometries (NEON, SBC-LTER) - `firearea.ecoregion_catchments`
+- Study site definitions (filters USGS catchments to study domain)
 
 **processing logic**
 
 1.  catchment integration
 
-- UNION operation combines USGS and non-USGS catchment geometries
-- Filtering: USGS catchments restricted to study sites in
-  `ecoregion_catchments`
-- Result: Unified catchment dataset across all monitoring networks
+<!-- end list -->
+
+  - UNION operation combines USGS and non-USGS catchment geometries
+  - Filtering: USGS catchments restricted to study sites in
+    `ecoregion_catchments`
+  - Result: Unified catchment dataset across all monitoring networks
+
+<!-- end list -->
 
 2.  spatial intersection analysis
 
-- Pairwise comparison: Each catchment compared against every other
-  catchment
-- Self-exclusion: Uses `c1.usgs_site < c2.usgs_site` to avoid
-  self-comparison and duplicate pairs
-- Intersection detection: `ST_Intersects()` identifies overlapping
-  catchment pairs
-- Area calculations: Uses spheroidal geometry
-  (`ST_Area(geometry, TRUE)`) for accuracy
+<!-- end list -->
+
+  - Pairwise comparison: Each catchment compared against every other
+    catchment
+  - Self-exclusion: Uses `c1.usgs_site < c2.usgs_site` to avoid
+    self-comparison and duplicate pairs
+  - Intersection detection: `ST_Intersects()` identifies overlapping
+    catchment pairs
+  - Area calculations: Uses spheroidal geometry (`ST_Area(geometry,
+    TRUE)`) for accuracy
+
+<!-- end list -->
 
 3.  overlap metrics calculation
 
-- Bidirectional percentages: Calculates what percent of each catchment
-  overlaps with the other
-- Actual overlap area: Intersection area in square kilometers
-- Zero exclusion: Filters out pairs with no actual spatial overlap
+<!-- end list -->
+
+  - Bidirectional percentages: Calculates what percent of each catchment
+    overlaps with the other
+  - Actual overlap area: Intersection area in square kilometers
+  - Zero exclusion: Filters out pairs with no actual spatial overlap
 
 **output fields**
 
-| Field | Description | Units/Format |
-|----|----|----|
-| `site_1` | Primary catchment identifier | USGS site ID |
-| `site_2` | Comparison catchment identifier | USGS site ID |
-| `percent_overlap_site1` | Percent of site_1 area overlapped by site_2 | Percentage (2 decimal places) |
-| `percent_overlap_site2` | Percent of site_2 area overlapped by site_1 | Percentage (2 decimal places) |
-| `overlap_area_km2` | Actual overlapping area | Square kilometers (2 decimal places) |
+| Field                   | Description                                   | Units/Format                         |
+| ----------------------- | --------------------------------------------- | ------------------------------------ |
+| `site_1`                | Primary catchment identifier                  | USGS site ID                         |
+| `site_2`                | Comparison catchment identifier               | USGS site ID                         |
+| `percent_overlap_site1` | Percent of site\_1 area overlapped by site\_2 | Percentage (2 decimal places)        |
+| `percent_overlap_site2` | Percent of site\_2 area overlapped by site\_1 | Percentage (2 decimal places)        |
+| `overlap_area_km2`      | Actual overlapping area                       | Square kilometers (2 decimal places) |
 
 **data quality controls** - Non-zero overlap requirement:
 `ST_Area(ST_Intersection()) > 0` excludes trivial/edge-touching cases -
@@ -629,18 +891,20 @@ Format: CSV with header row - Record scope: Only catchment pairs with
 meaningful spatial overlap - Ordering: Alphabetical by primary site,
 then comparison site
 
-**common overlap patterns** - Nested catchments:
-`percent_overlap_site2 = 100.00` indicates site_2 completely within
-site_1 - Partial overlaps: Both percentages \< 100% indicate
-intersecting but not nested watersheds - Small overlap areas: May
-indicate catchments sharing drainage boundaries or measurement
-uncertainties
+**common overlap patterns** - Nested catchments: `percent_overlap_site2
+= 100.00` indicates site\_2 completely within site\_1 - Partial
+overlaps: Both percentages \< 100% indicate intersecting but not nested
+watersheds - Small overlap areas: May indicate catchments sharing
+drainage boundaries or measurement uncertainties
 
 This analysis supports understanding of spatial relationships between
 monitoring sites and helps inform appropriate statistical approaches for
 multi-site comparisons
 
-``` sql
+``` {sql}
+#| eval: FALSE
+#| connection: "pg"
+
 -- Calculate percent spatial overlap between all catchment pairs (including non-USGS)
 \COPY (
 WITH combined_catchments AS (

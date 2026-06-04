@@ -12,23 +12,24 @@ def extract_sql_chunks(qmd_file):
     with open(qmd_file, 'r') as f:
         content = f.read()
     
-    # More robust pattern to match SQL chunks
-    pattern = r'```\{sql\}([^`]*?)\n((?:#\|[^\n]*\n)*)(.*?)```'
+    # Match SQL chunks with optional Quarto chunk options using either
+    # legacy '#|' or current '--|' syntax.
+    pattern = r'```\{sql\}\s*\n((?:(?:#\||--\|)[^\n]*\n)*)(.*?)```'
     
     sql_blocks = []
     chunks_found = 0
     
     for match in re.finditer(pattern, content, re.DOTALL):
         chunks_found += 1
-        options = match.group(2) if match.group(2) else ""
-        sql_code = match.group(3).strip()
+        options = match.group(1) if match.group(1) else ""
+        sql_code = match.group(2).strip()
         
         print(f"🔍 Chunk {chunks_found}:")
         print(f"   Options: {repr(options[:100])}")
         print(f"   SQL preview: {sql_code[:100]}...")
         
         # Extract label if present
-        label_match = re.search(r'#\|\s*label:\s*([^\n]+)', options)
+        label_match = re.search(r'(?:#\||--\|)\s*label:\s*([^\n]+)', options)
         label = label_match.group(1).strip() if label_match else f"chunk_{len(sql_blocks)//3 + 1}"
         
         print(f"   ✅ Including as: {label}")
