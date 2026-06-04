@@ -54,7 +54,8 @@ data_working
 *_template_R.rds
 
 # ignore all png files
-*.png
+#ash took this out because I want to save the pngs in the repo
+#*.png
 
 hydrologic_variability/data/
 .positai
