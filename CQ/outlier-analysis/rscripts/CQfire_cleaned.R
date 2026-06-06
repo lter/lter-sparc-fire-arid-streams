@@ -1,13 +1,15 @@
 #post/pre outlier analysis crass#
 install.packages("httpgd")
 library(httpgd)
-library(ggplot2)
-library(dplyr)
+#library(ggplot2)
+#library(dplyr)
+library(tidyverse)
 library(tidyr) 
 library(broom) 
 library(vroom)
 library(googlesheets4)
 library(ggpubr)
+library(here)
 
 ed <- gs4_endpoints()
 
@@ -16,15 +18,24 @@ gs4_scopes()
 
 # prefire_nitrate_url <- "https://docs.google.com/spreadsheets/d/1Y_pVScjUmpmBtpnK8SGSWPijZhaTzLFOkdnITJFuRps/edit?gid=1194451891#gid=1194451891"
 # prefire_nitrate <- read_sheet(prefire_nitrate_url)
-prefire_nitrate <- read.csv("/Users/ash/Documents/projects/CRASS/lter-sparc-fire-arid-streams/CQ/outlier-analysis/data/nitrate_discharge_before_quartiles_234_max_fire - nitrate_discharge_before_quartiles_234_max_fire.csv")
-head(prefire_nitrate)
-unique(prefire_nitrate$usgs_site)
+
+#prefire_nitrate <- read.csv("/Users/ash/Documents/projects/CRASS/lter-sparc-fire-arid-streams/CQ/outlier-analysis/data/nitrate_discharge_before_quartiles_234_max_fire - nitrate_discharge_before_quartiles_234_max_fire.csv")
+
+prefire_nitrate <- read.csv(here("CQ", "outlier-analysis", "data", "nitrate_discharge_before_quartiles_234_max_fire - nitrate_discharge_before_quartiles_234_max_fire.csv"))
+
+#head(prefire_nitrate)
+#unique(prefire_nitrate$usgs_site)
+
 # filteredfires_nitrate_url <-"https://docs.google.com/spreadsheets/d/19o_wQaLYJm_n1vQg_ECbJ8I8ZFnoAPr1_JSujDPvZjU/edit?gid=42808220#gid=42808220"
 # filteredfires_nitrate <- read_sheet(filteredfires_nitrate_url)
-filteredfires_nitrate <- read.csv("/Users/ash/Documents/projects/CRASS/lter-sparc-fire-arid-streams/CQ/outlier-analysis/data/nitrate_discharge_quartiles_234_max_fire - nitrate_discharge_quartiles_234_max_fire.csv")
-head(filteredfires_nitrate)
 
-unique(filteredfires_nitrate$usgs_site)
+#filteredfires_nitrate <- read.csv("/Users/ash/Documents/projects/CRASS/lter-sparc-fire-arid-streams/CQ/outlier-analysis/data/nitrate_discharge_quartiles_234_max_fire - nitrate_discharge_quartiles_234_max_fire.csv")
+
+filteredfires_nitrate <- read.csv(here("CQ", "outlier-analysis", "data", "nitrate_discharge_quartiles_234_max_fire - nitrate_discharge_quartiles_234_max_fire.csv"))
+
+
+#head(filteredfires_nitrate)
+#unique(filteredfires_nitrate$usgs_site)
 
 # nitratefires_url <- "https://docs.google.com/spreadsheets/d/1rfVYsvFIdzP4vT7xhIOKxInOdqFezYLSKET1SG3Iz5k/edit?gid=676161325#gid=676161325"
 # nitratefires <- read_sheet(nitratefires_url) 
@@ -102,7 +113,9 @@ for (j in sts){
 
 str(combined_data_nitrate_filt)
 str(as.data.frame(comb_flagged))
-write.csv(as.data.frame(comb_flagged), "../data/nitrate_working_prediction.csv")
+
+#write.csv(as.data.frame(comb_flagged), "../data/nitrate_working_prediction.csv")
+write.csv(as.data.frame(comb_flagged), here("CQ", "outlier-analysis", "data", "nitrate_working_prediction.csv"), row.names = FALSE)
 
 # comb_flagged <- combined_data_nitrate_filt  %>%
 #      inner_join(pre_models_nitrate, by="usgs_site") %>% 
@@ -148,11 +161,41 @@ NitrateCIplotfiltered <- ggplot() +
   )
 NitrateCIplotfiltered
 
-ggsave("../figures/NitratepostfireCIplot-prediction.png", NitrateCIplotfiltered, width = 20, height = 24, dpi = 300)
+#ggsave("../figures/NitratepostfireCIplot-prediction.png", NitrateCIplotfiltered, width = 20, height = 24, dpi = 300)
 
+ggsave(NitrateCIplotfiltered, path = here("CQ", "outlier-analysis", "figures"), file = "NitratepostfireCIplot-prediction.png", width = 20, height = 24, units = "in", dpi = 300)
 
+# single site demo: sbc_lter_mis
+sbc_mis <- comb_flagged %>% filter(usgs_site == "sbc_lter_mis")
+sbc_mis_nitratePI <- sbc_mis %>% ggplot() +
+                                    geom_ribbon(aes(x= Flow, ymin = lwr, ymax = upr), alpha = 0.2) +
+                                    geom_smooth(data = sbc_mis[sbc_mis$fire_period == "Prefire",],
+                                                    aes(x = Flow, y = value_std),
+                                                    method = "lm", formula = y ~ x, se = FALSE, color = "blue") +
+                                    geom_point(aes(x = Flow, y = value_std, color = status, shape = fire_period), size = 5) +
+  #alpha = 0.6, shape= 18) +
+  #geom_point(data = postfire_nitrate_flagged,
+  #           aes(x = Flow, y = value_std, color = status), shape = 13, size = 3) +
+                                                    scale_color_manual(labels = c("predicted", "outliers"), values = c("Inside PI" = "gray70", "Outside PI" = "darkred")) +
+                                                    scale_shape_manual(labels = c("post-fire", "pre-fire"), values = c("Prefire" = 16, "Postfire" = 17)) +
+                                        scale_x_log10() +
+                                        scale_y_log10() +
+                                      labs(x = "Discharge (L/s)",
+                                           y = "Nitrate (mg N/L)") +
+                                      theme_minimal(base_size = 14) +
+                                      theme(panel.grid.major = element_blank(),
+                                            panel.grid.minor = element_blank(),
+                                            panel.background = element_blank(),
+                                            panel.border = element_rect(colour = "black", fill = NA, linewidth = 2),
+                                            legend.title = element_blank(),
+                                            legend.box.background = element_rect(colour = "black"),
+                                            legend.text = element_text(size = 20),
+                                            legend.position = c(0.85, 0.175),
+                                            axis.text = element_text(size = 20),
+                                            axis.title = element_text(size = 20)
+)
 
-
+ggsave(sbc_mis_nitratePI, path = here("CQ", "outlier-analysis", "figures"), file = "SBC_MIS_nitrate_PI.pdf", width = 9, height = 8.5, units = "in")
 
 # ####get slopes of each site from prefire models 
 # pre_models_nitrate_slp <- pre_models_nitrate %>% group_by(usgs_site) %>%
@@ -186,8 +229,11 @@ box_nit_wide <- box_nit_lk %>% pivot_wider(names_from =fire_period, values_from 
 
 str(box_nit_wide)
 
-write.csv(box_nit_lk,"../data/nitrate-summary.csv")
+#write.csv(box_nit_lk,"../data/nitrate-summary.csv")
 ##this is the percentage because there were more total obs in the pre and it was messing it up
+
+write.csv(box_nit_wide, here("CQ", "outlier-analysis", "data", "nitrate-summary.csv"), row.names = FALSE)
+
 ##boxplots of outliers by slopedir
 bx_nit <- ggplot(data=box_nit_lk)+
   geom_boxplot(aes(y=wgt, x=fire_period, fill=slopedir)) +
@@ -196,7 +242,7 @@ bx_nit <- ggplot(data=box_nit_lk)+
 bx_nit
 
 
-
+# debug needed here
 box_nit_dat_sum <- box_nit_dat %>% group_by(usgs_site) %>% 
                 summarize(pre_out=n(value_std[status == "Prefire"]) ,post_out=n(value_std[status == "Postfire"]), slopedir = slopedir[1]) %>% ungroup()
 

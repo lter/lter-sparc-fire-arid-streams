@@ -2,11 +2,16 @@
 
 library(tidyverse)
 library(pwr)
+library(here)
 
 
+#df <- read.csv("../data/nitrate-summary.csv")
 
-df <- read.csv("../data/nitrate-summary.csv")
-nitrate_df <- read.csv("../data/nitrate_working_prediction.csv")
+df <- read.csv(here("CQ", "outlier-analysis", "data", "nitrate-summary.csv"))
+
+# nitrate_df <- read.csv("../data/nitrate_working_prediction.csv")
+
+nitrate_df <- read.csv(here("CQ", "outlier-analysis", "data", "nitrate_working_prediction.csv"))
 
 ###########look at difference in number of outliers
 ##wgt is the percent of obs that are outliers
@@ -38,7 +43,7 @@ paired_tests <- function(data, label) {
   n_90    <- ceiling(pwr.t.test(d = abs(d), power = 0.90, sig.level = 0.05, type = "paired")$n)
  
   list(label = label, n = n, d = d, power = current, n_80 = n_80, n_90 = n_90,
-       wilcox_p = wtest$p.value, t_p = ttest$p.value,
+       wilcox_p = wilcox$p.value, t_p = ttest$p.value,
        mean_diff = mean(post - pre), sd_diff = sd(post - pre),
        pre_median = median(pre), post_median = median(post),
        pre_mean = mean(pre), post_mean = mean(post))
@@ -98,7 +103,9 @@ power_table_count <- do.call(rbind, lapply(power_count, function(r) {
   )
 }))
  
-write.csv(power_table_count, "../output-csvs/outlier_power_table_count.csv", row.names = FALSE)
+#write.csv(power_table_count, "../output-csvs/outlier_power_table_count.csv", row.names = FALSE)
+write.csv(power_table_count, here("CQ", "outlier-analysis", "output-csvs", "outlier_power_table_count.csv"), row.names = FALSE)
+
 ###summarise for table
 summary_stats <- df %>%
   group_by(slopedir, fire_period) %>%
@@ -135,7 +142,8 @@ summary_full <- bind_rows(summary_stats, summary_all) %>%
 print(summary_full, n = Inf)
  
 # save as CSV
-write.csv(summary_full, "../output-csvs/outlier_summary_stats_count_prediction.csv", row.names = FALSE)
+# write.csv(summary_full, "../output-csvs/outlier_summary_stats_count_prediction.csv", row.names = FALSE)
+write.csv(summary_full, here("CQ", "outlier-analysis", "output-csvs", "outlier_summary_stats_count_prediction.csv"), row.names = FALSE)
 
 ##nitrate residuals 
 
@@ -278,7 +286,8 @@ summary_full <- bind_rows(summary_stats, summary_all) %>%
 print(summary_full, n = Inf)
  
 # save as CSV
-write.csv(summary_full, "../output-csvs/outlier_residual_summary_stats_prediction.csv", row.names = FALSE)
+# write.csv(summary_full, "../output-csvs/outlier_residual_summary_stats_prediction.csv", row.names = FALSE)
+write.csv(summary_full, here("CQ", "outlier-analysis", "output-csvs", "outlier_residual_summary_stats_prediction.csv"), row.names = FALSE)
 
 #power table 
 power_rows <- Filter(Negate(is.null), resid_results)
@@ -296,7 +305,8 @@ power_table <- do.call(rbind, lapply(power_rows, function(r) {
 }))
  
 print(power_table, row.names = FALSE)
-write.csv(power_table, "../output-csvs/outlier_power_table_magnitude.csv", row.names = FALSE) 
+#write.csv(power_table, "../output-csvs/outlier_power_table_magnitude.csv", row.names = FALSE) 
+write.csv(power_table, here("CQ", "outlier-analysis", "output-csvs", "outlier_power_table_magnitude.csv"), row.names = FALSE)
 
 ###unpaired Mann-Whitney for reference 
 pre_r  <- outliers %>% filter(fire_period == "Prefire")  %>% pull(rs)
@@ -306,16 +316,20 @@ utest     <- wilcox.test(pre_r, post_r, paired = FALSE, exact = FALSE)
 pooled_sd <- sqrt((sd(pre_r)^2 + sd(post_r)^2) / 2)
 d_u       <- (mean(post_r) - mean(pre_r)) / pooled_sd
 
+#############
+### Plots ###
+#############
+#fire_colours <- c("Prefire" = "#b5d4f4", "Postfire" = "#9fe1cb")
+fire_colors <- c("Prefire" = "#b5d4f4", "Postfire" = "darkred")
 
-#########all plots#######
-fire_colours <- c("Prefire" = "#b5d4f4", "Postfire" = "#9fe1cb")
- 
 slope_labels <- c(
-  "negative" = "Negative",
-  "positive" = "Positive",
-  "neutral"  = "Neutral"
+  "negative" = "Diluting",
+  "positive" = "Flushing",
+  "neutral"  = "Chemostatic"
 )
  
+firelabs <- c("pre-fire", "post-fire")
+
 theme_fire <- theme_bw(base_size = 11) +
   theme(
     panel.grid.minor  = element_blank(),
@@ -324,7 +338,7 @@ theme_fire <- theme_bw(base_size = 11) +
     legend.title      = element_blank()
   )
  
-# plot1 
+### Outlier (prediction interval) magnitude 
 outliers_plot <- outliers %>%
   mutate(
     fire_period = factor(fire_period, levels = c("Prefire", "Postfire")),
@@ -366,6 +380,33 @@ p_resid_slope <- ggplot(outliers_plot2, aes(x = fire_period, y = median_rs, fill
 
 p_resid_slope 
 
+## presentation fig: outlier magnitude
+PIresid.slope.pl <- ggplot(outliers_plot2, aes(x = fire_period, y = median_rs, fill = fire_period)) +
+                      geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40") +                    
+                      geom_boxplot(outlier.shape = NA, width = 0.5, alpha = 0.6) +
+                      geom_jitter(aes(x = fire_period, y = median_rs, fill = fire_period), color = "black", pch = 21, width = 0.2, size = 3) +
+                      scale_color_manual(values = fire_colors) +                    
+                      scale_fill_manual(values = fire_colors) +
+                      scale_x_discrete(labels = firelabs) +
+                      facet_wrap(~ slopedir, nrow = 1) +
+                      ylab("outlier magnitude") +
+                      theme_fire + 
+                      theme(legend.position = "none",
+                            panel.grid.major = element_blank(),
+                            panel.grid.minor = element_blank(),
+                            panel.background = element_blank(),
+                            panel.border = element_rect(colour = "black", fill = NA, linewidth = 2),
+                            legend.title = element_blank(),
+                            legend.box.background = element_rect(colour = "black"),
+                            legend.text = element_text(size = 20),
+                            strip.background = element_blank(),
+                            strip.text = element_text(size = 20),
+                            axis.title.x = element_blank(),
+                            axis.text = element_text(size = 20),
+                            axis.title = element_text(size = 20))
+
+ggsave(PIresid.slope.pl, path = here("CQ", "outlier-analysis", "figures"), file = "NO3outPImag.pdf", width = 10, height = 7, units = "in")      
+
 p_resid_combined <- cowplot::plot_grid(
   p_resid_all, p_resid_slope,
   ncol        = 2,
@@ -376,8 +417,10 @@ p_resid_combined <- cowplot::plot_grid(
 
 p_resid_combined 
 
-ggsave("../figures/outlier_residuals_magnitude_predict.png", p_resid_combined, width = 10, height = 4.5, dpi = 150)
+# ggsave("../figures/outlier_residuals_magnitude_predict.png", p_resid_combined, width = 10, height = 4.5, dpi = 150)
  
+ggsave(p_resid_combined, path = here("CQ", "outlier-analysis", "figures"), file = "outlier_residuals_magnitude_predict.png", width = 10, height = 4.5, units = "in", dpi = 150)
+
 #plot2
 
 colnames(nitrate_df)
@@ -433,8 +476,37 @@ p_count_combined <- cowplot::plot_grid(
   label_size = 12
 )
 
-ggsave("../figures/outlier_counts_prediction.png", p_count_combined, width = 10, height = 4.5, dpi = 150)
+#ggsave("../figures/outlier_counts_prediction.png", p_count_combined, width = 10, height = 4.5, dpi = 150)
  
+ggsave(p_count_combined, path = here("CQ", "outlier-analysis", "figures"), file = "outlier_counts_prediction.png", width = 10, height = 4.5, units = "in", dpi = 150)
+
+## presentation fig: frequency
+PIresid.freq.slope.pl <- ggplot(outlier_counts, aes(x = fire_period, y = pct_out, fill = fire_period)) +
+                            geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40") +                    
+                            geom_boxplot(outlier.shape = NA, width = 0.5, alpha = 0.6) +
+                            geom_jitter(aes(x = fire_period, y = pct_out, fill = fire_period), color = "black", pch = 21, width = 0.2, size = 3) +
+                            scale_color_manual(values = fire_colors) +                    
+                            scale_fill_manual(values = fire_colors) +
+                            scale_x_discrete(labels = firelabs) +
+                            facet_wrap(~ slopedir, nrow = 1) +
+                            ylab("outlier frequency") +
+                            theme_fire + 
+                            theme(legend.position = "none",
+                                  panel.grid.major = element_blank(),
+                                  panel.grid.minor = element_blank(),
+                                  panel.background = element_blank(),
+                                  panel.border = element_rect(colour = "black", fill = NA, linewidth = 2),
+                                  legend.title = element_blank(),
+                                  legend.box.background = element_rect(colour = "black"),
+                                  legend.text = element_text(size = 20),
+                                  strip.background = element_blank(),
+                                  strip.text = element_text(size = 20),
+                                  axis.title.x = element_blank(),
+                                  axis.text = element_text(size = 20),
+                                  axis.title = element_text(size = 20))
+
+ggsave(PIresid.freq.slope.pl, path = here("CQ", "outlier-analysis", "figures"), file = "NO3outPIfreq.pdf", width = 10, height = 7, units = "in")      
+
 #plot3 power curves 
  
 group_colours <- c(
@@ -516,7 +588,9 @@ p_power <- ggplot(power_curve_df, aes(x = n, y = power,
 
 p_power
 
-ggsave("../figures/outlier_power_curves_magnitude-prediction.png", p_power, width = 8, height = 5, dpi = 150)
+#ggsave("../figures/outlier_power_curves_magnitude-prediction.png", p_power, width = 8, height = 5, dpi = 150)
+
+ggsave(p_power, path = here("CQ", "outlier-analysis", "figures"), file = "outlier_power_curves_magnitude-prediction.png", width = 8, height = 5, units = "in", dpi = 150)
 
  # plot4
 count_results <- list()
@@ -546,6 +620,7 @@ for (grp_name in c("all", "negative", "positive", "neutral")) {
 }
 
 #resid_results
+### Need debug here
 power_rows <- Filter(Negate(is.null), count_results)
 power_table <- do.call(rbind, lapply(power_rows, function(r) {
   data.frame(
@@ -623,8 +698,8 @@ p_power_count <- ggplot(count_curve_df, aes(x = n, y = power,
 
 p_power_count
 
-ggsave("../figures/count_power_curves_prediction.png", p_power_count, width = 8, height = 5, dpi = 150)
-
+# ggsave("../figures/count_power_curves_prediction.png", p_power_count, width = 8, height = 5, dpi = 150)
+ggsave(p_power_count, path =here("CQ", "outlier-analysis", "figures"), file = "count_power_curves_prediction.png", width = 8, height = 5, units = "in")
 
 #############old ignore########
 ###power curves, values from slope_result
