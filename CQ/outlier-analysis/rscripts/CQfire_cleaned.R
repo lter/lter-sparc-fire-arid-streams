@@ -15,6 +15,7 @@ ed <- gs4_endpoints()
 
 gs4_scopes()
 
+### ASH: Q from TKH- I don't know how the input files were generated, but we should only need to filter pre-fire data to quartiles. We don't want to restrict the post-fire data at all
 
 # prefire_nitrate_url <- "https://docs.google.com/spreadsheets/d/1Y_pVScjUmpmBtpnK8SGSWPijZhaTzLFOkdnITJFuRps/edit?gid=1194451891#gid=1194451891"
 # prefire_nitrate <- read_sheet(prefire_nitrate_url)
