@@ -198,6 +198,7 @@ sbc_mis_nitratePI <- sbc_mis %>% ggplot() +
 
 ggsave(sbc_mis_nitratePI, path = here("CQ", "outlier-analysis", "figures"), file = "SBC_MIS_nitrate_PI.pdf", width = 9, height = 8.5, units = "in")
 
+
 # ####get slopes of each site from prefire models 
 # pre_models_nitrate_slp <- pre_models_nitrate %>% group_by(usgs_site) %>%
 #     summarise(slope = as.numeric(model[[1]][1]$coefficients[2]),
